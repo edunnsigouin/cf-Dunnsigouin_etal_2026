@@ -5,10 +5,6 @@ Collection of useful miscellaneous functions
 import time
 import numpy  as np
 import xarray as xr
-from scipy    import signal
-import os
-import matplotlib.pyplot as plt
-import matplotlib.colors as mcolors
 
 def tic():
     """
@@ -39,11 +35,13 @@ def xy_mean(ds):
     ds      = ds.weighted(weights).mean(dim=('latitude','longitude'))
     return ds        
 
+
 def rm_lpyr_days(data):
     """ 
     removes leap-year days from daily xrray dataset
     """
     return data.sel(time=~((data.time.dt.month == 2) & (data.time.dt.day == 29)))
+
 
 def is_leap_year(year):
     if (year % 4 == 0 and year % 100 != 0) or (year % 400 == 0):
@@ -51,3 +49,9 @@ def is_leap_year(year):
     else:
         return False
 
+    
+def get_domain_latlon(domain):
+    if domain == 'norway':
+        domain_lats = slice(72,57)
+        domain_lons = slice(4,32)
+    return domain_lats, domain_lons
