@@ -1,0 +1,10 @@
+LICENSE
+README.md
+setup.py
+Dunnsigouin_etal_2026/config.py
+Dunnsigouin_etal_2026/misc.py
+Dunnsigouin_etal_2026.egg-info/PKG-INFO
+Dunnsigouin_etal_2026.egg-info/SOURCES.txt
+Dunnsigouin_etal_2026.egg-info/dependency_links.txt
+Dunnsigouin_etal_2026.egg-info/requires.txt
+Dunnsigouin_etal_2026.egg-info/top_level.txt

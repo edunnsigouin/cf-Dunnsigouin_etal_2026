@@ -1,0 +1,11 @@
+Metadata-Version: 2.4
+Name: Dunnsigouin_etal_2026
+Version: 0.0.1
+Author: Etienne Dunn-Sigouin
+License-File: LICENSE
+Requires-Dist: numpy
+Requires-Dist: xarray
+Requires-Dist: scipy
+Dynamic: author
+Dynamic: license-file
+Dynamic: requires-dist

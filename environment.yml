@@ -1,0 +1,27 @@
+name: geo_scipy
+channels:
+  - conda-forge
+dependencies:
+  - numpy
+  - matplotlib
+  - xarray
+  - cartopy
+  - dask
+  - scipy
+  - scikit-learn
+  - ecmwf-api-client
+  - netcdf4
+  - openpyxl
+  - statsmodels
+  - conda-forge::cdsapi
+  - esgf-pyclient
+  - geopandas=0.14.4
+  - xesmf
+  - seaborn
+  - xlrd
+  - cfgrib
+  - pymannkendall
+  - tqdm
+  - nco
+  - regionmask
+prefix: /nird/data_peak/NS9873K/etdu/miniforge3/envs/geo_scipy
