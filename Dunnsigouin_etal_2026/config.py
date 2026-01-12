@@ -12,6 +12,7 @@ processed             = cf_space + "processed/cf-Dunnsigouin_etal_2026/"
 
 s2s_forecast_daily    = raw + 's2s/mars/ecmwf/forecast/sfc/daily/europe/' 
 s2s_hindcast_daily    = raw + 's2s/mars/ecmwf/hindcast/sfc/daily/europe/'
+s2s_processed         = processed 
 
 era5_continuous_daily = raw + 'era5/continuous-format/europe/daily/'
 era5_forecast_daily   = raw + 'era5/s2s-model-format/europe/forecast/daily/'
@@ -24,6 +25,7 @@ dirs = {"proj":proj,
         "processed":processed,
         "s2s_forecast_daily":s2s_forecast_daily,
         "s2s_hindcast_daily":s2s_hindcast_daily,
+        "s2s_processed":s2s_processed,
         "era5_continuous_daily":era5_continuous_daily,
         "era5_forecast_daily":era5_forecast_daily,
         "era5_hindcast_daily":era5_hindcast_daily,
