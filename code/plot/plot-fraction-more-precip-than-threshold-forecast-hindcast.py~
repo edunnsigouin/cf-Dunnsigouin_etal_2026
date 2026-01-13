@@ -1,0 +1,137 @@
+"""
+plots A) a map of the user-defined X-day accumulated rain threshold (mm) and
+B) the fraction of ensemble members with X-day accumulated rain > that threshold
+in forecasts and hindcasts throughout the year
+"""
+
+import numpy as np
+import xarray as xr
+import matplotlib.pyplot as plt
+import cartopy.crs as ccrs
+import cartopy.feature as cfeature
+from Dunnsigouin_etal_2026 import config
+
+# input --------------------------------------
+forecast_date_range = ["2020-01-02", "2023-06-26"]
+acc_days            = 2
+rain_threshold_mm   = 50.0   # must match what you used when writing the nc file
+path_in             = config.dirs["s2s_processed"]
+path_out            = config.dirs["fig"]
+write2file          = False
+# --------------------------------------------
+
+
+def load_data(forecast_date_range, acc_days, threshold_mm, path_in):
+    filename = (
+        f"{path_in}xyt_model_events_with_more_{acc_days}_day_accumulated_precip_than_"
+        f"{threshold_mm:g}mm_{forecast_date_range[0]}-{forecast_date_range[-1]}.nc"
+    )
+    return xr.open_dataset(filename)
+
+
+def plot_threshold_and_count_map(threshold_da, count, *,
+                                 cmap_thr="GnBu", cmap_count="RdPu_r",
+                                 levels_thr=None, levels_count=None,
+                                 extend_thr="neither", extend_count="neither",
+                                 title_thr=None, title_count=None,
+                                 figsize=(12, 5), dpi=150):
+    """
+    Plot:
+      A) threshold (as a constant field in mm)
+      B) fraction/count map
+    Both with contourf + colorbar, different colormaps, and with coastlines + borders.
+    """
+
+    lat_name = "latitude"
+    lon_name = "longitude"
+
+    lats = count[lat_name].values
+    lons = count[lon_name].values
+    extent = [float(lons.min()), float(lons.max()), float(lats.min()), float(lats.max())]
+
+    # Build a 2D constant threshold field on the count grid
+    thr_val = float(threshold_da.values[0]) if threshold_da.size == 1 else float(threshold_da.values)
+    thr2d = xr.full_like(count, thr_val)
+
+    # Default contour levels
+    if levels_thr is None:
+        # nice-ish levels around threshold (change if you prefer something else)
+        levels_thr = np.linspace(0, max(10.0, thr_val), 11)
+    if levels_count is None:
+        levels_count = np.arange(0, 1.05, 0.05)
+
+    proj = ccrs.PlateCarree()
+    fig, (ax0, ax1) = plt.subplots(
+        1, 2, figsize=figsize, dpi=dpi,
+        subplot_kw={"projection": proj},
+        constrained_layout=True
+    )
+
+    def add_map_features(ax):
+        ax.set_extent(extent, crs=proj)
+        ax.coastlines(resolution="50m", linewidth=0.8)
+        ax.add_feature(cfeature.BORDERS.with_scale("50m"), linewidth=0.7)
+
+    # --- Panel A: threshold ---
+    add_map_features(ax0)
+    cf0 = ax0.contourf(
+        thr2d[lon_name], thr2d[lat_name], thr2d,
+        levels=levels_thr, cmap=cmap_thr, extend=extend_thr,
+        transform=proj
+    )
+    cb0 = fig.colorbar(cf0, ax=ax0, orientation="horizontal", shrink=0.9, pad=0.02)
+    cb0.set_label("mm")
+    if title_thr is None:
+        title_thr = f"Threshold: {thr_val:g} mm ({acc_days}-day accumulated)"
+    ax0.set_title(title_thr)
+
+    # --- Panel B: fraction/count ---
+    add_map_features(ax1)
+    cf1 = ax1.contourf(
+        count[lon_name], count[lat_name], count,
+        levels=levels_count, cmap=cmap_count, extend=extend_count,
+        transform=proj
+    )
+    cb1 = fig.colorbar(cf1, ax=ax1, orientation="horizontal", shrink=0.9, pad=0.02)
+    cb1.set_label("fraction")
+    if title_count is None:
+        title_count = f"Fraction of members with {acc_days}-day accum > {thr_val:g} mm"
+    ax1.set_title(title_count)
+
+    return fig, (ax0, ax1)
+
+
+if __name__ == "__main__":
+
+    ds = load_data(forecast_date_range, acc_days, rain_threshold_mm, path_in)
+
+    # The writer stored threshold as a DataArray named "threshold"
+    threshold_da = ds["threshold"]
+    count = ds["count"]
+
+    thr_val = float(threshold_da.values[0]) if threshold_da.size == 1 else float(threshold_da.values)
+
+    # Choose levels: threshold map is constant, so levels must span it or contourf can look odd.
+    # This makes the threshold panel readable (and stable across thresholds).
+    levels_thr = np.linspace(0, max(10.0, thr_val), 11)
+    levels_count = np.arange(0, 1.05, 0.05)
+
+    fig, axes = plot_threshold_and_count_map(
+        threshold_da,
+        count,
+        cmap_thr="GnBu",
+        cmap_count="RdPu_r",
+        levels_thr=levels_thr,
+        levels_count=levels_count,
+        title_thr=f"{acc_days}-day accumulated precipitation threshold: {thr_val:g} mm",
+        title_count=f"fraction of forecast + hindcast members > {thr_val:g} mm",
+    )
+
+    if write2file:
+        outname = (
+            f"{path_out}/xy_fraction_{acc_days}day_accumulated_precip_greater_than_"
+            f"{thr_val:g}mm_forecast_hindcast_{forecast_date_range[0]}_{forecast_date_range[-1]}.png"
+        )
+        fig.savefig(outname, bbox_inches="tight")
+
+    plt.show()
