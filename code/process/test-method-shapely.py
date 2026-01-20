@@ -1,13 +1,15 @@
 """
 Makes an xy file with weights [0,1] mapping the model grid to an NVE catchment.
 
-NEW Method (point-count / sub-sampling):
-- For each 0.5x0.5 model grid cell, create an R x R subgrid of points inside the cell.
-- Weight = (# subgrid points inside catchment) / (R*R)
+BETTER Method (area-fraction using Shapely + pyproj):
+- Treat each model grid cell (0.5x0.5) as a polygon.
+- Project catchment + grid-cell polygons to a metric CRS (EPSG:25833).
+- Weight = area(catchment ∩ cell) / area(cell)
 
 Notes:
-- This avoids area/projection math, but is an approximation that improves with R.
-- Uses the *polygon* GeoJSON (Polygon/MultiPolygon) as input.
+- No sub-sampling parameter needed.
+- Produces robust, reproducible weights in [0,1].
+- Requires the catchment to be Polygon/MultiPolygon (filled area), not a border.
 """
 
 # =============================================================================
@@ -17,9 +19,10 @@ import json
 import numpy as np
 import xarray as xr
 
-from shapely.geometry import shape, Point
-from shapely.ops import unary_union
+from shapely.geometry import shape, box
+from shapely.ops import unary_union, transform
 from shapely.prepared import prep
+from pyproj import Transformer
 
 from Dunnsigouin_etal_2026 import config, misc
 
@@ -31,19 +34,19 @@ resolution = "0.5x0.5"
 
 path_in_catchment = config.dirs["nve_catchment"]
 filename_in_catchment = (
-    f"{path_in_catchment}nve_regine_enhet_002_glommavassdraget_entire_catchment.geojson"
+    f"{path_in_catchment}nve_regine_enhet_012_drammensvassdraget_entire_catchment.geojson"
 )
 
 # Grid spacing in degrees (for the model grid you hard-coded)
 dlon = 0.5
 dlat = 0.5
 
-# Sub-sampling factor per cell (R=10 -> 100 points per cell)
-R_sub = 10
+# Metric CRS for Norway area calculations
+dst_epsg = "EPSG:25833"
 
 # Output control
 write2file = True
-out_xy = f"{path_in_catchment}weights_regine_002_glommavassdraget_{resolution}_R{R_sub}.nc"
+out_xy = f"{path_in_catchment}weights_regine_012_drammensvassdraget_{resolution}.nc"
 
 
 # =============================================================================
@@ -75,8 +78,6 @@ def dissolve_catchment_geometry(gj: dict):
     """
     Dissolve all polygonal features into a single Shapely geometry
     (Polygon or MultiPolygon) in lon/lat (EPSG:4326).
-
-    This assumes your *new* dissolved catchment file contains Polygon/MultiPolygon.
     """
     geoms = [shape(feat["geometry"]) for feat in gj.get("features", [])]
     if not geoms:
@@ -92,37 +93,40 @@ def centers_to_edges(centers: np.ndarray, d: float) -> np.ndarray:
     return np.concatenate(([centers[0] - d / 2], centers + d / 2))
 
 
-def subgrid_points_in_cell(lon0, lon1, lat0, lat1, R):
-    """
-    Build an R x R subgrid of points inside a cell using subcell centers.
-    Returns flattened arrays lon_sub, lat_sub of length R*R.
-    """
-    sub_lons = np.linspace(lon0, lon1, R, endpoint=False) + (lon1 - lon0) / (2 * R)
-    sub_lats = np.linspace(lat0, lat1, R, endpoint=False) + (lat1 - lat0) / (2 * R)
-    LON, LAT = np.meshgrid(sub_lons, sub_lats)
-    return LON.ravel(), LAT.ravel()
+def build_projector(src_epsg: str, dst_epsg: str):
+    """Create a Shapely-compatible transform function for reprojection."""
+    transformer = Transformer.from_crs(src_epsg, dst_epsg, always_xy=True)
+    return transformer.transform
 
 
-def compute_pointcount_weights_on_model_grid(
+def compute_area_fraction_weights_on_model_grid(
     catchment_ll,
     model_latitude: np.ndarray,
     model_longitude: np.ndarray,
     dlat: float,
     dlon: float,
-    R: int,
+    dst_epsg: str,
 ):
     """
-    Compute weights on the model grid by sub-sampling points:
-      weight[i,j] = (# of subgrid points inside catchment) / (R*R)
+    Compute weights on the model grid as area fractions:
+      weight[i,j] = area(catchment ∩ cell_ij) / area(cell_ij)
+
+    Steps:
+    - Project catchment to dst_epsg (metric)
+    - For each model cell: build lon/lat box -> project -> intersect -> area ratio
 
     Assumptions:
     - model_latitude/model_longitude are cell centers (regular grid).
-    - catchment_ll is in EPSG:4326 (lon/lat).
+    - catchment_ll is in EPSG:4326.
     """
-    catchment_prep = prep(catchment_ll)
+    # Project catchment once
+    proj_fn = build_projector("EPSG:4326", dst_epsg)
+    catchment = transform(proj_fn, catchment_ll)
+    catchment_prep = prep(catchment)
 
+    # Cell edges
     lon_edges = centers_to_edges(model_longitude, dlon)
-    lat_edges_desc = centers_to_edges(model_latitude, dlat)  # lat centers are descending
+    lat_edges_desc = centers_to_edges(model_latitude, dlat)  # descending lat centers
 
     weights = np.zeros((len(model_latitude), len(model_longitude)), dtype=np.float32)
 
@@ -134,20 +138,24 @@ def compute_pointcount_weights_on_model_grid(
         for j in range(len(model_longitude)):
             lon0, lon1 = lon_edges[j], lon_edges[j + 1]
 
-            sub_lon, sub_lat = subgrid_points_in_cell(lon0, lon1, lat0, lat1, R)
+            # Cell polygon in lon/lat degrees
+            cell_ll = box(lon0, lat0, lon1, lat1)
 
-            inside = 0
-            # covers() includes points on the boundary (usually preferred for masks)
-            for x, y in zip(sub_lon, sub_lat):
-                if catchment_prep.covers(Point(x, y)):
-                    inside += 1
+            # Project cell to metric CRS
+            cell = transform(proj_fn, cell_ll)
 
-            weights[i, j] = inside / float(R * R)
+            # Quick reject (fast): if no intersection, keep weight=0
+            if not catchment_prep.intersects(cell):
+                continue
+
+            inter = catchment.intersection(cell)
+            if not inter.is_empty and cell.area > 0:
+                weights[i, j] = inter.area / cell.area
 
     return weights
 
 
-def weights_to_xarray(weights, model_latitude, model_longitude, R):
+def weights_to_xarray(weights, model_latitude, model_longitude, dst_epsg):
     """Wrap weights into an xarray DataArray with coords."""
     da = xr.DataArray(
         weights,
@@ -155,9 +163,9 @@ def weights_to_xarray(weights, model_latitude, model_longitude, R):
         coords={"latitude": model_latitude, "longitude": model_longitude},
         name="catchment_weight",
         attrs={
-            "description": "Fraction of subgrid points within catchment per model cell",
+            "description": "Area fraction of model grid cell within catchment",
             "range": "[0,1]",
-            "subsample_R": int(R),
+            "area_crs": dst_epsg,
         },
     )
     return da
@@ -168,7 +176,7 @@ def weights_to_xarray(weights, model_latitude, model_longitude, R):
 # =============================================================================
 if __name__ == "__main__":
 
-    # Read catchment polygon GeoJSON (dissolved Polygon/MultiPolygon)
+    # Read catchment polygon GeoJSON (Polygon/MultiPolygon)
     gj = read_geojson(filename_in_catchment)
     catchment_ll = dissolve_catchment_geometry(gj)
 
@@ -179,18 +187,18 @@ if __name__ == "__main__":
     # Build model grid
     model_latitude, model_longitude = make_model_grid(resolution)
 
-    # Compute point-count weights
-    weights = compute_pointcount_weights_on_model_grid(
+    # Compute area-fraction weights (recommended method)
+    weights = compute_area_fraction_weights_on_model_grid(
         catchment_ll=catchment_ll,
         model_latitude=model_latitude,
         model_longitude=model_longitude,
         dlat=dlat,
         dlon=dlon,
-        R=R_sub,
+        dst_epsg=dst_epsg,
     )
 
     # Wrap in xarray
-    da_weights = weights_to_xarray(weights, model_latitude, model_longitude, R_sub)
+    da_weights = weights_to_xarray(weights, model_latitude, model_longitude, dst_epsg)
 
     # Sanity checks
     print(da_weights)

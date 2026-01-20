@@ -25,8 +25,8 @@ from Dunnsigouin_etal_2026 import config
 path_in = config.dirs["nve_catchment"]
 path_out = config.dirs["fig"]
 
-weights_nc = f"{path_in}weights_regine_012_drammensvassdraget_0.5x0.5_R10.nc"
-catchment_geojson = f"{path_in}nve_regine_enhet_012_drammensvassdraget_entire_catchment.geojson"
+weights_nc = f"{path_in}weights_regine_002_glommavassdraget_0.5x0.5.nc"
+catchment_geojson = f"{path_in}nve_regine_enhet_002_glommavassdraget_entire_catchment.geojson"
 
 map_extent = [4.5, 14.0, 57.5, 64.0]
 
@@ -36,7 +36,7 @@ gridline_width = 0.4
 gridline_color = "black"
 
 write2file = True
-fig_out = f"{path_out}weights_regine_012_drammensvassdraget_0.5x0.5_R10.pdf"
+fig_out = f"{path_out}weights_regine_002_glommavassdraget_0.5x0.5.pdf"
 
 
 # =============================================================================
