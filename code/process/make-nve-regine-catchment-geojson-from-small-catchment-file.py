@@ -27,8 +27,8 @@ from Dunnsigouin_etal_2026 import config
 # user input parameters ------------------------------------------------------
 path_in      = config.dirs["nve_catchment"]
 path_out     = config.dirs["nve_catchment"]
-filename_in  = Path(f'{path_in}nve_regine_enhet_012_drammensvassdraget_subcatchments.geojson')
-filename_out = Path(f'{path_in}nve_regine_enhet_012_drammensvassdraget_entire_catchment.geojson')
+filename_in  = Path(f'{path_in}nve_regine_enhet_002_glommavassdraget_subcatchements.geojson')
+filename_out = Path(f'{path_in}nve_regine_enhet_002_glommavassdraget_entire_catchment.geojson')
 ignore_holes = True # If True, holes are ignored when building polygons (usually fine for catchment outline)
 write2file   = True
 # ----------------------------------------------------------------------------

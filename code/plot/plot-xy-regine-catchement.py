@@ -14,8 +14,8 @@ from   Dunnsigouin_etal_2026 import config
 # user-defined input parameters -----------------------------------------------
 path_in      = config.dirs["nve_catchment"]
 path_out     = config.dirs['fig']
-filename_in  = f"{path_in}nve_regine_enhet_012_drammensvassdraget_entire_catchment.geojson"
-filename_out = f"{path_out}xy_nve_regine_enhet_012_drammensvassdraget_entire_catchment.pdf"
+filename_in  = f"{path_in}nve_regine_enhet_002_glommavassdraget_entire_catchment.geojson"
+filename_out = f"{path_out}xy_nve_regine_enhet_002_glommavassdraget_entire_catchment.pdf"
 map_extent   = [4.5, 14.0, 57.5, 64.0]   # lon_min, lon_max, lat_min, lat_max
 line_width   = 2.0 # plot styling
 figure_size  = (8, 8)
