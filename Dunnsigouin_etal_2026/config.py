@@ -18,6 +18,8 @@ era5_continuous_daily = raw + 'era5/continuous-format/europe/daily/'
 era5_forecast_daily   = raw + 'era5/s2s-model-format/europe/forecast/daily/'
 era5_hindcast_daily   = raw + 'era5/s2s-model-format/europe/hindcast/daily/'
 
+nve_catchment        = processed + 'nve/'
+
 dirs = {"proj":proj,
         "data_interim":data_interim,
         "fig":fig,
@@ -29,4 +31,5 @@ dirs = {"proj":proj,
         "era5_continuous_daily":era5_continuous_daily,
         "era5_forecast_daily":era5_forecast_daily,
         "era5_hindcast_daily":era5_hindcast_daily,
+        "nve_catchment": nve_catchment,
 }        
