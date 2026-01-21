@@ -1,57 +1,38 @@
 """
-Makes an xy file with weights [0,1] mapping the model grid to an NVE catchment.
+Makes an xy file with weights [0,1] mapping the model grid to an NVE regine catchment.
 
-BETTER Method (area-fraction using Shapely + pyproj):
+Method using area-fraction using Shapely + pyproj:
 - Treat each model grid cell (0.5x0.5) as a polygon.
 - Project catchment + grid-cell polygons to a metric CRS (EPSG:25833).
 - Weight = area(catchment ∩ cell) / area(cell)
 
-Notes:
-- No sub-sampling parameter needed.
-- Produces robust, reproducible weights in [0,1].
-- Requires the catchment to be Polygon/MultiPolygon (filled area), not a border.
+Note: tested an alternate method that interpolates the low res grid to high res,
+then labels the high res grid with 1/0 if in catchement, then aggregates the high-res
+grid to low grid to define a 0.5x0.5 grid of weights. The results are the same, but slower.
 """
 
-# =============================================================================
-# 1) imports
-# =============================================================================
 import json
-import numpy as np
-import xarray as xr
-
-from shapely.geometry import shape, box
-from shapely.ops import unary_union, transform
-from shapely.prepared import prep
-from pyproj import Transformer
-
+import numpy               as np
+import xarray              as xr
+from shapely.geometry      import shape, box
+from shapely.ops           import unary_union, transform
+from shapely.prepared      import prep
+from pyproj                import Transformer
 from Dunnsigouin_etal_2026 import config, misc
 
 
-# =============================================================================
-# 2) user input parameters
-# =============================================================================
-resolution = "0.5x0.5"
-
-path_in_catchment = config.dirs["nve_catchment"]
-filename_in_catchment = (
-    f"{path_in_catchment}nve_regine_enhet_012_drammensvassdraget_entire_catchment.geojson"
-)
-
-# Grid spacing in degrees (for the model grid you hard-coded)
-dlon = 0.5
-dlat = 0.5
-
-# Metric CRS for Norway area calculations
-dst_epsg = "EPSG:25833"
-
-# Output control
-write2file = True
-out_xy = f"{path_in_catchment}weights_regine_012_drammensvassdraget_{resolution}.nc"
+# input ------------------------------------------------------------------
+resolution            = "0.5x0.5"
+path_in_catchment     = config.dirs["nve_catchment"]
+dlon                  = 0.5 # Grid spacing in degrees (for the model grid you hard-coded) 
+dlat                  = 0.5
+dst_epsg              = "EPSG:25833" # grid for Norway area calculations   
+filename_in_catchment = f"{path_in_catchment}nve_regine_enhet_012_drammensvassdraget_entire_catchment.geojson"
+out_xy                = f"{path_in_catchment}weights_regine_012_drammensvassdraget_{resolution}.nc"
+write2file            = False
+# -------------------------------------------------------------------------
 
 
-# =============================================================================
-# 3) functions
-# =============================================================================
 def read_geojson(filepath: str) -> dict:
     """Read a GeoJSON file into a Python dictionary."""
     with open(filepath, "r", encoding="utf-8") as f:
@@ -171,18 +152,11 @@ def weights_to_xarray(weights, model_latitude, model_longitude, dst_epsg):
     return da
 
 
-# =============================================================================
-# 4) main script
-# =============================================================================
 if __name__ == "__main__":
 
     # Read catchment polygon GeoJSON (Polygon/MultiPolygon)
-    gj = read_geojson(filename_in_catchment)
+    gj           = read_geojson(filename_in_catchment)
     catchment_ll = dissolve_catchment_geometry(gj)
-
-    types = {feat["geometry"]["type"] for feat in gj.get("features", [])}
-    print("Geometry types in file:", types)
-    print("Dissolved geometry type:", catchment_ll.geom_type)
 
     # Build model grid
     model_latitude, model_longitude = make_model_grid(resolution)
@@ -194,8 +168,7 @@ if __name__ == "__main__":
         model_longitude=model_longitude,
         dlat=dlat,
         dlon=dlon,
-        dst_epsg=dst_epsg,
-    )
+        dst_epsg=dst_epsg)
 
     # Wrap in xarray
     da_weights = weights_to_xarray(weights, model_latitude, model_longitude, dst_epsg)

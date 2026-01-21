@@ -3,45 +3,30 @@ Plot model-grid catchment weights (0–1) and overlay the catchment border
 and model grid cell boundaries (0.5x0.5) on a Cartopy map.
 """
 
-# =============================================================================
-# 1) imports
-# =============================================================================
 import json
-import numpy as np
-import xarray as xr
-import matplotlib.pyplot as plt
-import cartopy.crs as ccrs
-import cartopy.feature as cfeature
-
-from shapely.geometry import shape
-from shapely.ops import unary_union
-
+import numpy               as np
+import xarray              as xr
+import matplotlib.pyplot   as plt
+import cartopy.crs         as ccrs
+import cartopy.feature     as cfeature
+from shapely.geometry      import shape
+from shapely.ops           import unary_union
 from Dunnsigouin_etal_2026 import config
 
-
-# =============================================================================
-# 2) user-defined input parameters
-# =============================================================================
-path_in = config.dirs["nve_catchment"]
-path_out = config.dirs["fig"]
-
-weights_nc = f"{path_in}weights_regine_012_drammensvassdraget_0.5x0.5.nc"
+# input -------------------------------------------------------------------------
+path_in           = config.dirs["nve_catchment"]
+path_out          = config.dirs["fig"]
+weights_nc        = f"{path_in}weights_regine_012_drammensvassdraget_0.5x0.5.nc"
 catchment_geojson = f"{path_in}nve_regine_enhet_012_drammensvassdraget_entire_catchment.geojson"
+fig_out           = f"{path_out}weights_regine_012_drammensvassdraget_0.5x0.5.pdf"
+map_extent        = [4.5, 14.0, 57.5, 64.0]
+figure_size       = (6, 6)
+outline_width     = 2.0
+gridline_width    = 0.4
+gridline_color    = "black"
+write2file        = False
+# -------------------------------------------------------------------------------
 
-map_extent = [4.5, 14.0, 57.5, 64.0]
-
-figure_size = (6, 6)
-outline_width = 2.0
-gridline_width = 0.4
-gridline_color = "black"
-
-write2file = True
-fig_out = f"{path_out}weights_regine_012_drammensvassdraget_0.5x0.5.pdf"
-
-
-# =============================================================================
-# 3) functions
-# =============================================================================
 def read_geojson(filepath: str) -> dict:
     """Read a GeoJSON file into a Python dictionary."""
     with open(filepath, "r", encoding="utf-8") as f:
@@ -129,31 +114,6 @@ def plot_weights(ax, da_weights: xr.DataArray):
     return lat_edges, lon_edges
 
 
-def plot_model_grid(ax, lat_edges, lon_edges):
-    """
-    Plot model grid boundaries (0.5x0.5) as thin lines.
-    """
-    for lon in lon_edges:
-        ax.plot(
-            [lon, lon],
-            [lat_edges[0], lat_edges[-1]],
-            linewidth=gridline_width,
-            color=gridline_color,
-            alpha=0.6,
-            transform=ccrs.PlateCarree(),
-        )
-
-    for lat in lat_edges:
-        ax.plot(
-            [lon_edges[0], lon_edges[-1]],
-            [lat, lat],
-            linewidth=gridline_width,
-            color=gridline_color,
-            alpha=0.6,
-            transform=ccrs.PlateCarree(),
-        )
-
-
 def plot_catchment_border(ax, catchment_geom, linewidth=2.0):
     """Overlay catchment outline."""
     if catchment_geom.geom_type == "Polygon":
@@ -166,9 +126,6 @@ def plot_catchment_border(ax, catchment_geom, linewidth=2.0):
             ax.plot(x, y, linewidth=linewidth, color = 'tab:red',transform=ccrs.PlateCarree())
 
 
-# =============================================================================
-# 4) main script
-# =============================================================================
 if __name__ == "__main__":
 
     # Load weights
@@ -176,15 +133,13 @@ if __name__ == "__main__":
     da = ds["catchment_weight"]
 
     # Load catchment polygon
-    gj = read_geojson(catchment_geojson)
+    gj        = read_geojson(catchment_geojson)
     catchment = dissolve_polygon_geojson(gj)
 
     # Plot
-    fig, ax = setup_cartopy_ax(figure_size, map_extent)
+    fig, ax              = setup_cartopy_ax(figure_size, map_extent)
     lat_edges, lon_edges = plot_weights(ax, da)
-    #plot_model_grid(ax, lat_edges, lon_edges)
     plot_catchment_border(ax, catchment, linewidth=outline_width)
-
     ax.set_title("Catchment weights on 0.5° model grid", fontsize=12)
 
     if write2file:
