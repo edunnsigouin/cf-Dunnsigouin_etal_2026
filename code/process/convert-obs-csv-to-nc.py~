@@ -1,0 +1,36 @@
+"""
+draft figure one for the hans paper. 
+"""
+
+import numpy as np
+import xarray as xr
+import pandas as pd
+from Dunnsigouin_etal_2026 import config, misc
+
+
+# input ----------------------------------------
+path_in_obs                = config.dirs['seklima_obs']
+filename_obs_streamflow    = f'{path_in_obs}streamflow.Bergheim.csv'
+filename_obs_precipitation = f'{path_in_obs}precipitation.tunhovd.csv'
+filename_obs_snowdepth     = f'{path_in_obs}snowdepth.tunhovd.csv'
+write2file                 = False
+# ----------------------------------------------
+
+def csv_to_dataarray(filename, time_col="Tidspunkt", value_col="Vannføring (m³/s)"):
+    df = pd.read_csv(filename, comment="#", sep=";", decimal=",")
+    df.columns = df.columns.str.strip()
+    df[time_col] = pd.to_datetime(df[time_col], utc=True)
+
+    da = (
+        df.set_index(time_col)[value_col]
+          .rename("vannforing")
+          .to_xarray()
+          .rename({time_col: "time"})
+    )
+    da.attrs["units"] = "m3 s-1"
+    da.attrs["long_name"] = value_col
+    return da
+
+
+da = csv_to_dataarray(filename_obs_streamflow)
+print(da)
