@@ -275,7 +275,7 @@ def plot_all_panels(
     # Less whitespace: use constrained_layout + tighter gridspec spacing,
     # and a slightly smaller figure.
     fig = plt.figure(figsize=(10*1.618, 10))
-    gs = fig.add_gridspec(2, 2)
+    gs  = fig.add_gridspec(2, 2,wspace=0.15, hspace=0.2)
 
     ax_map = fig.add_subplot(gs[0, 0], projection=proj)
     ax_sf  = fig.add_subplot(gs[0, 1])
