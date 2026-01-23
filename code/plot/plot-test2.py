@@ -1,7 +1,7 @@
 """
 draft figure 01 for hans paper showing obs and hans
 4-panel plot:
-  (1) ERA5 tp24 map (Lambert Conformal, pcolormesh, GnBu, coastlines+borders + catchment border)
+  (1) ERA5 tp24 map (PlateCarree, pcolormesh, GnBu, coastlines+borders + catchment border)
   (2-4) streamflow, precipitation, snowdepth
 Each time-series panel: 2023 daily line + shaded day-of-year 95% interval across all years
 PLUS: median (all years, by day-of-year) in tab:red
@@ -13,7 +13,6 @@ import xarray as xr
 import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
-from mpl_toolkits.axes_grid1 import make_axes_locatable
 
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
@@ -36,7 +35,7 @@ filename_in_snowdepth      = f'{path_in_obs}snowdepth.tunhovd.nc'
 filename_in_era5           = f'{path_in_era5}tp24_0.5x0.5_2023.nc'
 filename_in_catchment      = f"{path_in_catchment}nve_regine_enhet_012_drammensvassdraget_entire_catchment.geojson"
 filename_out               = f'{path_out}fig-01.pdf'
-write2file                 = True
+write2file                 = False
 # ----------------------------------------------
 
 
@@ -68,14 +67,12 @@ def dissolve_polygon_geojson(gj: dict):
 
 
 def plot_catchment_border(ax, catchment_geom, linewidth=2.0):
-    """Overlay catchment outline in tab:red."""
     if catchment_geom is None:
         return
 
     if catchment_geom.geom_type == "Polygon":
         x, y = catchment_geom.exterior.xy
         ax.plot(x, y, linewidth=linewidth, color="tab:red", transform=ccrs.PlateCarree())
-
     elif catchment_geom.geom_type == "MultiPolygon":
         for poly in catchment_geom.geoms:
             x, y = poly.exterior.xy
@@ -83,11 +80,29 @@ def plot_catchment_border(ax, catchment_geom, linewidth=2.0):
 
 
 def _infer_edges_1d(centers: np.ndarray) -> np.ndarray:
-    """Infer cell edges from 1D cell centers (assumes ~regular spacing)."""
     centers = np.asarray(centers)
     d = np.median(np.diff(centers))
-    edges = np.concatenate(([centers[0] - d / 2], centers + d / 2))
-    return edges
+    return np.concatenate(([centers[0] - d / 2], centers + d / 2))
+
+
+def plot_station_marker(ax, lon, lat, label=None):
+    ax.plot(
+        lon, lat,
+        marker="o",
+        markersize=5,
+        markeredgecolor="black",
+        markerfacecolor="yellow",
+        transform=ccrs.PlateCarree(),
+        zorder=5,
+    )
+    if label:
+        ax.text(
+            lon + 0.05, lat + 0.05, label,
+            color="yellow",
+            fontsize=10,
+            transform=ccrs.PlateCarree(),
+            zorder=6,
+        )
 
 
 def _year_series_and_climstats_by_doy(da: xr.DataArray, year: int):
@@ -111,60 +126,21 @@ def _year_series_and_climstats_by_doy(da: xr.DataArray, year: int):
     return x_dates, y_year, q_low, q_hi, q_med
 
 
-def plot_station_marker(ax, lon, lat, label=None):
-
-    ax.plot(
-        lon,
-        lat,
-        marker="o",
-        markersize=5,
-        markeredgecolor="black",
-        markerfacecolor="yellow",
-        transform=ccrs.PlateCarree(),
-        zorder=5,
-    )
-
-    if label == 'Bergheim':
-        ax.text(
-            lon + 0.05,
-            lat + 0.05,
-            label,
-            color="yellow",
-            fontsize=10,
-            transform=ccrs.PlateCarree(),
-            zorder=6,
-        )
-    elif label == 'Tunhovd':
-        ax.text(
-            lon - 1.9,
-            lat - 0.35,
-            label,
-            color="yellow",
-            fontsize=10,
-            transform=ccrs.PlateCarree(),
-            zorder=6,
-        )
-
-
-        
 def plot_panel_era5_tp24_map(
     ax,
     ds_era5: xr.Dataset,
     var="tp24",
-    extent=(6, 13.0, 58, 64.0),
+    extent=(5, 13.0, 58, 63.0),
     catchment_geom=None,
     catchment_linewidth=2.0,
 ):
     da = ds_era5[var]
-
     lon = ds_era5["longitude"].values
     lat = ds_era5["latitude"].values
 
-    # pcolormesh expects edges
     lon_e = _infer_edges_1d(lon)
     lat_e = _infer_edges_1d(lat)
 
-    # If lat is descending, flip to ascending for pcolormesh
     z = da.values
     if lat_e[0] > lat_e[-1]:
         lat_e = lat_e[::-1]
@@ -173,9 +149,7 @@ def plot_panel_era5_tp24_map(
     LON_E, LAT_E = np.meshgrid(lon_e, lat_e)
 
     m = ax.pcolormesh(
-        LON_E,
-        LAT_E,
-        z,
+        LON_E, LAT_E, z,
         cmap="GnBu",
         shading="auto",
         vmin=0.0,
@@ -187,25 +161,26 @@ def plot_panel_era5_tp24_map(
     ax.add_feature(cfeature.BORDERS, linewidth=0.5)
     ax.set_extent(extent, crs=ccrs.PlateCarree())
 
-    # Catchment border overlay (tab:red)
     plot_catchment_border(ax, catchment_geom, linewidth=catchment_linewidth)
 
-    # Bergheim station
-    plot_station_marker(
-        ax,
-        lon=9.2483,
-        lat=60.4761,
-        label="Bergheim",
-    )
+    plot_station_marker(ax, lon=9.2483, lat=60.4761, label="Bergheim")
+    plot_station_marker(ax, lon=8.7521, lat=60.4629, label="Tunhovd")
 
-    # Tunhovd station
-    plot_station_marker(
-        ax,
-        lon=8.7521,
-        lat=60.4629,
-        label="Tunhovd",
+    # Gridline labels (easy + clean on PlateCarree)
+    gl = ax.gridlines(
+        crs=ccrs.PlateCarree(),
+        draw_labels=True,
+        linewidth=0.4,
+        alpha=0.6,
+        linestyle="--",
     )
-    
+    gl.top_labels = False
+    gl.right_labels = False
+    gl.xformatter = cticker.LongitudeFormatter()
+    gl.yformatter = cticker.LatitudeFormatter()
+    gl.xlabel_style = {"size": 8}
+    gl.ylabel_style = {"size": 8}
+
     t = ds_era5.coords.get("time", None)
     tstr = ""
     if t is not None and np.ndim(t.values) == 0:
@@ -225,14 +200,11 @@ def plot_panel_streamflow(ax, ds_streamflow: xr.Dataset, year=2023, var="vannfor
 
     ax.set_title("b) Bergheim station streamflow 2023")
     ax.set_ylabel("m³/s")
-    #ax.grid(True, alpha=0.3)
 
 
 def plot_panel_precipitation(ax, ds_precip: xr.Dataset, year=2023, var="precipitation"):
-    da = ds_precip[var]
-    da_2d = da.rolling(time=2, min_periods=2).sum()
-
-    x, y, lo, hi, med = _year_series_and_climstats_by_doy(da_2d, year)
+    da = ds_precip[var].rolling(time=2, min_periods=2).sum()
+    x, y, lo, hi, med = _year_series_and_climstats_by_doy(da, year)
 
     ax.fill_between(x, lo, hi, alpha=0.25)
     ax.plot(x, med, linewidth=1.4, color="tab:red")
@@ -240,7 +212,6 @@ def plot_panel_precipitation(ax, ds_precip: xr.Dataset, year=2023, var="precipit
 
     ax.set_title("c) Tunhovd station 2-day precipitation 2023")
     ax.set_ylabel("mm / 2 days")
-    #ax.grid(True, alpha=0.3)
 
 
 def plot_panel_snowdepth(ax, ds_snow: xr.Dataset, year=2023, var="snowdepth"):
@@ -253,7 +224,6 @@ def plot_panel_snowdepth(ax, ds_snow: xr.Dataset, year=2023, var="snowdepth"):
 
     ax.set_title("d) Tunhovd station snowdepth 2023")
     ax.set_ylabel("cm")
-    #ax.grid(True, alpha=0.3)
 
 
 def plot_all_panels(
@@ -266,15 +236,10 @@ def plot_all_panels(
     outfile=None,
     write2file=write2file,
 ):
-    proj = ccrs.LambertConformal(
-        central_longitude=15,
-        central_latitude=65,
-        standard_parallels=(63, 70),
-    )
+    # PlateCarree is simpler for equal panel sizing
+    proj = ccrs.PlateCarree()
 
-    # Less whitespace: use constrained_layout + tighter gridspec spacing,
-    # and a slightly smaller figure.
-    fig = plt.figure(figsize=(10*1.618, 10))
+    fig = plt.figure(figsize=(10, 10))
     gs = fig.add_gridspec(2, 2)
 
     ax_map = fig.add_subplot(gs[0, 0], projection=proj)
@@ -291,37 +256,28 @@ def plot_all_panels(
         catchment_linewidth=2.0,
     )
 
-    # Colorbar: attach to map axis; small pad/fraction reduces whitespace
-    #cbar = fig.colorbar(m, ax=ax_map, orientation="vertical", pad=0.02, fraction=0.04)
-    #cbar.set_label("mm / 2 days")
-
-    # --- Colorbar to the LEFT of the map ---
-    divider = make_axes_locatable(ax_map)
-    cax = divider.append_axes("left", size="7%", pad=0.25, axes_class=plt.Axes)
-
-    cbar = fig.colorbar(m, cax=cax, orientation="vertical")
+    cbar = fig.colorbar(m, ax=ax_map, orientation="vertical", pad=0.02, fraction=0.04)
     cbar.set_label("mm / 2 days")
-    
-    # put ticks/label on the left so it looks natural
-    cax.yaxis.set_label_position("left")
-    cax.yaxis.set_ticks_position("left")
 
     plot_panel_streamflow(ax_sf, ds_streamflow, year=year, var="vannforing")
     plot_panel_precipitation(ax_pr, ds_precipitation, year=year, var="precipitation")
     plot_panel_snowdepth(ax_sd, ds_snowdepth, year=year, var="snowdepth")
 
-    start = pd.Timestamp(f"{year}-01-01")
-    end   = pd.Timestamp(f"{year}-12-31")
-
+    box_aspect = 1/2
     for ax in (ax_sf, ax_pr, ax_sd):
         ax.xaxis.set_major_locator(mdates.MonthLocator())
         ax.xaxis.set_major_formatter(mdates.DateFormatter("%b"))
         ax.xaxis.set_minor_locator(mdates.MonthLocator())
-        ax.set_xlim(start, end)
-        ax.margins(x=0)
         ax.set_xlabel("Month")
-    
-    # Legend (time-series only)
+        #ax.set_box_aspect(box_aspect)
+
+    # Try to enforce the same box aspect on the map as well
+    try:
+        ax_map.set_box_aspect(box_aspect)
+    except Exception:
+        pass
+
+    # Legend on one panel
     handles_labels = {}
     for ax in (ax_sf, ax_pr, ax_sd):
         h, l = ax.get_legend_handles_labels()
@@ -331,27 +287,22 @@ def plot_all_panels(
     ax_sf.legend(
         list(handles_labels.values()),
         list(handles_labels.keys()),
-        ncol=1,
         frameon=False,
         loc="upper left",
-        fontsize=10)
-    
+        fontsize=10,
+    )
 
     if write2file and outfile:
-        fig.savefig(outfile, bbox_inches="tight")
+        fig.savefig(outfile)
 
     plt.show()
     plt.close(fig)
 
 
 if __name__ == "__main__":
-
     ds_streamflow, ds_precipitation, ds_snowdepth = load_obs_data(
-        filename_in_streamflow,
-        filename_in_precipitation,
-        filename_in_snowdepth
+        filename_in_streamflow, filename_in_precipitation, filename_in_snowdepth
     )
-
     ds_era5 = load_era5_data(filename_in_era5)
 
     gj = read_geojson(filename_in_catchment)
@@ -365,5 +316,5 @@ if __name__ == "__main__":
         catchment_geom=catchment,
         year=2023,
         outfile=filename_out,
-        write2file=write2file
+        write2file=write2file,
     )

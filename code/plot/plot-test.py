@@ -13,7 +13,6 @@ import xarray as xr
 import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
-from mpl_toolkits.axes_grid1 import make_axes_locatable
 
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
@@ -36,7 +35,7 @@ filename_in_snowdepth      = f'{path_in_obs}snowdepth.tunhovd.nc'
 filename_in_era5           = f'{path_in_era5}tp24_0.5x0.5_2023.nc'
 filename_in_catchment      = f"{path_in_catchment}nve_regine_enhet_012_drammensvassdraget_entire_catchment.geojson"
 filename_out               = f'{path_out}fig-01.pdf'
-write2file                 = True
+write2file                 = False
 # ----------------------------------------------
 
 
@@ -272,10 +271,8 @@ def plot_all_panels(
         standard_parallels=(63, 70),
     )
 
-    # Less whitespace: use constrained_layout + tighter gridspec spacing,
-    # and a slightly smaller figure.
-    fig = plt.figure(figsize=(10*1.618, 10))
-    gs = fig.add_gridspec(2, 2)
+    fig = plt.figure(figsize=(11, 7.2), constrained_layout=True)
+    gs = fig.add_gridspec(2, 2, wspace=0.06, hspace=0.08)
 
     ax_map = fig.add_subplot(gs[0, 0], projection=proj)
     ax_sf  = fig.add_subplot(gs[0, 1])
@@ -291,37 +288,37 @@ def plot_all_panels(
         catchment_linewidth=2.0,
     )
 
-    # Colorbar: attach to map axis; small pad/fraction reduces whitespace
-    #cbar = fig.colorbar(m, ax=ax_map, orientation="vertical", pad=0.02, fraction=0.04)
-    #cbar.set_label("mm / 2 days")
+    # --- key: make the map panel behave like a fixed-size box ---
+    # Cartopy will otherwise choose its own aspect based on projection/extent.
+    ax_map.set_aspect("equal", adjustable="box")  # keeps map from stretching oddly
 
-    # --- Colorbar to the LEFT of the map ---
-    divider = make_axes_locatable(ax_map)
-    cax = divider.append_axes("left", size="7%", pad=0.25, axes_class=plt.Axes)
-
-    cbar = fig.colorbar(m, cax=cax, orientation="vertical")
+    cbar = fig.colorbar(m, ax=ax_map, orientation="vertical", pad=0.02, fraction=0.04)
     cbar.set_label("mm / 2 days")
-    
-    # put ticks/label on the left so it looks natural
-    cax.yaxis.set_label_position("left")
-    cax.yaxis.set_ticks_position("left")
 
     plot_panel_streamflow(ax_sf, ds_streamflow, year=year, var="vannforing")
     plot_panel_precipitation(ax_pr, ds_precipitation, year=year, var="precipitation")
     plot_panel_snowdepth(ax_sd, ds_snowdepth, year=year, var="snowdepth")
 
-    start = pd.Timestamp(f"{year}-01-01")
-    end   = pd.Timestamp(f"{year}-12-31")
+    # --- enforce the SAME box aspect on *all* panels ---
+    # choose one ratio and apply everywhere
+    box_aspect = 1/2  # height/width
 
+    # time-series axes: OK
     for ax in (ax_sf, ax_pr, ax_sd):
         ax.xaxis.set_major_locator(mdates.MonthLocator())
         ax.xaxis.set_major_formatter(mdates.DateFormatter("%b"))
         ax.xaxis.set_minor_locator(mdates.MonthLocator())
-        ax.set_xlim(start, end)
-        ax.margins(x=0)
         ax.set_xlabel("Month")
-    
-    # Legend (time-series only)
+        ax.set_box_aspect(box_aspect)
+
+    # map axis: try box_aspect too (works on most recent Matplotlib)
+    try:
+        ax_map.set_box_aspect(box_aspect)
+    except Exception:
+        # fallback: at least keep the map from stretching
+        pass
+
+    # Legend stays on streamflow panel (your existing code)
     handles_labels = {}
     for ax in (ax_sf, ax_pr, ax_sd):
         h, l = ax.get_legend_handles_labels()
@@ -334,14 +331,15 @@ def plot_all_panels(
         ncol=1,
         frameon=False,
         loc="upper left",
-        fontsize=10)
-    
+        fontsize=10,
+    )
 
     if write2file and outfile:
         fig.savefig(outfile, bbox_inches="tight")
 
     plt.show()
     plt.close(fig)
+
 
 
 if __name__ == "__main__":
