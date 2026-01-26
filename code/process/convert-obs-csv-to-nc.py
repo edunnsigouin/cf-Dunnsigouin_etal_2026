@@ -12,8 +12,8 @@ from Dunnsigouin_etal_2026 import config, misc
 # input ----------------------------------------
 path_in_obs                = config.dirs['obs']
 filename_in_streamflow     = f'{path_in_obs}streamflow.Bergheim.csv'
-filename_in_precipitation  = f'{path_in_obs}precipitation.tunhovd.csv'
-filename_in_snowdepth      = f'{path_in_obs}snowdepth.tunhovd.csv'
+filename_in_precipitation  = f'{path_in_obs}precipitation.ål.III.csv'
+filename_in_snowdepth      = f'{path_in_obs}snowdepth.ål.III.csv'
 filename_out_streamflow    = filename_in_streamflow.replace(".csv", ".nc")
 filename_out_precipitation = filename_in_precipitation.replace(".csv", ".nc")
 filename_out_snowdepth     = filename_in_snowdepth.replace(".csv", ".nc")
