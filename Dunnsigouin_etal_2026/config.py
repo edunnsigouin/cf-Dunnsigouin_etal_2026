@@ -20,6 +20,7 @@ era5_hindcast_daily   = raw + 'era5/s2s-model-format/europe/hindcast/daily/'
 
 nve_catchment        = processed + 'nve_catchment/'
 obs                  = processed + 'obs/'
+era5_processed       = processed + 'era5/'
 
 dirs = {"proj":proj,
         "data_interim":data_interim,
@@ -34,4 +35,5 @@ dirs = {"proj":proj,
         "era5_hindcast_daily":era5_hindcast_daily,
         "nve_catchment": nve_catchment,
         "obs": obs,
+        "era5_processed":era5_processed
 }        
