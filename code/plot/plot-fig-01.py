@@ -1,7 +1,10 @@
 """
 draft figure 01 for hans paper showing obs and hans
+
 4-panel plot:
-  (1) ERA5 tp24 map (Lambert Conformal, pcolormesh, GnBu, coastlines+borders + catchment border)
+  (1) ERA5 Hans X-day accumulated precip normalized by monthly climatological std (unitless)
+      - Lambert Conformal, pcolormesh
+      - coastlines + borders + catchment border + station markers
   (2-4) streamflow, precipitation, snowdepth
 Each time-series panel: 2023 daily line + shaded day-of-year 95% interval across all years
 PLUS: median (all years, by day-of-year) in tab:red
@@ -17,7 +20,6 @@ from mpl_toolkits.axes_grid1 import make_axes_locatable
 
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
-import cartopy.mpl.ticker as cticker
 
 from shapely.geometry import shape
 from shapely.ops import unary_union
@@ -25,34 +27,62 @@ from shapely.ops import unary_union
 from Dunnsigouin_etal_2026 import config, misc
 
 
-# import ---------------------------------------
-path_in_obs                = config.dirs['obs']
-path_in_era5               = config.dirs['era5_continuous_daily'] + 'tp24/'
-path_in_catchment          = config.dirs['nve_catchment']
-path_out                   = config.dirs['fig']
-filename_in_streamflow     = f'{path_in_obs}streamflow.Bergheim.nc'
-filename_in_precipitation  = f'{path_in_obs}precipitation.tunhovd.nc'
-filename_in_snowdepth      = f'{path_in_obs}snowdepth.tunhovd.nc'
-filename_in_era5           = f'{path_in_era5}tp24_0.5x0.5_2023.nc'
-filename_in_catchment      = f"{path_in_catchment}nve_regine_enhet_012_drammensvassdraget_entire_catchment.geojson"
-filename_out               = f'{path_out}fig-01.pdf'
+# -------------------- input --------------------
+path_in_obs                = config.dirs["obs"]
+path_in_era5               = config.dirs["era5_continuous_daily"] + "tp24/"
+path_in_clim               = config.dirs["era5_processed"]
+path_in_catchment          = config.dirs["nve_catchment"]
+path_out                   = config.dirs["fig"]
+
+filename_in_streamflow     = f"{path_in_obs}streamflow.Bergheim.nc"
+filename_in_precipitation  = f"{path_in_obs}precipitation.ål.III.nc"
+filename_in_snowdepth      = f"{path_in_obs}snowdepth.ål.III.nc"
+filename_in_era5           = f"{path_in_era5}tp24_0.5x0.5_2023.nc"
+
+# Monthly climatological std file (must match x_days + grid used for Hans)
+clim_years                 = np.arange(1941, 2023, 1)
+grid                       = "0.5x0.5"
+x_days                     = 2
+hans_date                  = "2023-08-08"
+filename_in_clim           = (
+    f"{path_in_clim}xyt_climatology_tp24_{x_days}dayacc_monthly_{grid}_"
+    f"{clim_years[0]}-{clim_years[-1]}.nc"
+)
+
+filename_in_catchment      = f"{path_in_catchment}nve_nevina_bergheimvassdraget.geojson"
+filename_out               = f"{path_out}fig-01.pdf"
 write2file                 = True
 # ----------------------------------------------
 
 
 def load_obs_data(filename_01, filename_02, filename_03):
-    ds_01 = xr.open_dataset(filename_01).sel(time=slice('1921-01-01', '2025-12-31'))
+    ds_01 = xr.open_dataset(filename_01)
     ds_02 = xr.open_dataset(filename_02)
     ds_03 = xr.open_dataset(filename_03)
     return ds_01, ds_02, ds_03
 
 
-def load_era5_data(filename_in_era5):
+def load_era5_data(filename_in_era5, hans_date="2023-08-08", x_days=2):
+    """
+    Loads ERA5 daily tp24 dataset, forms X-day rolling accumulation and returns Hans day slice.
+    Units assumed m/day in file; convert to mm/Xday after rolling sum.
+    """
     ds_era5         = xr.open_dataset(filename_in_era5)
-    ds_era5         = ds_era5.rolling(time=2, min_periods=2).sum()
-    ds_era5["tp24"] = ds_era5["tp24"] * 1000  # m/2day -> mm/2day
-    return ds_era5.sel(time="2023-08-08")
+    ds_era5         = ds_era5.rolling(time=x_days, min_periods=x_days).sum()
+    ds_era5["tp24"] = ds_era5["tp24"] * 1000.0  # m/Xday -> mm/Xday
+    return ds_era5.sel(time=hans_date)
 
+
+def load_clim_std(filename_in_clim, month: int):
+    """
+    Loads monthly climatological std of X-day accumulated precip (mm/Xday).
+    Expects variable name 'std' and coordinate 'month' in the climatology file.
+    """
+    da_std = xr.open_dataset(filename_in_clim)["std"]
+    return da_std.sel(month=month)
+
+
+# ---------------- Catchment helpers ----------------
 
 def read_geojson(filepath: str) -> dict:
     with open(filepath, "r", encoding="utf-8") as f:
@@ -81,6 +111,8 @@ def plot_catchment_border(ax, catchment_geom, linewidth=2.0):
             x, y = poly.exterior.xy
             ax.plot(x, y, linewidth=linewidth, color="tab:red", transform=ccrs.PlateCarree())
 
+
+# ---------------- Plot helpers ----------------
 
 def _infer_edges_1d(centers: np.ndarray) -> np.ndarray:
     """Infer cell edges from 1D cell centers (assumes ~regular spacing)."""
@@ -124,7 +156,7 @@ def plot_station_marker(ax, lon, lat, label=None):
         zorder=5,
     )
 
-    if label == 'Bergheim':
+    if label == "Bergheim":
         ax.text(
             lon + 0.05,
             lat + 0.05,
@@ -134,7 +166,7 @@ def plot_station_marker(ax, lon, lat, label=None):
             transform=ccrs.PlateCarree(),
             zorder=6,
         )
-    elif label == 'Tunhovd':
+    elif label == "Tunhovd":
         ax.text(
             lon - 1.9,
             lat - 0.35,
@@ -144,18 +176,42 @@ def plot_station_marker(ax, lon, lat, label=None):
             transform=ccrs.PlateCarree(),
             zorder=6,
         )
+    elif label == "Ål III":
+        ax.text(
+            lon - 1.0,
+            lat + 0.05,
+            label,
+            color="yellow",
+            fontsize=10,
+            transform=ccrs.PlateCarree(),
+            zorder=6,
+        )
 
 
-        
 def plot_panel_era5_tp24_map(
     ax,
     ds_era5: xr.Dataset,
+    da_std: xr.DataArray,
     var="tp24",
     extent=(6, 13.0, 58, 64.0),
     catchment_geom=None,
     catchment_linewidth=2.0,
+    eps=1e-12,
 ):
-    da = ds_era5[var]
+    """
+    Plot Hans X-day precip normalized by monthly climatological std:
+        ratio = Hans_precip / std_month   (unitless, "number of std devs")
+    """
+    da_hans = ds_era5[var]  # already mm/Xday on the selected hans_date
+
+    # Align grids defensively (safe if identical)
+    da_std_aligned = da_std
+    try:
+        da_std_aligned = da_std.interp_like(da_hans)
+    except Exception:
+        pass
+
+    ratio = da_hans / (da_std_aligned + eps)
 
     lon = ds_era5["longitude"].values
     lat = ds_era5["latitude"].values
@@ -165,7 +221,7 @@ def plot_panel_era5_tp24_map(
     lat_e = _infer_edges_1d(lat)
 
     # If lat is descending, flip to ascending for pcolormesh
-    z = da.values
+    z = ratio.values
     if lat_e[0] > lat_e[-1]:
         lat_e = lat_e[::-1]
         z = z[::-1, :]
@@ -176,10 +232,10 @@ def plot_panel_era5_tp24_map(
         LON_E,
         LAT_E,
         z,
-        cmap="GnBu",
+        cmap="PiYG",
         shading="auto",
         vmin=0.0,
-        vmax=100.0,
+        vmax=10.0,
         transform=ccrs.PlateCarree(),
     )
 
@@ -190,28 +246,21 @@ def plot_panel_era5_tp24_map(
     # Catchment border overlay (tab:red)
     plot_catchment_border(ax, catchment_geom, linewidth=catchment_linewidth)
 
-    # Bergheim station
-    plot_station_marker(
-        ax,
-        lon=9.2483,
-        lat=60.4761,
-        label="Bergheim",
-    )
+    # Stations
+    plot_station_marker(ax, lon=9.2483, lat=60.4761, label="Bergheim")
+    plot_station_marker(ax, lon=8.5609, lat=60.6391, label="Ål III")
 
-    # Tunhovd station
-    plot_station_marker(
-        ax,
-        lon=8.7521,
-        lat=60.4629,
-        label="Tunhovd",
-    )
-    
+    # Title with date + month
     t = ds_era5.coords.get("time", None)
     tstr = ""
+    month = None
     if t is not None and np.ndim(t.values) == 0:
-        tstr = str(pd.to_datetime(t.values).date())
-    ax.set_title(f"a) Storm Hans 2-day precipitation {tstr}".strip())
+        dt = pd.to_datetime(t.values)
+        tstr = str(dt.date())
+        month = dt.month
 
+    ax.set_title(f"a) Storm Hans 2-day precipitation {tstr}")
+    
     return m
 
 
@@ -223,9 +272,8 @@ def plot_panel_streamflow(ax, ds_streamflow: xr.Dataset, year=2023, var="vannfor
     ax.plot(x, med, linewidth=1.4, color="tab:red", label="Median over all years")
     ax.plot(x, y, linewidth=1.2, label=f"{year}")
 
-    ax.set_title("b) Bergheim station streamflow 2023")
+    ax.set_title("d) Bergheim station streamflow 2023")
     ax.set_ylabel("m³/s")
-    #ax.grid(True, alpha=0.3)
 
 
 def plot_panel_precipitation(ax, ds_precip: xr.Dataset, year=2023, var="precipitation"):
@@ -238,9 +286,8 @@ def plot_panel_precipitation(ax, ds_precip: xr.Dataset, year=2023, var="precipit
     ax.plot(x, med, linewidth=1.4, color="tab:red")
     ax.plot(x, y, linewidth=1.2, label=f"{year}")
 
-    ax.set_title("c) Tunhovd station 2-day precipitation 2023")
+    ax.set_title("b) Ål III station 2-day precipitation 2023")
     ax.set_ylabel("mm / 2 days")
-    #ax.grid(True, alpha=0.3)
 
 
 def plot_panel_snowdepth(ax, ds_snow: xr.Dataset, year=2023, var="snowdepth"):
@@ -251,13 +298,13 @@ def plot_panel_snowdepth(ax, ds_snow: xr.Dataset, year=2023, var="snowdepth"):
     ax.plot(x, med, linewidth=1.4, color="tab:red")
     ax.plot(x, y, linewidth=1.2, label=f"{year}")
 
-    ax.set_title("d) Tunhovd station snowdepth 2023")
+    ax.set_title("c) Ål III station snowdepth 2023")
     ax.set_ylabel("cm")
-    #ax.grid(True, alpha=0.3)
 
 
 def plot_all_panels(
     ds_era5,
+    da_std,
     ds_streamflow,
     ds_precipitation,
     ds_snowdepth,
@@ -272,43 +319,37 @@ def plot_all_panels(
         standard_parallels=(63, 70),
     )
 
-    # Less whitespace: use constrained_layout + tighter gridspec spacing,
-    # and a slightly smaller figure.
-    fig = plt.figure(figsize=(10*1.618, 10))
-    gs  = fig.add_gridspec(2, 2,wspace=0.15, hspace=0.2)
+    fig = plt.figure(figsize=(10 * 1.618, 10))
+    gs = fig.add_gridspec(2, 2, wspace=0.15, hspace=0.2)
 
     ax_map = fig.add_subplot(gs[0, 0], projection=proj)
-    ax_sf  = fig.add_subplot(gs[0, 1])
-    ax_pr  = fig.add_subplot(gs[1, 0])
-    ax_sd  = fig.add_subplot(gs[1, 1])
+    ax_sd  = fig.add_subplot(gs[1, 0]) 
+    ax_sf  = fig.add_subplot(gs[1, 1]) 
+    ax_pr  = fig.add_subplot(gs[0, 1]) 
 
     m = plot_panel_era5_tp24_map(
         ax_map,
         ds_era5,
+        da_std=da_std,
         var="tp24",
         extent=(5, 13.0, 58, 63.0),
         catchment_geom=catchment_geom,
         catchment_linewidth=2.0,
     )
 
-    # Colorbar: attach to map axis; small pad/fraction reduces whitespace
-    #cbar = fig.colorbar(m, ax=ax_map, orientation="vertical", pad=0.02, fraction=0.04)
-    #cbar.set_label("mm / 2 days")
-
     # --- Colorbar to the LEFT of the map ---
     divider = make_axes_locatable(ax_map)
     cax = divider.append_axes("left", size="7%", pad=0.25, axes_class=plt.Axes)
 
     cbar = fig.colorbar(m, cax=cax, orientation="vertical")
-    cbar.set_label("mm / 2 days")
-    
-    # put ticks/label on the left so it looks natural
+    cbar.set_label("standard deviations")
+
     cax.yaxis.set_label_position("left")
     cax.yaxis.set_ticks_position("left")
 
+    plot_panel_snowdepth(ax_sd, ds_snowdepth, year=year, var="snowdepth")
     plot_panel_streamflow(ax_sf, ds_streamflow, year=year, var="vannforing")
     plot_panel_precipitation(ax_pr, ds_precipitation, year=year, var="precipitation")
-    plot_panel_snowdepth(ax_sd, ds_snowdepth, year=year, var="snowdepth")
 
     start = pd.Timestamp(f"{year}-01-01")
     end   = pd.Timestamp(f"{year}-12-31")
@@ -320,7 +361,7 @@ def plot_all_panels(
         ax.set_xlim(start, end)
         ax.margins(x=0)
         ax.set_xlabel("Month")
-    
+
     # Legend (time-series only)
     handles_labels = {}
     for ax in (ax_sf, ax_pr, ax_sd):
@@ -334,8 +375,8 @@ def plot_all_panels(
         ncol=1,
         frameon=False,
         loc="upper left",
-        fontsize=10)
-    
+        fontsize=10,
+    )
 
     if write2file and outfile:
         fig.savefig(outfile, bbox_inches="tight")
@@ -349,21 +390,25 @@ if __name__ == "__main__":
     ds_streamflow, ds_precipitation, ds_snowdepth = load_obs_data(
         filename_in_streamflow,
         filename_in_precipitation,
-        filename_in_snowdepth
+        filename_in_snowdepth,
     )
 
-    ds_era5 = load_era5_data(filename_in_era5)
+    ds_era5 = load_era5_data(filename_in_era5, hans_date=hans_date, x_days=x_days)
+
+    month = pd.to_datetime(hans_date).month
+    da_std = load_clim_std(filename_in_clim, month=month)
 
     gj = read_geojson(filename_in_catchment)
     catchment = dissolve_polygon_geojson(gj)
 
     plot_all_panels(
         ds_era5,
+        da_std,
         ds_streamflow,
         ds_precipitation,
         ds_snowdepth,
         catchment_geom=catchment,
         year=2023,
         outfile=filename_out,
-        write2file=write2file
+        write2file=write2file,
     )
