@@ -10,7 +10,7 @@ from Dunnsigouin_etal_2026 import config, misc
 # input -------------------------------
 variable   = 'tp24'
 years      = np.arange(1941, 2023, 1)
-grid       = '0.5x0.5'
+grid       = '0.25x0.25'
 domain     = 'norway'
 x_days     = 2        
 path_in    = config.dirs['era5_continuous_daily'] + variable + '/'
