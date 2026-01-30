@@ -27,9 +27,11 @@ path_in_catchment     = config.dirs["nve_catchment"]
 dlon                  = 0.5 # Grid spacing in degrees (for the model grid you hard-coded) 
 dlat                  = 0.5
 dst_epsg              = "EPSG:25833" # grid for Norway area calculations   
-filename_in_catchment = f"{path_in_catchment}nve_regine_enhet_012_drammensvassdraget_entire_catchment.geojson"
-out_xy                = f"{path_in_catchment}weights_regine_012_drammensvassdraget_{resolution}.nc"
-write2file            = False
+#filename_in_catchment = f"{path_in_catchment}nve_regine_enhet_012_drammensvassdraget_entire_catchment.geojson"
+#out_xy                = f"{path_in_catchment}weights_regine_012_drammensvassdraget_{resolution}.nc"
+filename_in_catchment = f"{path_in_catchment}nve_nevina_bergheimvassdraget.geojson"
+out_xy                = f"{path_in_catchment}weights_nevina_bergheimvassdraget_{resolution}.nc"
+write2file            = True
 # -------------------------------------------------------------------------
 
 

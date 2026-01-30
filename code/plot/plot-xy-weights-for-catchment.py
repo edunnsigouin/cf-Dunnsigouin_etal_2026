@@ -16,15 +16,15 @@ from Dunnsigouin_etal_2026 import config
 # input -------------------------------------------------------------------------
 path_in           = config.dirs["nve_catchment"]
 path_out          = config.dirs["fig"]
-weights_nc        = f"{path_in}weights_regine_012_drammensvassdraget_0.5x0.5.nc"
-catchment_geojson = f"{path_in}nve_regine_enhet_012_drammensvassdraget_entire_catchment.geojson"
-fig_out           = f"{path_out}weights_regine_012_drammensvassdraget_0.5x0.5.pdf"
+weights_nc        = f"{path_in}weights_nevina_hønnefossvassdraget_0.5x0.5.nc"
+catchment_geojson = f"{path_in}nve_nevina_hønnefossvassdraget.geojson"
+fig_out           = f"{path_out}weights_nevina_hønnefossvassdraget_0.5x0.5.pdf"
 map_extent        = [4.5, 14.0, 57.5, 64.0]
 figure_size       = (6, 6)
 outline_width     = 2.0
 gridline_width    = 0.4
 gridline_color    = "black"
-write2file        = False
+write2file        = True
 # -------------------------------------------------------------------------------
 
 def read_geojson(filepath: str) -> dict:

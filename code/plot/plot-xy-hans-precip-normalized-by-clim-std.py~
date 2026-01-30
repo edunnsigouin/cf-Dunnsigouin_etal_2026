@@ -3,56 +3,45 @@ Plots a 1x3 cartopy map panel for accumulated precip during storm Hans:
   (1) Hans X-day accumulated precip (mm/Xday)
   (2) Climatological monthly std of X-day accumulated precip (mm/Xday)
   (3) Hans / climatological std (unitless)
-
-- LambertConformal projection
-- Focus on southern Norway
-- Uses pcolormesh
-- Catchment border overlay in red (TWO catchments from GeoJSON)
 """
 
 import json
-import numpy as np
-import xarray as xr
-import matplotlib.pyplot as plt
-import cartopy.crs as ccrs
-import cartopy.feature as cfeature
-
-from shapely.geometry import shape
-from shapely.ops import unary_union
-
+import numpy               as np
+import xarray              as xr
+import matplotlib.pyplot   as plt
+import cartopy.crs         as ccrs
+import cartopy.feature     as cfeature
+from shapely.geometry      import shape
+from shapely.ops           import unary_union
 from Dunnsigouin_etal_2026 import config, misc
 
 
 # input -------------------------------------
-clim_years       = np.arange(1941, 2023, 1)
-grid             = '0.5x0.5'
-domain           = 'norway'
-x_days           = 2
-hans_date        = '2023-08-08'
-
-path_in_clim      = config.dirs['era5_processed']
-path_in_hans      = config.dirs['era5_continuous_daily'] + 'tp24/'
-path_in_catchment = config.dirs['nve_catchment']
-
-filename_in_hans  = f'{path_in_hans}tp24_{grid}_2023.nc'
-filename_in_clim  = f'{path_in_clim}xyt_climatology_tp24_{x_days}dayacc_monthly_{grid}_{clim_years[0]}-{clim_years[-1]}.nc'
-
-# Two catchments
-filename_in_catchment_01 = f"{path_in_catchment}nve_regine_enhet_012_drammensvassdraget_entire_catchment.geojson"
-filename_in_catchment_02 = f"{path_in_catchment}nve_regine_enhet_002_glommavassdraget_entire_catchment.geojson"
-
-write2file       = False
+clim_years               = np.arange(1941, 2023, 1)
+grid                     = '0.5x0.5'
+domain                   = 'norway'
+x_days                   = 2
+hans_date                = '2023-08-08'
+path_in_clim             = config.dirs['era5_processed']
+path_in_hans             = config.dirs['era5_continuous_daily'] + 'tp24/'
+path_in_catchment        = config.dirs['nve_catchment']
+path_out                 = config.dirs['fig']
+filename_in_hans         = f'{path_in_hans}tp24_{grid}_2023.nc'
+filename_in_clim         = f'{path_in_clim}xyt_climatology_tp24_{x_days}dayacc_monthly_{grid}_{clim_years[0]}-{clim_years[-1]}.nc'
+filename_in_catchment_01 = f"{path_in_catchment}nve_nevina_bergheimvassdraget.geojson"
+filename_in_catchment_02 = f"{path_in_catchment}nve_nevina_hønnefossvassdraget.geojson"
+filename_out             = f"{path_out}xy_storm_hans_3panel_tp24_{x_days}dayacc_normalized_{grid}.pdf"
+write2file               = False
 # -------------------------------------------
 
 
 def load_hans_data(filename_in_hans, hans_date, x_days):
+    
     domain_lats, domain_lons = misc.get_domain_latlon(domain)
-    ds_hans = xr.open_dataset(filename_in_hans).sel(latitude=domain_lats, longitude=domain_lons)
-
-    ds_hans = ds_hans.rolling(time=x_days, min_periods=x_days).sum()
-
-    da_hans = ds_hans["tp24"] * 1000.0
-    da_hans.attrs["units"] = f"mm/{x_days}day"
+    ds_hans                  = xr.open_dataset(filename_in_hans).sel(latitude=domain_lats, longitude=domain_lons)
+    ds_hans                  = ds_hans.rolling(time=x_days, min_periods=x_days).sum()
+    da_hans                  = ds_hans["tp24"] * 1000.0
+    da_hans.attrs["units"]   = f"mm/{x_days}day"
 
     return da_hans.sel(time=hans_date)
 
@@ -173,11 +162,12 @@ def plot_panel_ratio(ax, da_hans, da_std, catchment_geoms=None, eps=1e-12):
     )
     ax.set_title("Hans / climatology std (unitless)")
     cb = plt.colorbar(m, ax=ax, orientation="vertical", pad=0.04, fraction=0.05)
-    cb.set_label("1")
+    cb.set_label("standard deviations")
     return m
 
 
-def plot_all_panels(da_hans, da_std, catchment_geoms=None, *, figpath=None):
+def plot_all_panels(da_hans, da_std, catchment_geoms, write2file, filename_out):
+
     proj = ccrs.LambertConformal(
         central_longitude=15,
         central_latitude=65,
@@ -197,27 +187,23 @@ def plot_all_panels(da_hans, da_std, catchment_geoms=None, *, figpath=None):
 
     fig.suptitle(f"{x_days}-day accumulated precip: Storm Hans vs climatology", y=1.02)
 
-    if figpath is not None:
-        fig.savefig(figpath, dpi=200, bbox_inches="tight")
-    return fig, axes
+    if write2file:
+        fig.savefig(filename_out, bbox_inches="tight")
+   
+    plt.show()
 
-
+    
 # ---------------- main ----------------
 
 if __name__ == "__main__":
+
     da_hans = load_hans_data(filename_in_hans, hans_date, x_days=x_days)
     da_std  = load_clim_data(filename_in_clim, month=8)
 
     # Load both catchments
     catchment_01 = load_catchment_geom(filename_in_catchment_01)
     catchment_02 = load_catchment_geom(filename_in_catchment_02)
+    catchments   = [catchment_01, catchment_02]
+    
+    plot_all_panels(da_hans, da_std, catchments, write2file, filename_out)
 
-    catchments = [catchment_01, catchment_02]
-
-    if write2file:
-        figpath = f"{path_in_clim}hans_3panel_tp24_{x_days}dayacc_{grid}_{hans_date}_2catchments.png"
-    else:
-        figpath = None
-
-    plot_all_panels(da_hans, da_std, catchment_geoms=catchments, figpath=figpath)
-    plt.show()

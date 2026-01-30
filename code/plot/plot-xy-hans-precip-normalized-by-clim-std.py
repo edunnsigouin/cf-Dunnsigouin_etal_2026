@@ -28,10 +28,10 @@ path_in_catchment        = config.dirs['nve_catchment']
 path_out                 = config.dirs['fig']
 filename_in_hans         = f'{path_in_hans}tp24_{grid}_2023.nc'
 filename_in_clim         = f'{path_in_clim}xyt_climatology_tp24_{x_days}dayacc_monthly_{grid}_{clim_years[0]}-{clim_years[-1]}.nc'
-filename_in_catchment_01 = f"{path_in_catchment}nve_regine_enhet_012_drammensvassdraget_entire_catchment.geojson"
-filename_in_catchment_02 = f"{path_in_catchment}nve_regine_enhet_002_glommavassdraget_entire_catchment.geojson"
+filename_in_catchment_01 = f"{path_in_catchment}nve_nevina_losnavassdraget.geojson"
+filename_in_catchment_02 = f"{path_in_catchment}nve_nevina_hønnefossvassdraget.geojson"
 filename_out             = f"{path_out}xy_storm_hans_3panel_tp24_{x_days}dayacc_normalized_{grid}.pdf"
-write2file               = True
+write2file               = False
 # -------------------------------------------
 
 
