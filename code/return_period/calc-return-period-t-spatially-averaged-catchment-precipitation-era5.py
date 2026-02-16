@@ -19,7 +19,7 @@ variable        = "tp24"
 years           = np.arange(1957, 2024, 1)
 grid            = "0.5x0.5"
 catchment       = "nevina_losnavassdraget"
-x_days          = 2  # accumulation used when creating the saved time series
+x_days          = 3  # accumulation used when creating the saved time series
 
 # File containing your already-created spatially averaged time series
 path_in_ts      = config.dirs["era5_processed"]
@@ -35,7 +35,7 @@ n_T             = 300    # number of points in fitted curve
 plot_T_ticks    = np.array([2, 5, 10, 20, 50, 100, 200, 500], dtype=float)
 
 # Event settings (Storm Hans default)
-event_date_str   = "2023-08-08"
+event_date_str   = "2023-08-09"
 window_days      = 15            # +/- days shown in inset on time series
 event_sel_method = "nearest"     # xarray .sel(time=..., method=...)
 
