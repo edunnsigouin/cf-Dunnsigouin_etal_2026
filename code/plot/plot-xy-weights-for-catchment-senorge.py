@@ -1,0 +1,171 @@
+"""
+Plot SeNorge-grid catchment weights (0–1) and overlay the catchment border
+on a Cartopy map.
+
+Changes vs ERA5 version:
+- Weights are on SeNorge projected grid (Y, X) with coords in meters.
+- Plot weights in UTM 33 projection, but set extent in lon/lat.
+- Mask zero weights so the background map (coastlines/borders) stays visible.
+- Draw coastlines/borders on top of the weights (high zorder).
+- Do NOT draw per-cell grid edges (too dense for SeNorge).
+"""
+
+import json
+import numpy as np
+import xarray as xr
+import matplotlib.pyplot as plt
+import cartopy.crs as ccrs
+import cartopy.feature as cfeature
+from shapely.geometry import shape
+from shapely.ops import unary_union
+from Dunnsigouin_etal_2026 import config
+
+# input -------------------------------------------------------------------------
+path_in           = config.dirs["nve_catchment"]
+path_out          = config.dirs["fig"]
+
+weights_nc        = f"{path_in}weights_regine_002_glommavassdraget_senorge.nc"
+catchment_geojson = f"{path_in}nve_regine_enhet_002_glommavassdraget_entire_catchment.geojson"
+fig_out           = f"{path_out}weights_regine_002_glommavassdraget_senorge.pdf"
+
+# Map extent in lon/lat (degrees): [lon_min, lon_max, lat_min, lat_max]
+map_extent        = [4.5, 14.0, 57.5, 64.0]
+
+figure_size       = (6, 6)
+outline_width     = 2.0
+write2file        = True
+# -------------------------------------------------------------------------------
+
+
+def read_geojson(filepath: str) -> dict:
+    """Read a GeoJSON file into a Python dictionary."""
+    with open(filepath, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def dissolve_polygon_geojson(gj: dict):
+    """Dissolve Polygon/MultiPolygon features into one geometry (lon/lat, EPSG:4326)."""
+    geoms = [shape(feat["geometry"]) for feat in gj.get("features", [])]
+    geom = unary_union(geoms)
+    if geom.geom_type not in ("Polygon", "MultiPolygon"):
+        raise ValueError(f"Expected Polygon/MultiPolygon, got {geom.geom_type}")
+    return geom
+
+
+def infer_grid_spacing(centers: np.ndarray) -> float:
+    """Infer uniform grid spacing from 1D centers."""
+    centers = np.asarray(centers, dtype=float)
+    if centers.size < 2:
+        raise ValueError("Need at least 2 points to infer spacing.")
+    return float(np.median(np.abs(np.diff(centers))))
+
+
+def centers_to_edges(centers: np.ndarray, d: float) -> np.ndarray:
+    """Convert 1D grid centers to edges assuming uniform spacing d."""
+    centers = np.asarray(centers, dtype=float)
+    return np.concatenate(([centers[0] - d / 2.0], centers + d / 2.0))
+
+
+def setup_cartopy_ax(fig_size, extent_lonlat):
+    """
+    Create Cartopy axis in UTM 33 (matches SeNorge X/Y meters),
+    with visible extent defined in lon/lat.
+    """
+    proj_map = ccrs.UTM(zone=33)
+    fig = plt.figure(figsize=fig_size)
+    ax = plt.axes(projection=proj_map)
+
+    # Background fills first
+    ax.add_feature(cfeature.LAND, zorder=0)
+    ax.add_feature(cfeature.OCEAN, zorder=0)
+
+    ax.set_extent(extent_lonlat, crs=ccrs.PlateCarree())
+    return fig, ax
+
+
+def plot_weights(ax, da_weights: xr.DataArray):
+    """
+    Plot weights on SeNorge grid using pcolormesh in projected meters.
+
+    Expects da_weights dims (Y, X) with coords:
+      X (meters), Y (meters)
+    """
+    if "X" not in da_weights.coords or "Y" not in da_weights.coords:
+        raise ValueError("Weights must have coords 'X' and 'Y' (SeNorge projected grid).")
+
+    X = da_weights["X"].values.astype(float)
+    Y = da_weights["Y"].values.astype(float)
+
+    w = da_weights.values.astype(float)
+
+    # Make outside-catchment transparent (avoid painting the whole domain)
+    w = np.where(w > 0, w, np.nan)
+
+    dX = infer_grid_spacing(X)
+    dY = infer_grid_spacing(Y)
+
+    x_edges = centers_to_edges(X, dX)
+    y_edges = centers_to_edges(Y, dY)
+
+    X_E, Y_E = np.meshgrid(x_edges, y_edges)
+
+    proj_data = ccrs.UTM(zone=33)
+
+    m = ax.pcolormesh(
+        X_E,
+        Y_E,
+        w,
+        cmap="BuGn",
+        vmin=0.0,
+        vmax=1.0,
+        shading="auto",
+        transform=proj_data,
+        zorder=2,
+        rasterized=True,  # keeps PDF size reasonable
+    )
+
+    cb = plt.colorbar(m, ax=ax, shrink=0.75, pad=0.03)
+    cb.set_label("Catchment weight (fraction)")
+
+
+def plot_catchment_border(ax, catchment_geom, linewidth=2.0):
+    """Overlay catchment outline from GeoJSON (lon/lat) onto the UTM map."""
+    if catchment_geom.geom_type == "Polygon":
+        x, y = catchment_geom.exterior.xy
+        ax.plot(x, y, linewidth=linewidth, color="tab:red", transform=ccrs.PlateCarree(), zorder=10)
+
+    elif catchment_geom.geom_type == "MultiPolygon":
+        for poly in catchment_geom.geoms:
+            x, y = poly.exterior.xy
+            ax.plot(x, y, linewidth=linewidth, color="tab:red", transform=ccrs.PlateCarree(), zorder=10)
+
+
+def add_coastlines_and_borders(ax):
+    """Draw coastlines/borders on top of the weights."""
+    ax.coastlines(resolution="10m", linewidth=0.7, zorder=20)
+    ax.add_feature(cfeature.BORDERS.with_scale("10m"), linewidth=0.6, zorder=20)
+
+
+if __name__ == "__main__":
+
+    # Load weights
+    ds = xr.open_dataset(weights_nc)
+    da = ds["catchment_weight"]
+
+    # Load catchment polygon
+    gj = read_geojson(catchment_geojson)
+    catchment = dissolve_polygon_geojson(gj)
+
+    # Plot
+    fig, ax = setup_cartopy_ax(figure_size, map_extent)
+    plot_weights(ax, da)
+    plot_catchment_border(ax, catchment, linewidth=outline_width)
+    add_coastlines_and_borders(ax)
+
+    ax.set_title("Catchment weights on SeNorge grid", fontsize=12)
+
+    if write2file:
+        fig.savefig(fig_out, bbox_inches="tight")
+        print("Saved:", fig_out)
+
+    plt.show()
