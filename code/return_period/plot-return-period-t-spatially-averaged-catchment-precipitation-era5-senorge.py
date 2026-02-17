@@ -19,14 +19,14 @@ from scipy.stats import genextreme
 from Dunnsigouin_etal_2026 import config
 
 # input -------------------------------
-dataset         = "era5"   # "era5" or "senorge"
+dataset         = "senorge"   # "era5" or "senorge"
 
 years           = np.arange(1957, 2024, 1)
 catchment       = "regine_glommavassdraget"
-x_days          = 2
+x_days          = 3
 
 # Event settings (Storm Hans default)
-event_date_str   = "2023-08-08"
+event_date_str   = "2023-08-09"
 window_days      = 15
 event_sel_method = "nearest"
 
