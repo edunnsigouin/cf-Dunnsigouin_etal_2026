@@ -31,7 +31,7 @@ dlon                  = 0.5  # degrees
 dlat                  = 0.5
 dst_epsg              = "EPSG:25833"
 
-catchment             = "regine_glomma"
+catchment             = "nevina_losna"
 filename_in_catchment = f"{path_in_catchment}catchment_nve_{catchment}.geojson"
 out_xy                = f"{path_in_catchment}weights_catchment_{catchment}_era5_{resolution}.nc"
 write2file            = True

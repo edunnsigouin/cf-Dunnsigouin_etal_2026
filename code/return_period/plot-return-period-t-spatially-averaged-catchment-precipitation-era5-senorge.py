@@ -22,7 +22,7 @@ from Dunnsigouin_etal_2026 import config
 dataset         = "era5"   # "era5" or "senorge"
 
 years           = np.arange(1957, 2024, 1)
-catchment       = "regine_glomma"
+catchment       = "nevina_hønnefoss"
 x_days          = 2
 
 # Event settings (Storm Hans default)
