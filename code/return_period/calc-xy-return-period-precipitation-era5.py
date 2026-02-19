@@ -41,27 +41,27 @@ min_return_period = 0.0
 catchments = [
     {
         "label": "Drammensvassdraget",
-        "geojson": "nve_regine_enhet_012_drammensvassdraget_entire_catchment.geojson",
+        "geojson": "catchement_nve_regine_drammen.geojson",
         "color": "tab:blue",
     },
     {
         "label": "Glommavassdraget",
-        "geojson": "nve_regine_enhet_002_glommavassdraget_entire_catchment.geojson",
+        "geojson": "catchment_nve_regine_glomma.geojson",
         "color": "tab:blue",
     },
     {
         "label": "hønnefossvassdraget",
-        "geojson": "nve_nevina_hønnefossvassdraget.geojson",
+        "geojson": "catchment_nve_nevina_hønnefoss.geojson",
         "color": "tab:green",
     },
     {
         "label": "losnavassdraget",
-        "geojson": "nve_nevina_losnavassdraget.geojson",
+        "geojson": "catchment_nve_nevina_losna.geojson",
         "color": "tab:green",
     },
     {
         "label": "bergheimvassdraget",
-        "geojson": "nve_nevina_bergheimvassdraget.geojson",
+        "geojson": "catchment_nve_nevina_bergheim.geojson",
         "color": "tab:green",
     },
 ]

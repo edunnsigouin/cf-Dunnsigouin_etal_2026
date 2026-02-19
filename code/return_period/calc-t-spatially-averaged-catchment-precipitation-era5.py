@@ -12,10 +12,10 @@ variable        = "tp24"
 years           = np.arange(1957, 2024, 1)
 grid            = "0.5x0.5"  
 domain          = "norway"   # optional
-x_days          = 1
+x_days          = 2
 path_in         = config.dirs["era5_continuous_daily"] + variable + "/"
-catchment       = 'nevina_hønnefossvassdraget'
-path_in_weights = config.dirs["nve_catchment"] + "weights_" + catchment + "_0.5x0.5.nc"
+catchment       = 'regine_glomma'
+path_in_weights = config.dirs["nve_catchment"] + "weights_catchment_" + catchment + "_era5_0.5x0.5.nc"
 path_out        = config.dirs["era5_processed"]
 write2file      = True
 # -------------------------------------
@@ -139,5 +139,5 @@ if __name__ == "__main__":
     plot_timeseries(ts_2day_acc,title=f"{x_days}-day accumulated catchment mean precipitation")
     
     if write2file:
-        filename_out = f"{path_out}t_{variable}_{x_days}dayacc_catchment_{catchment}_{grid}_{years[0]}-{years[-1]}.nc"
+        filename_out = f"{path_out}t_{variable}_{x_days}dayacc_nve_catchment_{catchment}_era5_{grid}_{years[0]}-{years[-1]}.nc"
         out.to_netcdf(filename_out)

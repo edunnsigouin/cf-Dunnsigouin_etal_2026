@@ -19,14 +19,14 @@ from scipy.stats import genextreme
 from Dunnsigouin_etal_2026 import config
 
 # input -------------------------------
-dataset         = "senorge"   # "era5" or "senorge"
+dataset         = "era5"   # "era5" or "senorge"
 
 years           = np.arange(1957, 2024, 1)
-catchment       = "regine_glommavassdraget"
-x_days          = 3
+catchment       = "regine_glomma"
+x_days          = 2
 
 # Event settings (Storm Hans default)
-event_date_str   = "2023-08-09"
+event_date_str   = "2023-08-08"
 window_days      = 15
 event_sel_method = "nearest"
 
@@ -50,12 +50,11 @@ def infer_filenames(dataset: str, years: np.ndarray, catchment: str, x_days: int
     if dataset == "era5":
         variable = "tp24"
         grid = "0.5x0.5"
-        file_in_ts = f"t_{variable}_{x_days}dayacc_catchment_{catchment}_{grid}_{years[0]}-{years[-1]}.nc"
+        file_in_ts = f"t_{variable}_{x_days}dayacc_nve_catchment_{catchment}_era5_{grid}_{years[0]}-{years[-1]}.nc"
         ts_varname = f"tp_{x_days}day_catchment_acc"
     elif dataset == "senorge":
         variable = "rr"
-        grid = "senorge"
-        file_in_ts = f"t_{variable}_{x_days}dayacc_catchment_{catchment}_{grid}_{years[0]}-{years[-1]}.nc"
+        file_in_ts = f"t_{variable}_{x_days}dayacc_nve_catchment_{catchment}_{dataset}_{years[0]}-{years[-1]}.nc"
         ts_varname = f"rr_{x_days}day_catchment_acc"
     else:
         raise ValueError("dataset must be 'era5' or 'senorge'.")

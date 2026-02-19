@@ -16,15 +16,15 @@ from Dunnsigouin_etal_2026 import config, misc
 # input -------------------------------
 variable        = "rr"
 years           = np.arange(1957, 2024, 1)
-grid            = "senorge"
+dataset         = "senorge"
 x_days          = 3
 
 # SeNorge input: yearly files rr_{year}.nc
 path_in         = config.dirs["senorge_continuous_daily"] + 'rr/'  # folder containing rr_YYYY.nc
 file_pattern    = "rr_{year}.nc"
 
-catchment       = "regine_012_drammensvassdraget"
-path_in_weights = config.dirs["nve_catchment"] + f"weights_{catchment}_senorge.nc"  # adjust if needed
+catchment       = "regine_drammen"
+path_in_weights = config.dirs["nve_catchment"] + f"weights_catchment_{catchment}_senorge.nc"  # adjust if needed
 
 path_out        = config.dirs["senorge_processed"]  # keep your existing output dir convention
 write2file      = True
@@ -32,7 +32,7 @@ write2file      = True
 
 
 def load_weights(path_in_weights: str) -> xr.DataArray:
-    """Load catchment weights on the SeNorge grid (Y, X)."""
+    """Load catchment weights on the SeNorge dataset (Y, X)."""
     wds = xr.open_dataset(path_in_weights)
 
     if "catchment_weight" not in wds:
@@ -90,7 +90,7 @@ def catchment_weighted_mean_timeseries(rr_da: xr.DataArray, w: xr.DataArray) -> 
     rr_da: (time, Y, X)
     w:     (Y, X)
     """
-    # Align weights to rr grid if coords match
+    # Align weights to rr dataset if coords match
     w_aligned = w
     try:
         w_aligned = w_aligned.reindex_like(rr_da.isel(time=0, drop=True), method=None)
@@ -182,6 +182,6 @@ if __name__ == "__main__":
     plot_timeseries(ts_xday_acc, title=f"{x_days}-day accumulated catchment mean precipitation (SeNorge)")
 
     if write2file:
-        filename_out = f"{path_out}t_{variable}_{x_days}dayacc_catchment_{catchment}_{grid}_{years[0]}-{years[-1]}.nc"
+        filename_out = f"{path_out}t_{variable}_{x_days}dayacc_nve_catchment_{catchment}_{dataset}_{years[0]}-{years[-1]}.nc"
         out.to_netcdf(filename_out)
         print("Wrote:", filename_out)
