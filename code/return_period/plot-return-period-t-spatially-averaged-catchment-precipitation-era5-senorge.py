@@ -3,10 +3,14 @@ Read an existing catchment-averaged precipitation time series (ERA5 or SeNorge),
 compute annual block maxima, fit a stationary GEV distribution, compute return levels,
 and plot (publication-style):
 
-Panel A: Full time series with event date marked.
-Panel B: Zoomed time series around event (±N days).
+Panel A: Full time series with the selected August-2023 event date marked.
+Panel B: August 2023 time series (full month) with the event date marked.
 Panel C: Return period plot (empirical dots + fitted GEV curve on log-T axis),
          with event level line and annotation of its equivalent return period.
+
+Event definition (automatic):
+- Event date = the date in August 2023 with the maximum accumulated precipitation
+  in the input time series (already x_days-accumulated).
 """
 
 import numpy as np
@@ -19,27 +23,20 @@ from scipy.stats import genextreme
 from Dunnsigouin_etal_2026 import config
 
 # input -------------------------------
-dataset         = "era5"   # "era5" or "senorge"
-
-years           = np.arange(1957, 2024, 1)
-catchment       = "nevina_hønnefoss"
-x_days          = 2
-
-# Event settings (Storm Hans default)
-event_date_str   = "2023-08-08"
-window_days      = 15
-event_sel_method = "nearest"
+dataset   = "senorge"   # "era5" or "senorge"
+years     = np.arange(1957, 2024, 1)
+catchment = "nevina_losna"
+x_days    = 2
 
 # Return period plotting options
-T_min        = 1.01
-T_max        = 1000.0
-n_T          = 300
-plot_T_ticks = np.array([1, 2, 5, 10, 20, 50, 100, 200, 500, 1000], dtype=float)
-
+T_min             = 1.01
+T_max             = 1000.0
+n_T               = 300
+plot_T_ticks      = np.array([1, 2, 5, 10, 20, 50, 100, 200, 500, 1000], dtype=float)
 exclude_year_2023 = True
 
 # IO
-path_in_ts = config.dirs[f"{dataset}_processed"]  # where your aggregated ERA5/SeNorge files live
+path_in_ts = config.dirs[f"{dataset}_processed"]
 path_out   = config.dirs["fig"]
 write2file = True
 # -------------------------------------
@@ -47,35 +44,49 @@ write2file = True
 
 def infer_filenames(dataset: str, years: np.ndarray, catchment: str, x_days: int):
     dataset = dataset.lower().strip()
+
     if dataset == "era5":
         variable = "tp24"
         grid = "0.5x0.5"
-        file_in_ts = f"t_{variable}_{x_days}dayacc_nve_catchment_{catchment}_era5_{grid}_{years[0]}-{years[-1]}.nc"
+        file_in_ts = (
+            f"t_{variable}_{x_days}dayacc_nve_catchment_{catchment}_era5_{grid}_"
+            f"{years[0]}-{years[-1]}.nc"
+        )
         ts_varname = f"tp_{x_days}day_catchment_acc"
+
     elif dataset == "senorge":
         variable = "rr"
-        file_in_ts = f"t_{variable}_{x_days}dayacc_nve_catchment_{catchment}_{dataset}_{years[0]}-{years[-1]}.nc"
+        grid = "senorge"
+        file_in_ts = (
+            f"t_{variable}_{x_days}dayacc_nve_catchment_{catchment}_{dataset}_"
+            f"{years[0]}-{years[-1]}.nc"
+        )
         ts_varname = f"rr_{x_days}day_catchment_acc"
+
     else:
         raise ValueError("dataset must be 'era5' or 'senorge'.")
+
     return variable, grid, file_in_ts, ts_varname
 
 
 def load_timeseries(path_in_ts: str, file_in_ts: str, ts_varname: str) -> xr.DataArray:
     ds = xr.open_dataset(path_in_ts + file_in_ts)
+    try:
+        if ts_varname not in ds:
+            raise KeyError(
+                f"'{ts_varname}' not found in {file_in_ts}. Available: {list(ds.data_vars)}"
+            )
 
-    if ts_varname not in ds:
-        raise KeyError(f"'{ts_varname}' not found in {file_in_ts}. Available: {list(ds.data_vars)}")
+        ts = ds[ts_varname]
+        if "time" not in ts.dims:
+            raise ValueError(f"'{ts_varname}' must have a 'time' dimension.")
 
-    ts = ds[ts_varname]
-    if "time" not in ts.dims:
-        raise ValueError(f"'{ts_varname}' must have a 'time' dimension.")
+        if not np.issubdtype(ts["time"].dtype, np.datetime64):
+            ts = xr.decode_cf(ts.to_dataset(name="ts"))["ts"]
 
-    if not np.issubdtype(ts["time"].dtype, np.datetime64):
-        ts = xr.decode_cf(ts.to_dataset(name="ts"))["ts"]
-
-    ts = ts.astype(float).where(np.isfinite(ts))
-    return ts
+        return ts.astype(float).where(np.isfinite(ts))
+    finally:
+        ds.close()
 
 
 def annual_block_maxima(ts: xr.DataArray, *, exclude_year: int | None = None) -> xr.DataArray:
@@ -90,7 +101,7 @@ def annual_block_maxima(ts: xr.DataArray, *, exclude_year: int | None = None) ->
     return ann_max
 
 
-def fit_gev(annual_max: xr.DataArray):
+def fit_gev(annual_max: xr.DataArray) -> tuple[float, float, float]:
     x = annual_max.values.astype(float)
     x = x[np.isfinite(x)]
     if x.size < 10:
@@ -114,9 +125,10 @@ def empirical_return_periods(annual_max: xr.DataArray, plotting_position: str = 
     n = x_sorted.size
 
     m = np.arange(1, n + 1)
-    if plotting_position.lower() == "weibull":
+    pp = plotting_position.lower()
+    if pp == "weibull":
         p = m / (n + 1.0)
-    elif plotting_position.lower() == "gringorten":
+    elif pp == "gringorten":
         p = (m - 0.44) / (n + 0.12)
     else:
         raise ValueError("plotting_position must be 'weibull' or 'gringorten'.")
@@ -125,20 +137,18 @@ def empirical_return_periods(annual_max: xr.DataArray, plotting_position: str = 
     return x_sorted, T_emp
 
 
-def get_event_value(ts: xr.DataArray, event_date_str: str, method: str = "nearest"):
-    requested_time = np.datetime64(event_date_str)
-    ts_point = ts.sel(time=requested_time, method=method)
-    selected_time = np.datetime64(ts_point["time"].values)
-    event_value = float(ts_point.values)
-    return requested_time, selected_time, event_value
+def select_event_max_august_2023(ts: xr.DataArray) -> tuple[np.datetime64, float]:
+    """Return (selected_time, event_value) for the maximum value in August 2023."""
+    aug_start = np.datetime64("2023-08-01")
+    aug_end   = np.datetime64("2023-09-01")  # exclusive end
 
+    ts_aug = ts.sel(time=slice(aug_start, aug_end))
+    if ts_aug.size == 0 or not np.isfinite(ts_aug.values).any():
+        raise ValueError("No valid data found in August 2023 for event selection.")
 
-def _nice_axes(ax):
-    ax.spines["top"].set_visible(False)
-    ax.spines["right"].set_visible(False)
-    ax.tick_params(direction="out", length=4, width=0.8)
-    #ax.grid(True, which="major", linewidth=0.4, alpha=0.4)
-    #ax.grid(True, which="minor", linewidth=0.25, alpha=0.25)
+    sel_time = np.datetime64(ts_aug.idxmax("time").values)
+    sel_val = float(ts.sel(time=sel_time).values)
+    return sel_time, sel_val
 
 
 def plot_three_panel_pub(
@@ -149,10 +159,8 @@ def plot_three_panel_pub(
     z_curve: np.ndarray,
     T_emp: np.ndarray,
     x_emp: np.ndarray,
-    requested_time: np.datetime64,
     selected_time: np.datetime64,
     event_value: float,
-    window_days: int,
     gev_params: tuple[float, float, float],
     T_ticks: np.ndarray,
     title: str | None = None,
@@ -160,25 +168,17 @@ def plot_three_panel_pub(
     dpi: int = 300,
 ):
     """
-    Three-panel publication-style figure with robust layout so Panel A y-label is visible.
-
-    Panel A: Full time series with event marked.
-    Panel B: Zoomed time series around event (±window_days).
-    Panel C: Return period plot (empirical Weibull PP + GEV fit).
+    Panel A: full time series with event marked.
+    Panel B: August 2023 time series (full month) with event marked.
+    Panel C: return-period plot (empirical Weibull PP + GEV fit), with event annotated.
     """
     c, loc, scale = gev_params
+    units = ts.attrs.get("units", "")
 
     # Equivalent return period under annual-max model
     Fz = float(genextreme.cdf(event_value, c=c, loc=loc, scale=scale))
     Fz = min(max(Fz, 1e-12), 1 - 1e-12)
     T_event = 1.0 / (1.0 - Fz)
-
-    units = ts.attrs.get("units", "")
-
-    # Zoom series for Panel B
-    t0 = requested_time - np.timedelta64(window_days, "D")
-    t1 = requested_time + np.timedelta64(window_days, "D")
-    ts_zoom = ts.sel(time=slice(t0, t1))
 
     fig = plt.figure(figsize=(10.5, 9.0), constrained_layout=False)
     gs = fig.add_gridspec(3, 1, hspace=0.4)
@@ -187,13 +187,7 @@ def plot_three_panel_pub(
     axB = fig.add_subplot(gs[1, 0])
     axC = fig.add_subplot(gs[2, 0])
 
-    # Reserve vertical space for suptitle
-    fig.subplots_adjust(
-    left=0.1,
-        right=0.95,
-        bottom=0.05,
-        top=0.92   # ← this creates space between suptitle and Panel A
-    )
+    fig.subplots_adjust(left=0.1, right=0.95, bottom=0.05, top=0.92)
 
     # -------------------------
     # Panel A: full time series
@@ -201,7 +195,6 @@ def plot_three_panel_pub(
     t_vals = ts["time"].values
     y_vals = ts.values.astype(float)
 
-    t_min, t_max = t_vals.min(), t_vals.max()
     y_min = np.nanmin(y_vals)
     y_max = np.nanmax(y_vals)
     y_pad = 0.02 * (y_max - y_min) if y_max > y_min else 1.0
@@ -212,7 +205,7 @@ def plot_three_panel_pub(
     axA.set_ylabel(f"{ts.name} ({units})" if units else ts.name)
     axA.set_title("A) Full time series", loc="left", fontsize=12)
 
-    # Decadal ticks (every 10 years)
+    # Decadal ticks
     years_all = pd.to_datetime(t_vals).year
     start_year = int(np.floor(years_all.min() / 10) * 10)
     end_year = int(np.ceil(years_all.max() / 10) * 10)
@@ -221,40 +214,36 @@ def plot_three_panel_pub(
 
     axA.set_xticks(tick_dates)
     axA.set_xticklabels([str(y) for y in tick_years])
-
-    axA.set_xlim(t_min, t_max)
+    axA.set_xlim(t_vals.min(), t_vals.max())
     axA.set_ylim(y_min, y_max + y_pad)
-    
+
     # -------------------------
-    # Panel B: zoom around event
+    # Panel B: August 2023 only
     # -------------------------
     aug_start = np.datetime64("2023-08-01")
-    aug_end   = np.datetime64("2023-08-31")
+    aug_end   = np.datetime64("2023-09-01")  # exclusive end
+
     ts_aug = ts.sel(time=slice(aug_start, aug_end))
 
-    axB.plot(ts_aug["time"].values, ts_aug.values, linewidth=1.2)
-    axB.plot(ts_aug["time"].values, ts_aug.values, marker='o',color='tab:blue',linewidth=1.2)
+    axB.plot(ts_aug["time"].values, ts_aug.values, linewidth=1.2, marker="o")
     axB.axvline(selected_time, linestyle="--", linewidth=1.1, color="k")
     axB.scatter([selected_time], [event_value], color="k", s=35, zorder=4)
 
-    axB.set_xlim(aug_start, aug_end)
+    axB.set_xlim(aug_start, aug_end - np.timedelta64(1, "D"))
     axB.set_ylabel(f"{ts.name} ({units})" if units else ts.name)
 
-    # Ticks: every 3 days, rotated and right-aligned
     axB.xaxis.set_major_locator(mdates.DayLocator(interval=3))
     axB.xaxis.set_major_formatter(mdates.DateFormatter("%d %b"))
     plt.setp(axB.get_xticklabels(), rotation=30, ha="right")
 
-    # Clean y-limits for zoom clarity
-    if np.isfinite(ts_aug.values).any():
-        y_aug_min = np.nanmin(ts_aug.values)
-        y_aug_max = np.nanmax(ts_aug.values)
-        y_pad_aug = 0.05 * (y_aug_max - y_aug_min) if y_aug_max > y_aug_min else 1.0
-        axB.set_ylim(y_aug_min, y_aug_max + y_pad_aug)
+    if ts_aug.size > 0 and np.isfinite(ts_aug.values).any():
+        y_b_min = np.nanmin(ts_aug.values)
+        y_b_max = np.nanmax(ts_aug.values)
+        y_pad_b = 0.05 * (y_b_max - y_b_min) if y_b_max > y_b_min else 1.0
+        axB.set_ylim(y_b_min, y_b_max + y_pad_b)
 
-    storm_date = str(selected_time)[:10]
-    axB.set_title(f"B) Storm Hans maximum precipitation: {storm_date}", loc="left", fontsize=12)
-
+    event_date = str(selected_time)[:10]
+    axB.set_title(f"B) August 2023 (event: {event_date})", loc="left", fontsize=12)
 
     # -------------------------
     # Panel C: return periods
@@ -264,7 +253,7 @@ def plot_three_panel_pub(
 
     axC.set_xscale("log")
     axC.set_xlabel("Return period, T (years)")
-    axC.set_ylabel(f"{ts.name} ({units})" if units else ts.name) 
+    axC.set_ylabel(f"{ts.name} ({units})" if units else ts.name)
     axC.set_title("C) Annual return period", loc="left", fontsize=12)
 
     if T_ticks is not None and len(T_ticks) > 0:
@@ -272,15 +261,14 @@ def plot_three_panel_pub(
         axC.get_xaxis().set_major_formatter(ScalarFormatter())
         axC.get_xaxis().set_minor_formatter(NullFormatter())
 
-    axC.axhline(event_value, linestyle="--", color='k',linewidth=1.1)
+    axC.axhline(event_value, linestyle="--", color="k", linewidth=1.1)
     axC.axvline(T_event, linestyle="--", linewidth=1.1, color="k")
     axC.scatter([T_event], [event_value], color="k", s=45, zorder=5)
 
-    axC.set_title(f"C) Storm Hans return period ≈ {T_event:.1f} years", loc="left", fontsize=12)
-
+    axC.set_title(f"C) Event return period ≈ {T_event:.1f} years", loc="left", fontsize=12)
     axC.legend(frameon=False, loc="upper left")
 
-    # Simple clean style
+    # Clean style
     for ax in (axA, axB, axC):
         ax.spines["top"].set_visible(False)
         ax.spines["right"].set_visible(False)
@@ -293,10 +281,9 @@ def plot_three_panel_pub(
 
     if savepath is not None:
         fig.savefig(savepath, dpi=dpi, bbox_inches="tight")
-        
+
     plt.show()
     return fig, (axA, axB, axC)
-
 
 
 if __name__ == "__main__":
@@ -306,7 +293,7 @@ if __name__ == "__main__":
     # Read aggregated catchment time series
     ts = load_timeseries(path_in_ts, file_in_ts, ts_varname)
 
-    # Annual maxima (optionally exclude 2023)
+    # Annual maxima (optionally exclude 2023 from the fit)
     exclude_year = 2023 if exclude_year_2023 else None
     ann_max = annual_block_maxima(ts, exclude_year=exclude_year)
 
@@ -320,14 +307,14 @@ if __name__ == "__main__":
     # Empirical dots
     x_emp, T_emp = empirical_return_periods(ann_max, plotting_position="weibull")
 
-    # Event value from full time series
-    requested_time, selected_time, event_value = get_event_value(ts, event_date_str, method=event_sel_method)
+    # Automatic event selection: maximum accumulated precipitation in August 2023
+    selected_time, event_value = select_event_max_august_2023(ts)
 
-    suffix = "_excl2023" if exclude_year_2023 else ""
-    event_tag = str(selected_time)[:10].replace("-", "")
-
-    fig_out = f"{path_out}returnperiod_hans_{event_tag}_{dataset}_{grid}_{variable}_{x_days}dayacc_catchment_{catchment}_{years[0]}-{years[-1]}.pdf"
-
+    if dataset == 'era5':
+        fig_out = f"{path_out}returnperiod_stormhans_{dataset}_{grid}_catchment_{catchment}_{variable}_{x_days}dayacc_{years[0]}-{years[-1]}.pdf"
+    elif dataset == 'senorge':
+        fig_out = f"{path_out}returnperiod_stormhans_{dataset}_catchment_{catchment}_{variable}_{x_days}dayacc_{years[0]}-{years[-1]}.pdf"
+        
     plot_three_panel_pub(
         ts,
         ann_max,
@@ -335,17 +322,15 @@ if __name__ == "__main__":
         z_curve=z_curve,
         T_emp=T_emp,
         x_emp=x_emp,
-        requested_time=requested_time,
         selected_time=selected_time,
         event_value=event_value,
-        window_days=window_days,
         gev_params=(c, loc, scale),
         T_ticks=plot_T_ticks,
         title=f"{dataset.upper()} — {catchment} — {x_days}-day accumulation",
         savepath=fig_out if write2file else None,
     )
 
-    print(f"Event selected date: {str(selected_time)[:10]}")
+    print(f"Event selected date (max in Aug 2023): {str(selected_time)[:10]}")
     print(f"Event value: {event_value:.3f} {ts.attrs.get('units','')}")
     print(f"GEV params: c={c:.4f}, loc={loc:.4f}, scale={scale:.4f}")
     print(f"Figure: {fig_out if write2file else '(not saved)'}")

@@ -23,7 +23,7 @@ x_days          = 3
 path_in         = config.dirs["senorge_continuous_daily"] + 'rr/'  # folder containing rr_YYYY.nc
 file_pattern    = "rr_{year}.nc"
 
-catchment       = "regine_drammen"
+catchment       = "nevina_hønnefoss"
 path_in_weights = config.dirs["nve_catchment"] + f"weights_catchment_{catchment}_senorge.nc"  # adjust if needed
 
 path_out        = config.dirs["senorge_processed"]  # keep your existing output dir convention
@@ -179,7 +179,7 @@ if __name__ == "__main__":
         }
     )
 
-    plot_timeseries(ts_xday_acc, title=f"{x_days}-day accumulated catchment mean precipitation (SeNorge)")
+    #plot_timeseries(ts_xday_acc, title=f"{x_days}-day accumulated catchment mean precipitation (SeNorge)")
 
     if write2file:
         filename_out = f"{path_out}t_{variable}_{x_days}dayacc_nve_catchment_{catchment}_{dataset}_{years[0]}-{years[-1]}.nc"

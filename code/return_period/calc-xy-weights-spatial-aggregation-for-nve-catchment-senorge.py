@@ -25,20 +25,19 @@ from pyproj import Transformer
 from Dunnsigouin_etal_2026 import config
 
 # input ------------------------------------------------------------------
-catchment         = "regine_glomma"
-path_in_catchment = config.dirs["nve_catchment"]
+catchment             = "nevina_losna"
+path_in_catchment     = config.dirs["nve_catchment"]
 filename_in_catchment = f"{path_in_catchment}catchment_nve_{catchment}.geojson"
 
-path_in_senorge = config.dirs["senorge_continuous_daily"]  # adjust if needed
-example_year = 2006
-example_file = f"{path_in_senorge}rr/rr_{example_year}.nc"
+path_in_senorge       = config.dirs["senorge_continuous_daily"]  # adjust if needed
+example_year          = 2006
+example_file          = f"{path_in_senorge}rr/rr_{example_year}.nc"
 
-# SeNorge grid CRS (typical): ETRS89 / UTM 33N
-grid_epsg = "EPSG:25833"
-ll_epsg = "EPSG:4326"
+grid_epsg             = "EPSG:25833" # SeNorge grid CRS (typical): ETRS89 / UTM 33N 
+ll_epsg               = "EPSG:4326" # catchment geojson grid
 
-out_xy = f"{path_in_catchment}weights_catchment_{catchment}_senorge.nc"
-write2file = True
+out_xy                = f"{path_in_catchment}weights_catchment_{catchment}_senorge.nc"
+write2file            = True
 # ------------------------------------------------------------------------
 
 
