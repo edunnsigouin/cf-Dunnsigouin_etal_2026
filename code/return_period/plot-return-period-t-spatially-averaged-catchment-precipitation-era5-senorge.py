@@ -25,8 +25,8 @@ from Dunnsigouin_etal_2026 import config
 # input -------------------------------
 dataset   = "senorge"   # "era5" or "senorge"
 years     = np.arange(1957, 2024, 1)
-catchment = "nevina_losna"
-x_days    = 2
+catchment = "nevina_hønnefoss"
+x_days    = 3
 
 # Return period plotting options
 T_min             = 1.01
