@@ -28,7 +28,7 @@ path_in_catchment = config.dirs["nve_catchment"]
 path_out          = config.dirs["fig"]
 
 filename_in_senorge = f'{path_in_senorge}returnperiod_rr_2dayacc_senorge_1957-2023_20230809.nc'
-filename_out        = f'{path_out}returnperiod_rr_2dayacc_senorge_1957-2023_20230809.pdf'
+filename_out        = f'{path_out}xy_returnperiod_annual_senorge_rr_2dayacc_1957-2023_20230809_excl2023.pdf'
 write2file          = True
 
 variable = "return_period_years"
