@@ -45,13 +45,13 @@ grid                       = "0.5x0.5"
 x_days                     = 2
 hans_date                  = "2023-08-08"
 filename_in_clim           = (
-    f"{path_in_clim}xyt_climatology_tp24_{x_days}dayacc_monthly_{grid}_"
+    f"{path_in_clim}xyt_climatology_tp24_{x_days}dayacc_monthly_era5_{grid}_"
     f"{clim_years[0]}-{clim_years[-1]}.nc"
 )
 
-filename_in_catchment      = f"{path_in_catchment}nve_nevina_bergheimvassdraget.geojson"
+filename_in_catchment      = f"{path_in_catchment}catchment_nve_regine_drammen.geojson"
 filename_out               = f"{path_out}fig-01.pdf"
-write2file                 = True
+write2file                 = False
 # ----------------------------------------------
 
 

@@ -28,7 +28,7 @@ dataset      = "senorge"
 variable     = "rr"
 years        = np.arange(1957, 2024, 1)
 
-x_days       = 2  # trailing window length
+x_days       = 3  # trailing window length
 
 path_in      = config.dirs["senorge_continuous_daily"] + variable + "/"
 file_pattern = f"{variable}_{{year}}.nc"  # adjust to "rr_{year}.nc" if needed

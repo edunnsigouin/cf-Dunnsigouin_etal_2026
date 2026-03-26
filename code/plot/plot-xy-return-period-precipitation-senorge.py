@@ -28,11 +28,10 @@ path_in_catchment = config.dirs["nve_catchment"]
 path_out          = config.dirs["fig"]
 
 filename_in_senorge = f'{path_in_senorge}returnperiod_rr_2dayacc_senorge_1957-2023_20230809.nc'
-filename_out        = f'{path_out}returnperiod_rr_2dayacc_senorge_1957-2023_20230809.pdf'
+filename_out        = f'{path_out}xy_returnperiod_annual_senorge_rr_2dayacc_1957-2023_20230809_excl2023.pdf'
 write2file          = False
 
 variable = "return_period_years"
-DPI = 300
 
 # --- Map projection (plot CRS)
 CENTRAL_LON = 10.0
@@ -179,7 +178,6 @@ def plot_return_period_categories(
     central_lat: float = 62.0,
     catchment_boundaries: list[dict] | None = None,
     savepath: str | None = None,
-    dpi: int = 300,
     write2file: False
 ):
     """Plot categorical return period map on a Lambert Conformal map."""
@@ -222,22 +220,16 @@ def plot_return_period_categories(
     cbar.ax.set_yticklabels(labels)
     cbar.set_label("Return period category (years)")
 
-    ax.set_extent(
-        [float(np.nanmin(lon.values)), float(np.nanmax(lon.values)),
-         float(np.nanmin(lat.values)), float(np.nanmax(lat.values))],
-        crs=proj_data,
-    )
-
     event_date = T.attrs.get("event_date_selected", T.attrs.get("selected_time", ""))
     xdays = T.attrs.get("x_days", "")
-    ax.set_title(f"Return period categories\n{event_date} ({xdays}-day accumulation)", fontsize=13)
+    ax.set_title(f"Storm Hans return period categories\n{event_date} ({xdays}-day accumulation)", fontsize=13)
 
-    ax.set_extent([4.5, 13.0, 57.5, 64.0])
+    ax.set_extent([4.5, 13.0, 58, 64.0])
     
     plt.tight_layout()
 
     if write2file:
-        fig.savefig(savepath, dpi=dpi, bbox_inches="tight")
+        fig.savefig(savepath,bbox_inches="tight")
 
     plt.show()
     
@@ -271,6 +263,5 @@ if __name__ == "__main__":
         central_lat=CENTRAL_LAT,
         catchment_boundaries=catchment_boundaries,
         savepath=filename_out,
-        dpi=DPI,
         write2file=write2file,
     )

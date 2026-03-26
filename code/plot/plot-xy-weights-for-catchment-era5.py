@@ -1,32 +1,31 @@
 """
 Plot model-grid catchment weights (0–1) and overlay the catchment border
-and model grid cell boundaries (0.5x0.5) on a Cartopy map.
+on a Cartopy map.
 """
 
 import json
-import numpy               as np
-import xarray              as xr
-import matplotlib.pyplot   as plt
-import cartopy.crs         as ccrs
-import cartopy.feature     as cfeature
-from shapely.geometry      import shape
-from shapely.ops           import unary_union
+import numpy as np
+import xarray as xr
+import matplotlib.pyplot as plt
+import cartopy.crs as ccrs
+import cartopy.feature as cfeature
+from shapely.geometry import shape
+from shapely.ops import unary_union
 from Dunnsigouin_etal_2026 import config
 
 # input -------------------------------------------------------------------------
-path_in           = config.dirs["nve_catchment"]
-path_out          = config.dirs["fig"]
-catchment         = 'regine_drammen'
-weights_nc        = f"{path_in}weights_{catchment}_era5_0.5x0.5.nc"
-catchment_geojson = f"{path_in}nve_{catchment}geojson"
-fig_out           = f"{path_out}weights_{catchment}_era5_0.5x0.5.pdf"
-map_extent        = [4.5, 14.0, 57.5, 64.0]
-figure_size       = (6, 6)
-outline_width     = 2.0
-gridline_width    = 0.4
-gridline_color    = "black"
-write2file        = False
+path_in = config.dirs["nve_catchment"]
+path_out = config.dirs["fig"]
+catchment_name = "regine_drammen"
+weights_nc = f"{path_in}weights_catchment_{catchment_name}_era5_0.5x0.5.nc"
+catchment_geojson = f"{path_in}catchment_nve_{catchment_name}.geojson"
+fig_out = f"{path_out}weights_catchement_{catchment_name}_era5_0.5x0.5.pdf"
+map_extent = [4.5, 14.0, 57.5, 64.0]
+figure_size = (6, 6)
+outline_width = 2.0
+write2file = False
 # -------------------------------------------------------------------------------
+
 
 def read_geojson(filepath: str) -> dict:
     """Read a GeoJSON file into a Python dictionary."""
@@ -43,23 +42,39 @@ def dissolve_polygon_geojson(gj: dict):
     return geom
 
 
-def centers_to_edges(centers: np.ndarray, d: float) -> np.ndarray:
-    """Convert grid centers to grid edges."""
-    return np.concatenate(([centers[0] - d / 2], centers + d / 2))
+def centers_to_edges(centers: np.ndarray) -> np.ndarray:
+    """
+    Convert 1D grid-cell centers to cell edges.
 
+    Works for both increasing and decreasing coordinates.
+    """
+    centers = np.asarray(centers)
 
-def infer_grid_spacing(centers: np.ndarray) -> float:
-    """Infer uniform grid spacing."""
-    return float(np.median(np.abs(np.diff(centers))))
+    if centers.ndim != 1:
+        raise ValueError("centers must be 1D")
+    if centers.size < 2:
+        raise ValueError("Need at least two centers to infer edges")
+
+    edges = np.empty(centers.size + 1, dtype=float)
+
+    # interior edges = midpoints
+    edges[1:-1] = 0.5 * (centers[:-1] + centers[1:])
+
+    # extrapolate outer edges from nearest spacing
+    edges[0] = centers[0] - 0.5 * (centers[1] - centers[0])
+    edges[-1] = centers[-1] + 0.5 * (centers[-1] - centers[-2])
+
+    return edges
 
 
 def setup_cartopy_ax(fig_size, extent):
-    """Create Cartopy axis with background layers (no gridlines)."""
+    """Create Cartopy axis with background layers."""
     proj = ccrs.LambertConformal(
         central_longitude=15,
         central_latitude=65,
         standard_parallels=(63, 70),
     )
+
     fig = plt.figure(figsize=fig_size)
     ax = plt.axes(projection=proj)
 
@@ -67,40 +82,36 @@ def setup_cartopy_ax(fig_size, extent):
     ax.add_feature(cfeature.OCEAN)
     ax.add_feature(cfeature.COASTLINE, linewidth=0.7)
     ax.add_feature(cfeature.BORDERS, linewidth=0.5)
-    #ax.add_feature(cfeature.LAKES, alpha=0.5)
-    #ax.add_feature(cfeature.RIVERS, linewidth=0.3)
 
     ax.set_extent(extent, crs=ccrs.PlateCarree())
     return fig, ax
 
 
 def plot_weights(ax, da_weights: xr.DataArray):
-    """
-    Plot weights as a pcolormesh using BuGn colormap.
-    """
+    """Plot weights as a pcolormesh."""
     lats = da_weights.latitude.values
     lons = da_weights.longitude.values
     w = da_weights.values
 
-    dlat = infer_grid_spacing(lats)
-    dlon = infer_grid_spacing(lons)
+    lat_edges = centers_to_edges(lats)
+    lon_edges = centers_to_edges(lons)
 
-    lat_edges_desc = centers_to_edges(lats, dlat)
-    lon_edges = centers_to_edges(lons, dlon)
+    w_plot = w.copy()
 
-    # pcolormesh needs increasing latitude
-    if lat_edges_desc[0] > lat_edges_desc[-1]:
-        lat_edges = lat_edges_desc[::-1]
-        w_plot = w[::-1, :]
-    else:
-        lat_edges = lat_edges_desc
-        w_plot = w
+    # pcolormesh expects increasing coordinates
+    if lat_edges[0] > lat_edges[-1]:
+        lat_edges = lat_edges[::-1]
+        w_plot = w_plot[::-1, :]
 
-    LON_E, LAT_E = np.meshgrid(lon_edges, lat_edges)
+    if lon_edges[0] > lon_edges[-1]:
+        lon_edges = lon_edges[::-1]
+        w_plot = w_plot[:, ::-1]
+
+    lon_e, lat_e = np.meshgrid(lon_edges, lat_edges)
 
     m = ax.pcolormesh(
-        LON_E,
-        LAT_E,
+        lon_e,
+        lat_e,
         w_plot,
         cmap="BuGn",
         vmin=0.0,
@@ -119,12 +130,24 @@ def plot_catchment_border(ax, catchment_geom, linewidth=2.0):
     """Overlay catchment outline."""
     if catchment_geom.geom_type == "Polygon":
         x, y = catchment_geom.exterior.xy
-        ax.plot(x, y, linewidth=linewidth, color = 'tab:red',transform=ccrs.PlateCarree())
+        ax.plot(
+            x,
+            y,
+            linewidth=linewidth,
+            color="tab:red",
+            transform=ccrs.PlateCarree(),
+        )
 
     elif catchment_geom.geom_type == "MultiPolygon":
         for poly in catchment_geom.geoms:
             x, y = poly.exterior.xy
-            ax.plot(x, y, linewidth=linewidth, color = 'tab:red',transform=ccrs.PlateCarree())
+            ax.plot(
+                x,
+                y,
+                linewidth=linewidth,
+                color="tab:red",
+                transform=ccrs.PlateCarree(),
+            )
 
 
 if __name__ == "__main__":
@@ -134,13 +157,13 @@ if __name__ == "__main__":
     da = ds["catchment_weight"]
 
     # Load catchment polygon
-    gj        = read_geojson(catchment_geojson)
-    catchment = dissolve_polygon_geojson(gj)
+    gj = read_geojson(catchment_geojson)
+    catchment_geom = dissolve_polygon_geojson(gj)
 
     # Plot
-    fig, ax              = setup_cartopy_ax(figure_size, map_extent)
-    lat_edges, lon_edges = plot_weights(ax, da)
-    plot_catchment_border(ax, catchment, linewidth=outline_width)
+    fig, ax = setup_cartopy_ax(figure_size, map_extent)
+    plot_weights(ax, da)
+    plot_catchment_border(ax, catchment_geom, linewidth=outline_width)
     ax.set_title("Catchment weights on 0.5° model grid", fontsize=12)
 
     if write2file:
