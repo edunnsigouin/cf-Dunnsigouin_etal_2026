@@ -348,7 +348,7 @@ def plot_station_markers(ax, stations, proj_data):
 
 def finalize_figure(fig, axes, savepath=None, write2file=False):
     """Add titles, layout, optionally save, and show."""
-    axes[0].set_title("(a) Storm Hans precipitation", fontsize=13)
+    axes[0].set_title("(a) Storm Hans precipitation (2023-08-07)", fontsize=13)
     axes[1].set_title("(b) Storm Hans return period", fontsize=13)
     axes[2].set_title("(c) Catchment weights", fontsize=13)
 
