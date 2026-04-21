@@ -37,8 +37,8 @@ path_out = config.dirs["fig"]
 # Files
 filename_in_senorge = f"{path_in_senorge}returnperiod_rr_2dayacc_senorge_1957-2023_20230809.nc"
 weights_nc = f"{path_in_catchment}weights_catchment_regine_drammen_era5_0.5x0.5.nc"
-filename_out = f"{path_out}storm_hans_precip_returnperiod_weights.pdf"
-write2file = False
+filename_out = f"{path_out}Fig-01-new.png"
+write2file = True
 
 # Map projection
 CENTRAL_LON = 10.0
@@ -150,7 +150,7 @@ def make_three_map_axes(central_lon=10.0, central_lat=62.0, extent=None):
     fig, axes = plt.subplots(
         1,
         3,
-        figsize=(21, 7.8),
+        figsize=(15, 7.5),
         subplot_kw={"projection": proj_map},
     )
 
@@ -179,11 +179,12 @@ def plot_precipitation(ax, da, lon, lat, proj_data):
         cf,
         ax=ax,
         orientation="horizontal",
-        shrink=0.8,
-        pad=0.08,
+        shrink=0.9,
+        pad=0.02,
     )
-    cbar.set_label("2-day accumulated precipitation (mm)")
-
+    cbar.set_label("2-day accumulated precipitation (mm)",fontsize=13)
+    cbar.ax.set_xticklabels(np.arange(0,160,20),fontsize=12)
+    
     return cf
 
 
@@ -228,12 +229,12 @@ def plot_return_period(ax, da, lon, lat, proj_data):
         mesh,
         ax=ax,
         orientation="horizontal",
-        shrink=0.8,
-        pad=0.08,
+        shrink=0.9,
+        pad=0.02,
         ticks=np.arange(len(CATEGORY_LABELS)),
     )
-    cbar.ax.set_xticklabels(CATEGORY_LABELS)
-    cbar.set_label("Return period (years)")
+    cbar.ax.set_xticklabels(CATEGORY_LABELS,fontsize=12)
+    cbar.set_label("Return period (years)",fontsize=13)
 
     return mesh
 
@@ -291,11 +292,12 @@ def plot_weights(ax, da_weights, proj_data):
         mesh,
         ax=ax,
         orientation="horizontal",
-        shrink=0.8,
-        pad=0.08,
+        shrink=0.9,
+        pad=0.02,
     )
-    cbar.set_label("Catchment weight (fraction)")
-
+    cbar.set_label("Catchment weight (fraction)",fontsize=13)
+    cbar.ax.set_xticklabels([0,0.2,0.4,0.6,0.8,1],fontsize=12)
+    
     return mesh
 
 
@@ -319,7 +321,7 @@ def plot_station_markers(ax, stations, proj_data):
             st["lon"],
             st["lat"],
             marker="o",
-            markersize=5,
+            markersize=8,
             markeredgecolor="black",
             markerfacecolor="yellow",
             transform=proj_data,
@@ -337,7 +339,7 @@ def plot_station_markers(ax, stations, proj_data):
             st["lon"] + dx,
             st["lat"] + dy,
             st["name"],
-            fontsize=9,
+            fontsize=11,
             color="yellow",
             transform=proj_data,
             zorder=7,
@@ -350,8 +352,10 @@ def finalize_figure(fig, axes, savepath=None, write2file=False):
     axes[1].set_title("(b) Storm Hans return period", fontsize=13)
     axes[2].set_title("(c) Catchment weights", fontsize=13)
 
+    
+    fig.subplots_adjust(wspace=0.01, bottom=0.0, top=1.0)
     plt.tight_layout()
-
+    
     if write2file:
         fig.savefig(savepath, bbox_inches="tight")
 
