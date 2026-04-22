@@ -1,414 +1,414 @@
 """
-draft figure 01 for hans paper showing obs and hans
+Plot Storm Hans precipitation, return period, and catchment weights side by side.
 
-4-panel plot:
-  (1) ERA5 Hans X-day accumulated precip normalized by monthly climatological std (unitless)
-      - Lambert Conformal, pcolormesh
-      - coastlines + borders + catchment border + station markers
-  (2-4) streamflow, precipitation, snowdepth
-Each time-series panel: 2023 daily line + shaded day-of-year 95% interval across all years
-PLUS: median (all years, by day-of-year) in tab:red
+The script:
+1. Reads precipitation and return period from seNorge NetCDF
+2. Reads catchment weights from an ERA5 grid NetCDF
+3. Loads catchment geometry
+4. Creates three map panels
+5. Plots precipitation, return period, and catchment weights
+6. Overlays catchment borders and station markers on all panels
 """
 
+# =========================
+# Imports
+# =========================
 import json
 import numpy as np
 import xarray as xr
-import pandas as pd
 import matplotlib.pyplot as plt
-import matplotlib.dates as mdates
-from mpl_toolkits.axes_grid1 import make_axes_locatable
-
+import matplotlib.colors as mcolors
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
-
-from shapely.geometry import shape
+import geopandas as gpd
+from shapely.geometry import Polygon, MultiPolygon, shape
 from shapely.ops import unary_union
-
 from Dunnsigouin_etal_2026 import config, misc
 
 
-# -------------------- input --------------------
-path_in_obs                = config.dirs["obs"]
-path_in_era5               = config.dirs["era5_continuous_daily"] + "tp24/"
-path_in_clim               = config.dirs["era5_processed"]
-path_in_catchment          = config.dirs["nve_catchment"]
-path_out                   = config.dirs["fig"]
+# =========================
+# User input parameters
+# =========================
+# Paths
+path_in_catchment = config.dirs["nve_catchment"]
+path_in_senorge = config.dirs["senorge_processed"]
+path_out = config.dirs["fig"]
 
-filename_in_streamflow     = f"{path_in_obs}streamflow.Bergheim.nc"
-filename_in_precipitation  = f"{path_in_obs}precipitation.ål.III.nc"
-filename_in_snowdepth      = f"{path_in_obs}snowdepth.ål.III.nc"
-filename_in_era5           = f"{path_in_era5}tp24_0.5x0.5_2023.nc"
+# Files
+filename_in_senorge = f"{path_in_senorge}returnperiod_rr_2dayacc_senorge_1957-2023_20230809.nc"
+weights_nc = f"{path_in_catchment}weights_catchment_regine_drammen_era5_0.5x0.5.nc"
+filename_out = f"{path_out}fig-01.png"
+write2file = True
 
-# Monthly climatological std file (must match x_days + grid used for Hans)
-clim_years                 = np.arange(1941, 2023, 1)
-grid                       = "0.5x0.5"
-x_days                     = 2
-hans_date                  = "2023-08-08"
-filename_in_clim           = (
-    f"{path_in_clim}xyt_climatology_tp24_{x_days}dayacc_monthly_era5_{grid}_"
-    f"{clim_years[0]}-{clim_years[-1]}.nc"
-)
+# Map projection
+CENTRAL_LON = 10.0
+CENTRAL_LAT = 62.0
+MAP_EXTENT = [4.75, 12.75, 58.0, 63.0]
 
-filename_in_catchment      = f"{path_in_catchment}catchment_nve_regine_drammen.geojson"
-filename_out               = f"{path_out}fig-01.pdf"
-write2file                 = False
-# ----------------------------------------------
+# Left-panel precipitation settings
+PRECIP_LEVELS = np.arange(0, 160, 20)
+PRECIP_CMAP = "GnBu"
 
+# Middle-panel return period settings
+CATEGORY_EDGES = np.array([1.0, 5.0, 10.0, 50.0, 100.0, np.inf], dtype=float)
+CATEGORY_LABELS = ["1–5", "5–10", "10–50", "50–100", "> 100"]
+RETURN_CMAP = "PuBuGn"
 
-def load_obs_data(filename_01, filename_02, filename_03):
-    ds_01 = xr.open_dataset(filename_01)
-    ds_02 = xr.open_dataset(filename_02)
-    ds_03 = xr.open_dataset(filename_03)
-    return ds_01, ds_02, ds_03
+# Right-panel weight settings
+WEIGHT_CMAP = "BuGn"
+WEIGHT_VMIN = 0.0
+WEIGHT_VMAX = 1.0
 
+# Catchment input CRS if missing
+CATCHMENT_CRS_IF_MISSING = "EPSG:4326"
 
-def load_era5_data(filename_in_era5, hans_date="2023-08-08", x_days=2):
-    """
-    Loads ERA5 daily tp24 dataset, forms X-day rolling accumulation and returns Hans day slice.
-    Units assumed m/day in file; convert to mm/Xday after rolling sum.
-    """
-    ds_era5         = xr.open_dataset(filename_in_era5)
-    ds_era5         = ds_era5.rolling(time=x_days, min_periods=x_days).sum()
-    ds_era5["tp24"] = ds_era5["tp24"] * 1000.0  # m/Xday -> mm/Xday
-    return ds_era5.sel(time=hans_date)
+CATCHMENTS = [
+    {
+        "label": "Drammensvassdraget",
+        "geojson": "catchment_nve_regine_drammen.geojson",
+        "color": "tab:red",
+        "inset_m": 0,
+    },
+]
 
-
-def load_clim_std(filename_in_clim, month: int):
-    """
-    Loads monthly climatological std of X-day accumulated precip (mm/Xday).
-    Expects variable name 'std' and coordinate 'month' in the climatology file.
-    """
-    da_std = xr.open_dataset(filename_in_clim)["std"]
-    return da_std.sel(month=month)
+# Stations to plot
+STATIONS = [
+    {"name": "Bergheim", "lon": 9.2483, "lat": 60.4761},
+    {"name": "Ål III", "lon": 8.5609, "lat": 60.6391},
+]
 
 
-# ---------------- Catchment helpers ----------------
-
-def read_geojson(filepath: str) -> dict:
-    with open(filepath, "r", encoding="utf-8") as f:
-        return json.load(f)
-
-
-def dissolve_polygon_geojson(gj: dict):
-    geoms = [shape(feat["geometry"]) for feat in gj.get("features", [])]
-    geom = unary_union(geoms)
-    if geom.geom_type not in ("Polygon", "MultiPolygon"):
-        raise ValueError(f"Expected Polygon/MultiPolygon, got {geom.geom_type}")
-    return geom
+# =========================
+# Functions
+# =========================
+def load_event_and_return_period_data(filename):
+    """Load precipitation, return period, and coordinates from NetCDF."""
+    ds = xr.open_dataset(filename)
+    precip = ds["event_accum"]
+    return_period = ds["return_period_years"]
+    lon = ds["lon"]
+    lat = ds["lat"]
+    return ds, precip, return_period, lon, lat
 
 
-def plot_catchment_border(ax, catchment_geom, linewidth=2.0):
-    """Overlay catchment outline in tab:red."""
-    if catchment_geom is None:
-        return
-
-    if catchment_geom.geom_type == "Polygon":
-        x, y = catchment_geom.exterior.xy
-        ax.plot(x, y, linewidth=linewidth, color="tab:red", transform=ccrs.PlateCarree())
-
-    elif catchment_geom.geom_type == "MultiPolygon":
-        for poly in catchment_geom.geoms:
-            x, y = poly.exterior.xy
-            ax.plot(x, y, linewidth=linewidth, color="tab:red", transform=ccrs.PlateCarree())
+def load_weights_data(filename):
+    """Load catchment weights from NetCDF."""
+    ds = xr.open_dataset(filename)
+    da = ds["catchment_weight"]
+    return ds, da
 
 
-# ---------------- Plot helpers ----------------
+def load_catchment_outer_boundaries(catchments, base_dir, crs_if_missing="EPSG:4326"):
+    """Load catchments, dissolve each to one geometry, optionally shrink it, and keep only outer borders."""
+    boundaries = []
 
-def _infer_edges_1d(centers: np.ndarray) -> np.ndarray:
-    """Infer cell edges from 1D cell centers (assumes ~regular spacing)."""
+    plot_crs = "EPSG:4326"
+    metric_crs = "EPSG:32633"
+
+    for catchment in catchments:
+        filepath = base_dir + catchment["geojson"]
+        gdf = gpd.read_file(filepath)
+
+        if gdf.crs is None:
+            gdf = gdf.set_crs(crs_if_missing)
+
+        gdf_metric = gdf.to_crs(metric_crs)
+        union_geom = gdf_metric.geometry.union_all()
+
+        inset_m = catchment.get("inset_m", 0)
+        if inset_m > 0:
+            union_geom = union_geom.buffer(-inset_m)
+
+        if isinstance(union_geom, Polygon):
+            outer_geom = Polygon(union_geom.exterior)
+        elif isinstance(union_geom, MultiPolygon):
+            outer_geom = MultiPolygon([Polygon(poly.exterior) for poly in union_geom.geoms])
+        else:
+            outer_geom = union_geom
+
+        outer_gdf = gpd.GeoDataFrame(geometry=[outer_geom], crs=metric_crs).to_crs(plot_crs)
+
+        boundaries.append(
+            {
+                "label": catchment["label"],
+                "color": catchment["color"],
+                "geometry": outer_gdf.geometry.iloc[0],
+            }
+        )
+
+    return boundaries
+
+
+def make_three_map_axes(central_lon=10.0, central_lat=62.0, extent=None):
+    """Create a figure with three map panels."""
+    proj_map = ccrs.LambertConformal(
+        central_longitude=central_lon,
+        central_latitude=central_lat,
+    )
+    proj_data = ccrs.PlateCarree()
+
+    fig, axes = plt.subplots(
+        1,
+        3,
+        figsize=(15, 7.5),
+        subplot_kw={"projection": proj_map},
+    )
+
+    for ax in axes:
+        ax.coastlines(resolution="10m", linewidth=0.6)
+        ax.add_feature(cfeature.BORDERS.with_scale("10m"), linewidth=0.4)
+        if extent is not None:
+            ax.set_extent(extent, crs=proj_data)
+
+    return fig, axes, proj_data
+
+
+def plot_precipitation(ax, da, lon, lat, proj_data):
+    """Plot precipitation with contourf."""
+    cf = ax.contourf(
+        lon.values,
+        lat.values,
+        da.values,
+        levels=PRECIP_LEVELS,
+        cmap=PRECIP_CMAP,
+        transform=proj_data,
+        extend="max",
+    )
+
+    cbar = plt.colorbar(
+        cf,
+        ax=ax,
+        orientation="horizontal",
+        shrink=0.9,
+        pad=0.02,
+    )
+    cbar.set_label("2-day accumulated precipitation (mm)",fontsize=13)
+    cbar.ax.set_xticklabels(np.arange(0,160,20),fontsize=12)
+    
+    return cf
+
+
+def categorize_return_period(T, edges):
+    """Convert return period values to category indices."""
+    values = T.values
+    cat = np.digitize(values, edges, right=False) - 1
+    cat = cat.astype(float)
+
+    cat[values < 1.0] = np.nan
+    cat[~np.isfinite(values)] = np.nan
+
+    return cat
+
+
+def build_return_period_cmap(n_labels):
+    """Build discrete colormap for return period categories, with 1–5 years as white."""
+    base_cmap = plt.get_cmap(RETURN_CMAP)
+    colors = base_cmap(np.linspace(0.3, 0.95, n_labels))
+    colors[0] = np.array([1.0, 1.0, 1.0, 1.0])
+    return mcolors.ListedColormap(colors)
+
+
+def plot_return_period(ax, da, lon, lat, proj_data):
+    """Plot categorized return period map."""
+    cat = categorize_return_period(da, CATEGORY_EDGES)
+    cmap = build_return_period_cmap(len(CATEGORY_LABELS))
+
+    mesh = ax.pcolormesh(
+        lon.values,
+        lat.values,
+        cat,
+        transform=proj_data,
+        cmap=cmap,
+        vmin=-0.5,
+        vmax=len(CATEGORY_LABELS) - 0.5,
+    )
+
+    mesh.cmap.set_bad("white")
+
+    cbar = plt.colorbar(
+        mesh,
+        ax=ax,
+        orientation="horizontal",
+        shrink=0.9,
+        pad=0.02,
+        ticks=np.arange(len(CATEGORY_LABELS)),
+    )
+    cbar.ax.set_xticklabels(CATEGORY_LABELS,fontsize=12)
+    cbar.set_label("Return period (years)",fontsize=13)
+
+    return mesh
+
+
+def centers_to_edges(centers):
+    """Convert 1D cell centers to cell edges."""
     centers = np.asarray(centers)
-    d = np.median(np.diff(centers))
-    edges = np.concatenate(([centers[0] - d / 2], centers + d / 2))
+
+    if centers.ndim != 1:
+        raise ValueError("centers must be 1D")
+    if centers.size < 2:
+        raise ValueError("Need at least two centers to infer edges")
+
+    edges = np.empty(centers.size + 1, dtype=float)
+    edges[1:-1] = 0.5 * (centers[:-1] + centers[1:])
+    edges[0] = centers[0] - 0.5 * (centers[1] - centers[0])
+    edges[-1] = centers[-1] + 0.5 * (centers[-1] - centers[-2])
+
     return edges
 
 
-def _year_series_and_climstats_by_doy(da: xr.DataArray, year: int):
-    da = da.dropna("time")
+def plot_weights(ax, da_weights, proj_data):
+    """Plot catchment weights as a pcolormesh."""
+    lats = da_weights.latitude.values
+    lons = da_weights.longitude.values
+    w = da_weights.values
 
-    t0, t1 = f"{year}-01-01", f"{year}-12-31"
-    x_dates = pd.date_range(t0, t1, freq="D")
+    lat_edges = centers_to_edges(lats)
+    lon_edges = centers_to_edges(lons)
 
-    da_y = da.sel(time=slice(t0, t1))
-    if da_y.sizes.get("time", 0) != len(x_dates):
-        da_y = da_y.resample(time="1D").mean().sel(time=slice(t0, t1))
-    y_year = da_y.values
+    w_plot = w.copy()
 
-    q = da.groupby("time.dayofyear").quantile([0.025, 0.5, 0.975], dim="time")
+    if lat_edges[0] > lat_edges[-1]:
+        lat_edges = lat_edges[::-1]
+        w_plot = w_plot[::-1, :]
 
-    doy = np.arange(1, 366)
-    q_low = q.sel(quantile=0.025).sel(dayofyear=doy, drop=True).values
-    q_med = q.sel(quantile=0.5).sel(dayofyear=doy, drop=True).values
-    q_hi  = q.sel(quantile=0.975).sel(dayofyear=doy, drop=True).values
+    if lon_edges[0] > lon_edges[-1]:
+        lon_edges = lon_edges[::-1]
+        w_plot = w_plot[:, ::-1]
 
-    return x_dates, y_year, q_low, q_hi, q_med
+    lon_e, lat_e = np.meshgrid(lon_edges, lat_edges)
 
-
-def plot_station_marker(ax, lon, lat, label=None):
-
-    ax.plot(
-        lon,
-        lat,
-        marker="o",
-        markersize=5,
-        markeredgecolor="black",
-        markerfacecolor="yellow",
-        transform=ccrs.PlateCarree(),
-        zorder=5,
-    )
-
-    if label == "Bergheim":
-        ax.text(
-            lon + 0.05,
-            lat + 0.05,
-            label,
-            color="yellow",
-            fontsize=10,
-            transform=ccrs.PlateCarree(),
-            zorder=6,
-        )
-    elif label == "Tunhovd":
-        ax.text(
-            lon - 1.9,
-            lat - 0.35,
-            label,
-            color="yellow",
-            fontsize=10,
-            transform=ccrs.PlateCarree(),
-            zorder=6,
-        )
-    elif label == "Ål III":
-        ax.text(
-            lon - 1.0,
-            lat + 0.05,
-            label,
-            color="yellow",
-            fontsize=10,
-            transform=ccrs.PlateCarree(),
-            zorder=6,
-        )
-
-
-def plot_panel_era5_tp24_map(
-    ax,
-    ds_era5: xr.Dataset,
-    da_std: xr.DataArray,
-    var="tp24",
-    extent=(6, 13.0, 58, 64.0),
-    catchment_geom=None,
-    catchment_linewidth=2.0,
-    eps=1e-12,
-):
-    """
-    Plot Hans X-day precip normalized by monthly climatological std:
-        ratio = Hans_precip / std_month   (unitless, "number of std devs")
-    """
-    da_hans = ds_era5[var]  # already mm/Xday on the selected hans_date
-
-    # Align grids defensively (safe if identical)
-    da_std_aligned = da_std
-    try:
-        da_std_aligned = da_std.interp_like(da_hans)
-    except Exception:
-        pass
-
-    ratio = da_hans / (da_std_aligned + eps)
-
-    lon = ds_era5["longitude"].values
-    lat = ds_era5["latitude"].values
-
-    # pcolormesh expects edges
-    lon_e = _infer_edges_1d(lon)
-    lat_e = _infer_edges_1d(lat)
-
-    # If lat is descending, flip to ascending for pcolormesh
-    z = ratio.values
-    if lat_e[0] > lat_e[-1]:
-        lat_e = lat_e[::-1]
-        z = z[::-1, :]
-
-    LON_E, LAT_E = np.meshgrid(lon_e, lat_e)
-
-    m = ax.pcolormesh(
-        LON_E,
-        LAT_E,
-        z,
-        cmap="PiYG",
+    mesh = ax.pcolormesh(
+        lon_e,
+        lat_e,
+        w_plot,
+        cmap=WEIGHT_CMAP,
+        vmin=WEIGHT_VMIN,
+        vmax=WEIGHT_VMAX,
         shading="auto",
-        vmin=0.0,
-        vmax=10.0,
-        transform=ccrs.PlateCarree(),
+        transform=proj_data,
     )
 
-    ax.add_feature(cfeature.COASTLINE, linewidth=0.7)
-    ax.add_feature(cfeature.BORDERS, linewidth=0.5)
-    ax.set_extent(extent, crs=ccrs.PlateCarree())
-
-    # Catchment border overlay (tab:red)
-    plot_catchment_border(ax, catchment_geom, linewidth=catchment_linewidth)
-
-    # Stations
-    plot_station_marker(ax, lon=9.2483, lat=60.4761, label="Bergheim")
-    plot_station_marker(ax, lon=8.5609, lat=60.6391, label="Ål III")
-
-    # Title with date + month
-    t = ds_era5.coords.get("time", None)
-    tstr = ""
-    month = None
-    if t is not None and np.ndim(t.values) == 0:
-        dt = pd.to_datetime(t.values)
-        tstr = str(dt.date())
-        month = dt.month
-
-    ax.set_title(f"a) Storm Hans 2-day precipitation {tstr}")
+    cbar = plt.colorbar(
+        mesh,
+        ax=ax,
+        orientation="horizontal",
+        shrink=0.9,
+        pad=0.02,
+    )
+    cbar.set_label("Catchment weight (fraction)",fontsize=13)
+    cbar.ax.set_xticklabels([0,0.2,0.4,0.6,0.8,1],fontsize=12)
     
-    return m
+    return mesh
 
 
-def plot_panel_streamflow(ax, ds_streamflow: xr.Dataset, year=2023, var="vannforing"):
-    da = ds_streamflow[var]
-    x, y, lo, hi, med = _year_series_and_climstats_by_doy(da, year)
-
-    ax.fill_between(x, lo, hi, alpha=0.25, label="95% interval over all years")
-    ax.plot(x, med, linewidth=1.4, color="tab:red", label="Median over all years")
-    ax.plot(x, y, linewidth=1.2, label=f"{year}")
-
-    ax.set_title("d) Bergheim station streamflow 2023")
-    ax.set_ylabel("m³/s")
-
-
-def plot_panel_precipitation(ax, ds_precip: xr.Dataset, year=2023, var="precipitation"):
-    da = ds_precip[var]
-    da_2d = da.rolling(time=2, min_periods=2).sum()
-
-    x, y, lo, hi, med = _year_series_and_climstats_by_doy(da_2d, year)
-
-    ax.fill_between(x, lo, hi, alpha=0.25)
-    ax.plot(x, med, linewidth=1.4, color="tab:red")
-    ax.plot(x, y, linewidth=1.2, label=f"{year}")
-
-    ax.set_title("b) Ål III station 2-day precipitation 2023")
-    ax.set_ylabel("mm / 2 days")
+def plot_catchment_boundaries(ax, catchment_boundaries, proj_data):
+    """Plot outer borders of the catchments."""
+    for item in catchment_boundaries:
+        ax.add_geometries(
+            [item["geometry"]],
+            crs=proj_data,
+            facecolor="none",
+            edgecolor=item["color"],
+            linewidth=2.0,
+            zorder=5,
+        )
 
 
-def plot_panel_snowdepth(ax, ds_snow: xr.Dataset, year=2023, var="snowdepth"):
-    da = ds_snow[var]
-    x, y, lo, hi, med = _year_series_and_climstats_by_doy(da, year)
+def plot_station_markers(ax, stations, proj_data):
+    """Plot station markers as yellow dots with labels."""
+    for st in stations:
+        ax.plot(
+            st["lon"],
+            st["lat"],
+            marker="o",
+            markersize=8,
+            markeredgecolor="black",
+            markerfacecolor="yellow",
+            transform=proj_data,
+            zorder=6,
+        )
 
-    ax.fill_between(x, lo, hi, alpha=0.25)
-    ax.plot(x, med, linewidth=1.4, color="tab:red")
-    ax.plot(x, y, linewidth=1.2, label=f"{year}")
+        if st["name"] == "Bergheim":
+            dx, dy = 0.05, 0.05
+        elif st["name"] == "Ål III":
+            dx, dy = -0.65, 0.05
+        else:
+            dx, dy = 0.05, 0.05
 
-    ax.set_title("c) Ål III station snowdepth 2023")
-    ax.set_ylabel("cm")
+        ax.text(
+            st["lon"] + dx,
+            st["lat"] + dy,
+            st["name"],
+            fontsize=11,
+            color="yellow",
+            transform=proj_data,
+            zorder=7,
+        )
 
 
-def plot_all_panels(
-    ds_era5,
-    da_std,
-    ds_streamflow,
-    ds_precipitation,
-    ds_snowdepth,
-    catchment_geom=None,
-    year=2023,
-    outfile=None,
-    write2file=write2file,
-):
-    proj = ccrs.LambertConformal(
-        central_longitude=15,
-        central_latitude=65,
-        standard_parallels=(63, 70),
-    )
+def finalize_figure(fig, axes, savepath=None, write2file=False):
+    """Add titles, layout, optionally save, and show."""
+    axes[0].set_title("(a) Storm Hans precipitation (2023-08-07)", fontsize=13)
+    axes[1].set_title("(b) Storm Hans return period", fontsize=13)
+    axes[2].set_title("(c) Catchment weights", fontsize=13)
 
-    fig = plt.figure(figsize=(10 * 1.618, 10))
-    gs = fig.add_gridspec(2, 2, wspace=0.15, hspace=0.2)
-
-    ax_map = fig.add_subplot(gs[0, 0], projection=proj)
-    ax_sd  = fig.add_subplot(gs[1, 0]) 
-    ax_sf  = fig.add_subplot(gs[1, 1]) 
-    ax_pr  = fig.add_subplot(gs[0, 1]) 
-
-    m = plot_panel_era5_tp24_map(
-        ax_map,
-        ds_era5,
-        da_std=da_std,
-        var="tp24",
-        extent=(5, 13.0, 58, 63.0),
-        catchment_geom=catchment_geom,
-        catchment_linewidth=2.0,
-    )
-
-    # --- Colorbar to the LEFT of the map ---
-    divider = make_axes_locatable(ax_map)
-    cax = divider.append_axes("left", size="7%", pad=0.25, axes_class=plt.Axes)
-
-    cbar = fig.colorbar(m, cax=cax, orientation="vertical")
-    cbar.set_label("standard deviations")
-
-    cax.yaxis.set_label_position("left")
-    cax.yaxis.set_ticks_position("left")
-
-    plot_panel_snowdepth(ax_sd, ds_snowdepth, year=year, var="snowdepth")
-    plot_panel_streamflow(ax_sf, ds_streamflow, year=year, var="vannforing")
-    plot_panel_precipitation(ax_pr, ds_precipitation, year=year, var="precipitation")
-
-    start = pd.Timestamp(f"{year}-01-01")
-    end   = pd.Timestamp(f"{year}-12-31")
-
-    for ax in (ax_sf, ax_pr, ax_sd):
-        ax.xaxis.set_major_locator(mdates.MonthLocator())
-        ax.xaxis.set_major_formatter(mdates.DateFormatter("%b"))
-        ax.xaxis.set_minor_locator(mdates.MonthLocator())
-        ax.set_xlim(start, end)
-        ax.margins(x=0)
-        ax.set_xlabel("Month")
-
-    # Legend (time-series only)
-    handles_labels = {}
-    for ax in (ax_sf, ax_pr, ax_sd):
-        h, l = ax.get_legend_handles_labels()
-        for hh, ll in zip(h, l):
-            handles_labels[ll] = hh
-
-    ax_sf.legend(
-        list(handles_labels.values()),
-        list(handles_labels.keys()),
-        ncol=1,
-        frameon=False,
-        loc="upper left",
-        fontsize=10,
-    )
-
-    if write2file and outfile:
-        fig.savefig(outfile, bbox_inches="tight")
+    
+    fig.subplots_adjust(wspace=0.01, bottom=0.0, top=1.0)
+    plt.tight_layout()
+    
+    if write2file:
+        fig.savefig(savepath, bbox_inches="tight")
 
     plt.show()
-    plt.close(fig)
 
 
+# =========================
+# Main script
+# =========================
 if __name__ == "__main__":
 
-    ds_streamflow, ds_precipitation, ds_snowdepth = load_obs_data(
-        filename_in_streamflow,
-        filename_in_precipitation,
-        filename_in_snowdepth,
+    # 1) Load precipitation and return period data
+    ds_senorge, precip, return_period, lon, lat = load_event_and_return_period_data(filename_in_senorge)
+
+    # 2) Load weights
+    ds_weights, da_weights = load_weights_data(weights_nc)
+
+    # 3) Load catchment borders
+    catchment_boundaries = load_catchment_outer_boundaries(
+        CATCHMENTS,
+        base_dir=path_in_catchment,
+        crs_if_missing=CATCHMENT_CRS_IF_MISSING,
     )
 
-    ds_era5 = load_era5_data(filename_in_era5, hans_date=hans_date, x_days=x_days)
+    # 4) Create map panels
+    fig, axes, proj_data = make_three_map_axes(
+        central_lon=CENTRAL_LON,
+        central_lat=CENTRAL_LAT,
+        extent=MAP_EXTENT,
+    )
 
-    month = pd.to_datetime(hans_date).month
-    da_std = load_clim_std(filename_in_clim, month=month)
+    # 5) Plot precipitation
+    plot_precipitation(axes[0], precip, lon, lat, proj_data)
+    plot_catchment_boundaries(axes[0], catchment_boundaries, proj_data)
+    plot_station_markers(axes[0], STATIONS, proj_data)
 
-    gj = read_geojson(filename_in_catchment)
-    catchment = dissolve_polygon_geojson(gj)
+    # 6) Plot return period
+    plot_return_period(axes[1], return_period, lon, lat, proj_data)
+    plot_catchment_boundaries(axes[1], catchment_boundaries, proj_data)
+    plot_station_markers(axes[1], STATIONS, proj_data)
 
-    plot_all_panels(
-        ds_era5,
-        da_std,
-        ds_streamflow,
-        ds_precipitation,
-        ds_snowdepth,
-        catchment_geom=catchment,
-        year=2023,
-        outfile=filename_out,
+    # 7) Plot weights
+    plot_weights(axes[2], da_weights, proj_data)
+    plot_catchment_boundaries(axes[2], catchment_boundaries, proj_data)
+    plot_station_markers(axes[2], STATIONS, proj_data)
+
+    # 8) Finalize figure
+    finalize_figure(
+        fig,
+        axes,
+        savepath=filename_out,
         write2file=write2file,
     )
+
+    ds_senorge.close()
+    ds_weights.close()
