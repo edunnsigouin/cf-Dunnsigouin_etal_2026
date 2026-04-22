@@ -1,5 +1,5 @@
 """
-Plot Storm Hans precipitation, return period, and catchment weights side by side.
+Fig 1 for hans paper. Plot Storm Hans precipitation, return period, and catchment weights side by side.
 
 The script:
 1. Reads precipitation and return period from seNorge NetCDF
@@ -182,7 +182,7 @@ def plot_precipitation(ax, da, lon, lat, proj_data):
         shrink=0.9,
         pad=0.02,
     )
-    cbar.set_label("2-day accumulated precipitation (mm)",fontsize=13)
+    cbar.set_label("2-day accumulated precipitation (mm)",fontsize=12)
     cbar.ax.set_xticklabels(np.arange(0,160,20),fontsize=12)
     
     return cf
@@ -234,7 +234,7 @@ def plot_return_period(ax, da, lon, lat, proj_data):
         ticks=np.arange(len(CATEGORY_LABELS)),
     )
     cbar.ax.set_xticklabels(CATEGORY_LABELS,fontsize=12)
-    cbar.set_label("Return period (years)",fontsize=13)
+    cbar.set_label("Return period (years)",fontsize=12)
 
     return mesh
 
@@ -295,7 +295,7 @@ def plot_weights(ax, da_weights, proj_data):
         shrink=0.9,
         pad=0.02,
     )
-    cbar.set_label("Catchment weight (fraction)",fontsize=13)
+    cbar.set_label("Catchment weight (fraction)",fontsize=12)
     cbar.ax.set_xticklabels([0,0.2,0.4,0.6,0.8,1],fontsize=12)
     
     return mesh
@@ -348,9 +348,9 @@ def plot_station_markers(ax, stations, proj_data):
 
 def finalize_figure(fig, axes, savepath=None, write2file=False):
     """Add titles, layout, optionally save, and show."""
-    axes[0].set_title("(a) Storm Hans precipitation (2023-08-07)", fontsize=13)
-    axes[1].set_title("(b) Storm Hans return period", fontsize=13)
-    axes[2].set_title("(c) Catchment weights", fontsize=13)
+    axes[0].set_title("(a) Storm Hans precipitation 2023-08-07 to 2023-08-09", fontsize=12)
+    axes[1].set_title("(b) Storm Hans return period", fontsize=12)
+    axes[2].set_title("(c) Catchment weights", fontsize=12)
 
     
     fig.subplots_adjust(wspace=0.01, bottom=0.0, top=1.0)

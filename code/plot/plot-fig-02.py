@@ -1,5 +1,5 @@
 """
-Draft figure 01 for Hans paper: observational time series only.
+figure 02 for Hans paper: observational time series only.
 
 3-panel plot:
   (1) Snow depth
