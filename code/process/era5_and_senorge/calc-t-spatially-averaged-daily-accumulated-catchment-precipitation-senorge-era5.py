@@ -24,7 +24,7 @@ from Dunnsigouin_etal_2026 import config, misc
 dataset    = "era5"          # "senorge" or "era5"
 years      = np.arange(1957, 2024)
 x_days     = 2
-catchment  = "regine_drammen"
+catchment  = "regine_glomma"
 write2file = True
 
 # ERA5-only settings
@@ -42,7 +42,7 @@ DATASETS = {
         "path_in": config.dirs["senorge_continuous_daily"] + "rr/",
         "file_pattern": "rr_{year}.nc",
         "path_weights": lambda catchment: (
-            config.dirs["nve_catchment"]
+            config.dirs["nve"]
             + f"weights_catchment_{catchment}_senorge.nc"
         ),
         "path_out": config.dirs["senorge_processed"],
@@ -55,7 +55,7 @@ DATASETS = {
         "path_in": config.dirs["era5_continuous_daily"] + "tp24/",
         "file_pattern": "tp24_{grid}_{year}.nc",
         "path_weights": lambda catchment: (
-            config.dirs["nve_catchment"]
+            config.dirs["nve"]
             + f"weights_catchment_{catchment}_era5_{grid}.nc"
         ),
         "path_out": config.dirs["era5_processed"],
