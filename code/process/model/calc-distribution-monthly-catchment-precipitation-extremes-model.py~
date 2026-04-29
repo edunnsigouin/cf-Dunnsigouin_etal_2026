@@ -1,0 +1,19 @@
+"""
+Calculates distribution of monthly extremes for catchment averaged and time accumulated
+total precipitation in model forecasts and hindcasts. 
+"""
+
+import numpy as np
+import xarray as xr
+from Dunnsigouin_etal_2026 import config
+
+# input ------------------------------------------------
+variable            = 'tp'
+x_days              = 2
+catchment           = "regine_drammen"
+forecast_date_range = ['2020-01-02','2023-06-26']
+path_in_forecast    = config.dirs['s2s_forecast_daily'] + variable + '/'
+path_in_hindcast    = config.dirs['s2s_hindcast_daily'] + variable + '/'
+path_out            = config.dirs['s2s_processed']
+write2file          = False
+# ------------------------------------------------------
