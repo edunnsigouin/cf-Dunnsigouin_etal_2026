@@ -12,7 +12,7 @@ processed             = cf_space + "processed/cf-Dunnsigouin_etal_2026/"
 
 s2s_forecast_daily    = raw + 's2s/mars/ecmwf/forecast/sfc/daily/europe/' 
 s2s_hindcast_daily    = raw + 's2s/mars/ecmwf/hindcast/sfc/daily/europe/'
-s2s_processed         = processed 
+s2s_processed         = processed  + 'model/'
 
 era5_continuous_daily = raw + 'era5/continuous-format/daily/europe/'
 era5_forecast_daily   = raw + 'era5/s2s-model-format/europe/forecast/daily/'

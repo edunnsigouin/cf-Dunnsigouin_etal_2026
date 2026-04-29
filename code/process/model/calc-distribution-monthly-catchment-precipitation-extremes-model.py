@@ -1,142 +1,515 @@
 """
-Calculates distribution of monthly extremes for catchment averaged and time accumulated
-total precipitation in model forecasts and hindcasts. 
+Build a monthly distribution of precipitation extremes from S2S forecasts and hindcasts.
+
+For each forecast initialization date, this script:
+1. Loads forecast and hindcast daily precipitation.
+2. Computes catchment-weighted spatial mean precipitation.
+3. Computes trailing X-day accumulated precipitation.
+4. Extracts the maximum value for each ensemble member.
+5. Stores each maximum in the month that contains most of the forecast lead dates.
+
+Output dataset:
+    Dimensions:
+        month_of_year : 1–12
+        index         : storage index for all forecast/hindcast maxima
+
+    Variables:
+        max_value       : maximum X-day accumulated precipitation
+        date_of_max     : date when max_value occurs
+        forecast_date   : forecast initialization date
+        hdate           : hindcast date; NaT for forecasts
+        ensemble_member : ensemble member number
+        model_type      : "forecast" or "hindcast"
+        source_file     : input file from which the value came
 """
 
 import numpy as np
-import xarray as xr
 import pandas as pd
+import xarray as xr
+
 from Dunnsigouin_etal_2026 import config
 
-# input ------------------------------------------------
-variable            = 'tp24'
-x_days              = 2
-catchment           = "regine_drammen"
-forecast_date_range = ['2020-01-02','2023-06-26']
-path_in_forecast    = config.dirs['s2s_forecast_daily'] + variable + '/'
-path_in_hindcast    = config.dirs['s2s_hindcast_daily'] + variable + '/'
-filename_weights    = config.dirs["nve"] + f'weights_catchment_{catchment}_era5_0.5x0.5.nc' # same weights as era5 since same grid
-path_out            = config.dirs['s2s_processed']
-write2file          = False
-# ------------------------------------------------------
 
+# =============================================================================
+# User settings
+# =============================================================================
+
+variable            = "tp24"
+x_days              = 2 # number of days to accumulate
+catchment           = "regine_drammen"
+forecast_date_range = ["2020-01-02", "2023-06-26"]
+path_in_forecast    = config.dirs["s2s_forecast_daily"] + variable + "/"
+path_in_hindcast    = config.dirs["s2s_hindcast_daily"] + variable + "/"
+filename_weights    = config.dirs["nve"] + f"weights_catchment_{catchment}_era5_0.5x0.5.nc"
+path_out            = config.dirs["s2s_processed"]
+write2file          = True
+
+
+# =============================================================================
+# Dates and filenames
+# =============================================================================
 
 def get_forecast_dates(forecast_date_range, option="mt"):
     """
-    Generate a list of forecast dates within a given date range.
+    Return forecast initialization dates.
 
-    Parameters
-    ----------
-    forecast_date_range : list-like
-        ['YYYY-MM-DD', 'YYYY-MM-DD']
-    option : str
-        'mt'  -> Mondays and Thursdays
-        'all' -> all calendar days
+    option:
+        "mt"  : Mondays and Thursdays
+        "all" : all calendar days
     """
 
     start_date = pd.to_datetime(forecast_date_range[0])
-    end_date   = pd.to_datetime(forecast_date_range[1])
+    end_date = pd.to_datetime(forecast_date_range[1])
 
     if option == "mt":
-        mondays        = pd.date_range(start_date, end_date, freq="W-MON")
-        thursdays      = pd.date_range(start_date, end_date, freq="W-THU")
-        forecast_dates = mondays.union(thursdays)
-
+        mondays = pd.date_range(start_date, end_date, freq="W-MON")
+        thursdays = pd.date_range(start_date, end_date, freq="W-THU")
+        dates = mondays.union(thursdays)
+    elif option == "all":
+        dates = pd.date_range(start_date, end_date, freq="D")
     else:
-        forecast_dates = pd.date_range(start_date, end_date, freq="D")
+        raise ValueError("option must be 'mt' or 'all'")
 
-    return forecast_dates.sort_values().strftime("%Y-%m-%d").tolist()
+    return dates.sort_values().strftime("%Y-%m-%d").tolist()
 
+
+def get_model_filenames(date):
+    """Return forecast and hindcast filenames for one initialization date."""
+
+    forecast_filename = path_in_forecast + f"{variable}_0.5x0.5_{date}.nc"
+    hindcast_filename = path_in_hindcast + f"{variable}_0.5x0.5_{date}.nc"
+
+    return forecast_filename, hindcast_filename
+
+
+def make_output_filename():
+    """Return output filename."""
+
+    return (
+        f"{path_out}"
+        f"distribution_monthly_extremes_{variable}_{x_days}dayacc_"
+        f"nve_catchment_{catchment}_forecast_hindcast_"
+        f"{forecast_date_range[0]}_{forecast_date_range[1]}.nc"
+    )
+
+
+# =============================================================================
+# Loading
+# =============================================================================
 
 def load_weights(filename_weights):
-    """Load catchment weights"""
-    
+    """Load catchment weights."""
+
     ds = xr.open_dataset(filename_weights)
 
     if "catchment_weight" not in ds:
         raise KeyError(
-            f"'catchment_weight' not found in {path_weights}. "
+            f"'catchment_weight' not found in {filename_weights}. "
             f"Available variables: {list(ds.data_vars)}"
         )
 
-    w = ds["catchment_weight"].astype("float32")
-    w.name = "catchment_weight"
+    weights = ds["catchment_weight"].astype("float32")
+    weights.name = "catchment_weight"
 
-    return w
-
-
-def load_model_data(path_in_forecast,path_in_hindcast,variable,date):
-
-    forecast_filename  = path_in_forecast + f'{variable}_0.5x0.5_{date}.nc'
-    hindcast_filename = path_in_hindcast + f'{variable}_0.5x0.5_{date}.nc'
-
-    forecast_da = xr.open_dataset(forecast_filename)[variable]
-    hindcast_da = xr.open_dataset(hindcast_filename)[variable]
-    
-    return forecast_da, hindcast_da
+    return weights
 
 
-def catchment_mean(da,w,spatial_dims):
+def load_model_data(date):
+    """Load forecast and hindcast precipitation and convert to mm."""
+
+    forecast_filename, hindcast_filename = get_model_filenames(date)
+
+    with xr.open_dataset(forecast_filename) as ds_f:
+        forecast = ds_f[variable].load()   # load into memory
+
+    with xr.open_dataset(hindcast_filename) as ds_h:
+        hindcast = ds_h[variable].load()   # load into memory
+
+    # --- Convert to mm ---
+    def convert_to_mm(da):
+        units = str(da.attrs.get("units", "")).lower()
+        if units in {"m", "meter", "metre"}:
+            da = da * 1000.0
+            da.attrs["units"] = "mm"
+        return da
+
+    forecast = convert_to_mm(forecast)
+    hindcast = convert_to_mm(hindcast)
+
+    # Fix hindcast member labels
+    if "number" in hindcast.dims:
+        hindcast = hindcast.assign_coords(number=np.arange(1, 12))
+
+    return forecast, hindcast
+
+
+# =============================================================================
+# Processing
+# =============================================================================
+
+def catchment_mean(da, weights, spatial_dims=("latitude", "longitude")):
     """
-    Compute catchment-weighted spatial mean precipitation.                        
-    Formula:                                                                                                                                                  
+    Compute catchment-weighted spatial mean precipitation.
+
+    Formula:
         sum(precip * weight) / sum(weight)
-    Only finite precipitation values and positive finite weights are used.
     """
 
-    valid = xr.ufuncs.isfinite(da) & xr.ufuncs.isfinite(w) & (w > 0)
+    valid = xr.ufuncs.isfinite(da) & xr.ufuncs.isfinite(weights) & (weights > 0)
 
-    weighted_sum = (da.where(valid) * w.where(valid)).sum(dim=spatial_dims,skipna=True)
-    weight_sum   = w.where(valid).sum(dim=spatial_dims,skipna=True)
-    ts           = weighted_sum / weight_sum
+    weighted_sum = (da.where(valid) * weights.where(valid)).sum(
+        dim=spatial_dims,
+        skipna=True,
+    )
 
-    ts.attrs["description"] = "Catchment-weighted daily mean precipitation"
-    ts.attrs["units"] = da.attrs.get("units", "")
+    weight_sum = weights.where(valid).sum(
+        dim=spatial_dims,
+        skipna=True,
+    )
 
-    return ts
+    out = weighted_sum / weight_sum
+
+    out.attrs["description"] = "Catchment-weighted daily mean precipitation"
+    out.attrs["units"] = da.attrs.get("units", "")
+
+    return out
 
 
-def xday_accumulation(da: xr.DataArray, x_days: int) -> xr.DataArray:
+def xday_accumulation(da, x_days):
     """Compute trailing X-day accumulated precipitation."""
 
-    out = (da.rolling(time=x_days, min_periods=x_days).sum().dropna("time", how="any"))
+    out = (
+        da
+        .rolling(time=x_days, min_periods=x_days)
+        .sum()
+        .dropna("time", how="any")
+    )
 
-    # Standardized output variable name.
     out.name = "tp"
-    out.attrs["description"] = (f"{x_days}-day accumulated catchment-weighted mean precipitation")
+    out.attrs["description"] = (
+        f"{x_days}-day accumulated catchment-weighted mean precipitation"
+    )
     out.attrs["units"] = "m"
 
     return out
 
 
-def sort_maximum_into_monthly_bin(da):
+def extract_max_info(da):
+    """
+    Extract maximum value and date of maximum.
 
-    months = da["time"].dt.month
-    counts = months.groupby(months).count()
-    month_with_most = counts.idxmax()
+    Forecast input:
+        time, number
 
-    da = da.max(dim='time')
+    Hindcast input:
+        time, hdate, number
 
-    print(da)
-    
-    return da #bin_counts
+    Output keeps all non-time dimensions.
+    """
+
+    max_value = da.max(dim="time")
+    max_value.name = "max_value"
+
+    idx_max = da.argmax(dim="time")
+
+    date_of_max = da.time.isel(time=idx_max)
+    date_of_max.name = "date_of_max"
+
+    month_with_most_dates = get_month_with_most_forecast_dates(da)
+
+    return xr.Dataset(
+        {
+            "max_value": max_value,
+            "date_of_max": date_of_max,
+            "month_with_most_forecast_dates": month_with_most_dates,
+        }
+    )
 
 
+def get_month_with_most_forecast_dates(da):
+    """Return the month containing the largest number of forecast lead dates."""
+
+    months = da.time.dt.month
+
+    month_counts = xr.DataArray(
+        np.ones(len(months), dtype=int),
+        coords={
+            "time": da.time,
+            "month": ("time", months.data),
+        },
+        dims="time",
+    ).groupby("month").sum()
+
+    month_with_most = month_counts.idxmax(dim="month")
+    month_with_most.name = "month_with_most_forecast_dates"
+
+    return month_with_most
+
+
+# =============================================================================
+# Storage
+# =============================================================================
+
+def initialize_extreme_store(
+    n_forecasts,
+    n_forecast_members=51,
+    n_hindcast_members=11,
+    n_hdates=20,
+):
+    """
+    Create empty storage for forecast and hindcast maxima.
+
+    Forecast entries per initialization:
+        51
+
+    Hindcast entries per initialization:
+        n_hdates * 11
+    """
+
+    n_index = n_forecasts * (
+        n_forecast_members + n_hindcast_members * n_hdates
+    )
+
+    store = xr.Dataset(
+        data_vars={
+            "max_value": (
+                ("month_of_year", "index"),
+                np.full((12, n_index), np.nan, dtype="float32"),
+            ),
+            "date_of_max": (
+                ("month_of_year", "index"),
+                np.full((12, n_index), np.datetime64("NaT"), dtype="datetime64[ns]"),
+            ),
+            "forecast_date": (
+                ("month_of_year", "index"),
+                np.full((12, n_index), np.datetime64("NaT"), dtype="datetime64[ns]"),
+            ),
+            "hdate": (
+                ("month_of_year", "index"),
+                np.full((12, n_index), np.datetime64("NaT"), dtype="datetime64[ns]"),
+            ),
+            "ensemble_member": (
+                ("month_of_year", "index"),
+                np.full((12, n_index), -999, dtype=int),
+            ),
+            "model_type": (
+                ("month_of_year", "index"),
+                np.full((12, n_index), "", dtype=object),
+            ),
+            "source_file": (
+                ("month_of_year", "index"),
+                np.full((12, n_index), "", dtype=object),
+            ),
+        },
+        coords={
+            "month_of_year": np.arange(1, 13),
+            "index": np.arange(n_index),
+        },
+    )
+
+    add_store_metadata(store)
+
+    return store
+
+
+def add_store_metadata(store):
+    """Add variable descriptions to the storage dataset."""
+
+    store["max_value"].attrs["description"] = (
+        "Maximum X-day accumulated catchment-mean precipitation"
+    )
+    store["date_of_max"].attrs["description"] = (
+        "Date when max_value occurs"
+    )
+    store["forecast_date"].attrs["description"] = (
+        "Forecast initialization date"
+    )
+    store["hdate"].attrs["description"] = (
+        "Hindcast date associated with maximum; NaT for forecasts"
+    )
+    store["ensemble_member"].attrs["description"] = (
+        "Ensemble member number"
+    )
+    store["model_type"].attrs["description"] = (
+        "Either 'forecast' or 'hindcast'"
+    )
+    store["source_file"].attrs["description"] = (
+        "Source NetCDF file"
+    )
+
+
+def add_max_info_to_store(store, max_info, forecast_date, source_file, model_type):
+    """
+    Add forecast or hindcast maximum information to the monthly store.
+
+    Entries are stored in the row corresponding to the month that contains most
+    of the forecast lead dates.
+    """
+
+    month = int(max_info["month_with_most_forecast_dates"].values)
+
+    max_value = max_info["max_value"]
+    date_of_max = max_info["date_of_max"]
+
+    #max_values = max_value.values.ravel()
+    max_values = max_value.values.astype("float32").ravel()
+    dates = date_of_max.values.ravel()
+    n_values = max_values.size
+
+    members = get_member_labels(max_value)
+    hdates = get_hdate_labels(max_value)
+
+    index_values = get_free_indices(store, month, n_values)
+
+    store["max_value"].loc[
+        dict(month_of_year=month, index=index_values)
+    ] = max_values
+
+    store["date_of_max"].loc[
+        dict(month_of_year=month, index=index_values)
+    ] = dates
+
+    store["forecast_date"].loc[
+        dict(month_of_year=month, index=index_values)
+    ] = np.datetime64(forecast_date)
+
+    store["hdate"].loc[
+        dict(month_of_year=month, index=index_values)
+    ] = hdates
+
+    store["ensemble_member"].loc[
+        dict(month_of_year=month, index=index_values)
+    ] = members
+
+    store["model_type"].loc[
+        dict(month_of_year=month, index=index_values)
+    ] = model_type
+
+    store["source_file"].loc[
+        dict(month_of_year=month, index=index_values)
+    ] = source_file
+
+    return store
+
+
+def get_member_labels(max_value):
+    """
+    Return ensemble member labels matching flattened max_value order.
+
+    Forecast:
+        number
+
+    Hindcast:
+        hdate, number -> number is repeated for each hdate.
+    """
+
+    if "number" not in max_value.coords:
+        return np.arange(max_value.size)
+
+    members = max_value["number"].values
+
+    if "hdate" in max_value.dims:
+        members = np.tile(members, max_value.sizes["hdate"])
+
+    return members
+
+
+def get_hdate_labels(max_value):
+    """
+    Return hdate labels matching flattened max_value order.
+
+    Forecast:
+        NaT
+
+    Hindcast:
+        hdate is repeated for each ensemble member.
+    """
+
+    if "hdate" not in max_value.dims:
+        return np.full(max_value.size, np.datetime64("NaT"), dtype="datetime64[ns]")
+
+    hdates = max_value["hdate"].values
+    n_members = max_value.sizes["number"]
+
+    return np.repeat(hdates, n_members)
+
+
+def get_free_indices(store, month, n_values):
+    """Find the first available block of storage indices for a given month."""
+
+    used = np.isfinite(store["max_value"].sel(month_of_year=month).values)
+
+    if not np.any(~used):
+        raise ValueError(f"No free storage slots left for month {month}.")
+
+    first_free = np.where(~used)[0][0]
+    last_free = first_free + n_values
+
+    if last_free > store.sizes["index"]:
+        raise ValueError(
+            f"Not enough storage slots for month {month}. "
+            f"Need {n_values}, only {store.sizes['index'] - first_free} available."
+        )
+
+    return store["index"].values[first_free:last_free]
+
+
+# =============================================================================
+# Output
+# =============================================================================
+
+def write_output(store):
+    """Write monthly extreme store to NetCDF."""
+
+    filename_out = make_output_filename()
+    store.to_netcdf(filename_out)
+
+    print("Wrote:", filename_out)
+
+
+# =============================================================================
+# Main
+# =============================================================================
 
 if __name__ == "__main__":
 
     forecast_dates = get_forecast_dates(forecast_date_range, option="mt")
     weights        = load_weights(filename_weights)
 
-    for date in forecast_dates[0:1]:
+    extreme_store = initialize_extreme_store(n_forecasts=len(forecast_dates),n_forecast_members=51,n_hindcast_members=11,n_hdates=20)
 
-        forecast_da, hindcast_da = load_model_data(path_in_forecast,path_in_hindcast,variable,date)
-        forecast_da              = catchment_mean(forecast_da,weights,spatial_dims=("latitude", "longitude"))
-        hindcast_da              = catchment_mean(hindcast_da,weights,spatial_dims=("latitude", "longitude"))
-        forecast_da              = xday_accumulation(forecast_da,x_days)
-        hindcast_da              = xday_accumulation(hindcast_da,x_days)
+    for date in forecast_dates:
 
-        
-        bin_counts               = sort_maximum_into_monthly_bin(forecast_da)
+        print(date)
 
-        
+        forecast_filename, hindcast_filename = get_model_filenames(date)
+        forecast, hindcast                   = load_model_data(date)
+
+        forecast                             = catchment_mean(forecast, weights)
+        hindcast                             = catchment_mean(hindcast, weights)
+
+        forecast                             = xday_accumulation(forecast, x_days)
+        hindcast                             = xday_accumulation(hindcast, x_days)
+
+        forecast_max_info                    = extract_max_info(forecast)
+        hindcast_max_info                    = extract_max_info(hindcast)
+
+        extreme_store = add_max_info_to_store(
+            store=extreme_store,
+            max_info=forecast_max_info,
+            forecast_date=date,
+            source_file=forecast_filename,
+            model_type="forecast",
+        )
+
+        extreme_store = add_max_info_to_store(
+            store=extreme_store,
+            max_info=hindcast_max_info,
+            forecast_date=date,
+            source_file=hindcast_filename,
+            model_type="hindcast",
+        )
+
+    
+    if write2file:
+        write_output(extreme_store)
