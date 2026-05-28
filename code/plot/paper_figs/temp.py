@@ -45,7 +45,7 @@ write2file = True
 # --- Publication output settings
 # 180 mm x 90 mm is a typical two-column scientific figure size.
 MM_TO_INCH = 1 / 25.4
-FIG_WIDTH_MM = 160
+FIG_WIDTH_MM = 180
 FIG_HEIGHT_MM = 120
 FIGSIZE = (FIG_WIDTH_MM * MM_TO_INCH, FIG_HEIGHT_MM * MM_TO_INCH)
 FIG_DPI = 300
@@ -170,7 +170,9 @@ def make_two_map_axes(central_lon=10.0, central_lat=62.0, extent=None):
     )
 
     # Tight spacing between panels
-    #fig.subplots_adjust(wspace=-0.1)
+    fig.subplots_adjust(
+        wspace=-0.75,  # << very small horizontal spacing
+    )
     
     for ax in axes:
         ax.coastlines(resolution="10m", linewidth=0.5)
