@@ -166,7 +166,6 @@ def make_two_map_axes(central_lon=10.0, central_lat=62.0, extent=None):
         figsize=FIGSIZE,
         dpi=FIG_DPI,
         subplot_kw={"projection": proj_map},
-        constrained_layout=True,
     )
 
     for ax in axes:
