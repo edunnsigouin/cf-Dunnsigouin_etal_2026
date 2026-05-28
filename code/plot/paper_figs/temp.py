@@ -170,6 +170,15 @@ def make_two_map_axes(central_lon=10.0, central_lat=62.0, extent=None):
         subplot_kw={"projection": proj_map},
     )
 
+    # Tight spacing between panels
+    fig.subplots_adjust(
+        left=0.03,
+        right=0.997,
+        bottom=0.12,
+        top=0.93,
+        wspace=0.005,  
+    )
+    
     for ax in axes:
         ax.coastlines(resolution="10m", linewidth=0.5)
         ax.add_feature(cfeature.BORDERS.with_scale("10m"), linewidth=0.35)
