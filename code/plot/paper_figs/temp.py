@@ -204,14 +204,14 @@ def plot_precipitation(ax, da, lon, lat, proj_data):
         cf,
         ax=ax,
         orientation="horizontal",
-        shrink=0.88,
+        shrink=0.7,
         pad=0.035,
         aspect=30,
     )
 
     format_colorbar(
         cbar,
-        label="2-day accumulated precipitation (mm)",
+        label="mm",
         tick_labels=np.arange(0, 160, 20),
     )
 
@@ -256,7 +256,7 @@ def plot_return_period(ax, da, lon, lat, proj_data):
         mesh,
         ax=ax,
         orientation="horizontal",
-        shrink=0.88,
+        shrink=0.7,
         pad=0.035,
         aspect=30,
         ticks=np.arange(len(CATEGORY_LABELS)),
@@ -264,7 +264,7 @@ def plot_return_period(ax, da, lon, lat, proj_data):
 
     format_colorbar(
         cbar,
-        label="Return period (years)",
+        label="years",
         tick_labels=CATEGORY_LABELS,
     )
 
@@ -317,11 +317,11 @@ def plot_station_markers(ax, stations, proj_data, fontsize=8):
 
 def finalize_figure(fig, axes, savepath=None, write2file=False):
     axes[0].set_title(
-        "(a) Storm Hans precipitation 2023-08-07 to 2023-08-09",
+        "(a) 2-day accumulated precipitation",
         fontsize=title_fontsize,
     )
     axes[1].set_title(
-        "(b) Storm Hans return period",
+        "(b) 2-day accumulated precipitation return period",
         fontsize=title_fontsize,
     )
 
