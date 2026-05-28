@@ -170,9 +170,9 @@ def make_two_map_axes(central_lon=10.0, central_lat=62.0, extent=None):
     )
 
     # Tight spacing between panels
-    fig.subplots_adjust(
-        wspace=-0.0,  # << very small horizontal spacing
-    )
+    #fig.subplots_adjust(
+    #    wspace=-0.0,  # << very small horizontal spacing
+    #)
     
     for ax in axes:
         ax.coastlines(resolution="10m", linewidth=0.5)
