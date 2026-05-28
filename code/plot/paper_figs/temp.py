@@ -46,9 +46,11 @@ write2file = True
 # 180 mm x 90 mm is a typical two-column scientific figure size.
 MM_TO_INCH = 1 / 25.4
 FIG_WIDTH_MM = 180
-FIG_HEIGHT_MM = 90
+FIG_HEIGHT_MM = 120
 FIGSIZE = (FIG_WIDTH_MM * MM_TO_INCH, FIG_HEIGHT_MM * MM_TO_INCH)
 FIG_DPI = 300
+
+print(FIGSIZE)
 
 # --- Font sizes
 tick_labelsize = 8
