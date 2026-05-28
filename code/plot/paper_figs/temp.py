@@ -171,7 +171,7 @@ def make_two_map_axes(central_lon=10.0, central_lat=62.0, extent=None):
 
     # Tight spacing between panels
     fig.subplots_adjust(
-        wspace=-1.5,  # << very small horizontal spacing
+        wspace=-0.5,  # << very small horizontal spacing
     )
     
     for ax in axes:
