@@ -36,7 +36,7 @@ from Dunnsigouin_etal_2026 import config
 
 variable            = "tp24"
 x_days              = 2 # number of days to accumulate
-catchment           = "regine_drammen"
+catchment           = "regine_glomma"
 forecast_date_range = ["2020-01-02", "2023-06-26"]
 path_in_forecast    = config.dirs["s2s_forecast_daily"] + variable + "/"
 path_in_hindcast    = config.dirs["s2s_hindcast_daily"] + variable + "/"
@@ -114,33 +114,55 @@ def load_weights(filename_weights):
     return weights
 
 
+
 def load_model_data(date):
-    """Load forecast and hindcast precipitation and convert to mm."""
+    """
+    Load forecast and hindcast precipitation for one initialization date.
+
+    - Keeps `time` as datetime.
+    - Converts precipitation from m to mm.
+    - Forces hindcast `number` labels to 1–11.
+    - Forces hindcast `hdate` to integer YYYYMMDD.
+    """
 
     forecast_filename, hindcast_filename = get_model_filenames(date)
 
     with xr.open_dataset(forecast_filename) as ds_f:
-        forecast = ds_f[variable].load()   # load into memory
+        forecast = ds_f[variable].load()
 
     with xr.open_dataset(hindcast_filename) as ds_h:
-        hindcast = ds_h[variable].load()   # load into memory
+        hindcast = ds_h[variable].load()
 
-    # --- Convert to mm ---
     def convert_to_mm(da):
         units = str(da.attrs.get("units", "")).lower()
+
         if units in {"m", "meter", "metre"}:
             da = da * 1000.0
             da.attrs["units"] = "mm"
+
         return da
 
     forecast = convert_to_mm(forecast)
     hindcast = convert_to_mm(hindcast)
 
-    # Fix hindcast member labels
+    # Hindcast files should have ensemble member labels 1–11.
     if "number" in hindcast.dims:
         hindcast = hindcast.assign_coords(number=np.arange(1, 12))
 
+    # hdate should be an integer identifier YYYYMMDD, not datetime.
+    # This does not affect the normal `time` coordinate.
+    if "hdate" in hindcast.coords:
+        hdate_vals = hindcast["hdate"].values
+
+        if np.issubdtype(hdate_vals.dtype, np.datetime64):
+            hdate_int = pd.to_datetime(hdate_vals).strftime("%Y%m%d").astype(int)
+        else:
+            hdate_int = hdate_vals.astype(int)
+
+        hindcast = hindcast.assign_coords(hdate=hdate_int)
+
     return forecast, hindcast
+
 
 
 # =============================================================================
@@ -286,7 +308,7 @@ def initialize_extreme_store(
             ),
             "hdate": (
                 ("month_of_year", "index"),
-                np.full((12, n_index), np.datetime64("NaT"), dtype="datetime64[ns]"),
+                np.full((12, n_index), -99999999, dtype="int32"),
             ),
             "ensemble_member": (
                 ("month_of_year", "index"),
@@ -325,8 +347,9 @@ def add_store_metadata(store):
         "Forecast initialization date"
     )
     store["hdate"].attrs["description"] = (
-        "Hindcast date associated with maximum; NaT for forecasts"
+        "Hindcast date as integer YYYYMMDD; -99999999 for forecasts"
     )
+    store["hdate"].attrs["_FillValue"] = np.int32(-99999999)
     store["ensemble_member"].attrs["description"] = (
         "Ensemble member number"
     )
@@ -419,19 +442,21 @@ def get_hdate_labels(max_value):
     Return hdate labels matching flattened max_value order.
 
     Forecast:
-        NaT
+        -99999999
 
     Hindcast:
-        hdate is repeated for each ensemble member.
+        integer YYYYMMDD repeated for each ensemble member.
     """
 
-    if "hdate" not in max_value.dims:
-        return np.full(max_value.size, np.datetime64("NaT"), dtype="datetime64[ns]")
+    fill_value = np.int32(-99999999)
 
-    hdates = max_value["hdate"].values
+    if "hdate" not in max_value.dims:
+        return np.full(max_value.size, fill_value, dtype="int32")
+
+    hdates = max_value["hdate"].values.astype("int32")
     n_members = max_value.sizes["number"]
 
-    return np.repeat(hdates, n_members)
+    return np.repeat(hdates, n_members).astype("int32")
 
 
 def get_free_indices(store, month, n_values):

@@ -15,12 +15,12 @@ from Dunnsigouin_etal_2026 import config
 
 
 # input -----------------------------------------------------------------
-dataset    = "era5"          # "senorge" or "era5"
+dataset    = "senorge"          # "senorge" or "era5"
 variable   = "tp"
 years      = np.arange(1957, 2024)
 grid       = "0.5x0.5"       # ERA5 only
 x_days     = 2
-catchment  = "regine_drammen"
+catchment  = "regine_glomma"
 write2file = True
 
 path_in  = config.dirs[f"{dataset}_processed"]

@@ -21,10 +21,10 @@ from Dunnsigouin_etal_2026 import config, misc
 # User settings
 # =============================================================================
 
-dataset    = "era5"          # "senorge" or "era5"
+dataset    = "senorge"          # "senorge" or "era5"
 years      = np.arange(1957, 2024)
 x_days     = 2
-catchment  = "regine_glomma"
+catchment  = "nevina_bergheim"
 write2file = True
 
 # ERA5-only settings
