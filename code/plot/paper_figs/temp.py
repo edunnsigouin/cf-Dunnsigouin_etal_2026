@@ -333,9 +333,7 @@ def finalize_figure(fig, axes, savepath=None, write2file=False):
     if write2file:
         fig.savefig(
             savepath,
-            dpi=FIG_DPI,
-            bbox_inches="tight",
-            pad_inches=0.02,
+            dpi=FIG_DPI
         )
 
     plt.show()
