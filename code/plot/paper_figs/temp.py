@@ -174,7 +174,7 @@ def make_two_map_axes(central_lon=10.0, central_lat=62.0, extent=None):
         right=0.95,
         bottom=0.05,
         top=0.95,
-        wspace=0.9, 
+        wspace=-0.2, 
     )
     
     for ax in axes:
