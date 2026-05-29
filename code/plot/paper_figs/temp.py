@@ -54,7 +54,7 @@ FIG_DPI = 300
 # --- Font sizes
 tick_labelsize = 8
 axis_labelsize = 8
-title_fontsize = 5
+title_fontsize = 8
 station_labelsize = 8
 
 # --- Map projection and extent
@@ -174,7 +174,7 @@ def make_two_map_axes(central_lon=10.0, central_lat=62.0, extent=None):
         right=0.95,
         bottom=0.05,
         top=0.95,
-        wspace=-0.2, 
+        wspace=-0.1, 
     )
     
     for ax in axes:
