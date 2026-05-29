@@ -1,14 +1,15 @@
 """
 Fig 1 for Hans paper.
 
-Plot Storm Hans precipitation and return period side by side.
+Plot Storm Hans precipitation, return period, and catchment weights side by side.
 
 The script:
 1. Reads precipitation and return period from seNorge NetCDF
-2. Loads catchment geometry
-3. Creates two map panels
-4. Plots precipitation and return period
-5. Overlays catchment borders and station markers on both panels
+2. Reads catchment weights from an ERA5-grid NetCDF
+3. Loads catchment geometry
+4. Creates three map panels
+5. Plots precipitation, return period, and catchment weights
+6. Overlays catchment borders and station markers on all panels
 """
 
 # =============================================================================
@@ -39,36 +40,36 @@ path_out = config.dirs["fig"]
 filename_in_senorge = (
     f"{path_in_senorge}returnperiod_rr_2dayacc_senorge_1957-2023_20230809.nc"
 )
+filename_in_weights = (
+    f"{path_in_catchment}weights_catchment_regine_drammen_era5_0.5x0.5.nc"
+)
 filename_out = f"{path_out}fig-01.png"
 write2file = False
 
-# --- Publication output settings
-# 180 mm x 90 mm is a typical two-column scientific figure size.
-MM_TO_INCH = 1 / 25.4
-FIG_WIDTH_MM = 180
-FIG_HEIGHT_MM = 90
-FIGSIZE = (FIG_WIDTH_MM * MM_TO_INCH, FIG_HEIGHT_MM * MM_TO_INCH)
-FIG_DPI = 600
-
 # --- Font sizes
-tick_labelsize = 8
-axis_labelsize = 8
-title_fontsize = 9
-station_labelsize = 8
+tick_labelsize = 12
+axis_labelsize = 12
+title_fontsize = 12
+station_labelsize = 11
 
 # --- Map projection and extent
 CENTRAL_LON = 10.0
 CENTRAL_LAT = 62.0
 MAP_EXTENT = [4.75, 12.75, 58.0, 63.0]
 
-# --- Panel a: precipitation
+# --- Left panel: precipitation
 PRECIP_LEVELS = np.arange(0, 160, 20)
 PRECIP_CMAP = "GnBu"
 
-# --- Panel b: return period
+# --- Middle panel: return period
 CATEGORY_EDGES = np.array([1.0, 5.0, 10.0, 50.0, 100.0, np.inf], dtype=float)
 CATEGORY_LABELS = ["1–5", "5–10", "10–50", "50–100", "> 100"]
 RETURN_CMAP = "PuBuGn"
+
+# --- Right panel: catchment weights
+WEIGHT_CMAP = "BuGn"
+WEIGHT_VMIN = 0.0
+WEIGHT_VMAX = 1.0
 
 # --- Catchment CRS if not present in source file
 CATCHMENT_CRS_IF_MISSING = "EPSG:4326"
@@ -94,6 +95,22 @@ STATIONS = [
 # Data loading
 # =============================================================================
 def load_event_and_return_period_data(filename):
+    """
+    Load precipitation event accumulation and return period from NetCDF.
+
+    Returns
+    -------
+    ds : xr.Dataset
+        Open dataset.
+    precip : xr.DataArray
+        Event precipitation accumulation.
+    return_period : xr.DataArray
+        Return period in years.
+    lon : xr.DataArray
+        Longitude grid.
+    lat : xr.DataArray
+        Latitude grid.
+    """
     ds = xr.open_dataset(filename)
     precip = ds["event_accum"]
     return_period = ds["return_period_years"]
@@ -102,10 +119,44 @@ def load_event_and_return_period_data(filename):
     return ds, precip, return_period, lon, lat
 
 
+def load_weights_data(filename):
+    """
+    Load catchment weights from NetCDF.
+
+    Returns
+    -------
+    ds : xr.Dataset
+        Open dataset.
+    da_weights : xr.DataArray
+        Catchment weights.
+    """
+    ds = xr.open_dataset(filename)
+    da_weights = ds["catchment_weight"]
+    return ds, da_weights
+
+
 # =============================================================================
 # Catchment geometry helpers
 # =============================================================================
 def load_catchment_outer_boundaries(catchments, base_dir, crs_if_missing="EPSG:4326"):
+    """
+    Load catchment polygons, dissolve each catchment to one geometry,
+    optionally apply an inset, and keep only the outer boundary.
+
+    Parameters
+    ----------
+    catchments : list of dict
+        Catchment metadata.
+    base_dir : str
+        Directory containing catchment files.
+    crs_if_missing : str
+        CRS to assign if missing in the input file.
+
+    Returns
+    -------
+    boundaries : list of dict
+        List containing label, color, and dissolved boundary geometry.
+    """
     boundaries = []
 
     plot_crs = "EPSG:4326"
@@ -118,6 +169,7 @@ def load_catchment_outer_boundaries(catchments, base_dir, crs_if_missing="EPSG:4
         if gdf.crs is None:
             gdf = gdf.set_crs(crs_if_missing)
 
+        # Work in projected coordinates for optional buffering/insetting
         gdf_metric = gdf.to_crs(metric_crs)
         union_geom = gdf_metric.geometry.union_all()
 
@@ -125,6 +177,7 @@ def load_catchment_outer_boundaries(catchments, base_dir, crs_if_missing="EPSG:4
         if inset_m > 0:
             union_geom = union_geom.buffer(-inset_m)
 
+        # Keep only the outer boundaries
         if isinstance(union_geom, Polygon):
             outer_geom = Polygon(union_geom.exterior)
         elif isinstance(union_geom, MultiPolygon):
@@ -153,7 +206,17 @@ def load_catchment_outer_boundaries(catchments, base_dir, crs_if_missing="EPSG:4
 # =============================================================================
 # Plot setup helpers
 # =============================================================================
-def make_two_map_axes(central_lon=10.0, central_lat=62.0, extent=None):
+def make_three_map_axes(central_lon=10.0, central_lat=62.0, extent=None):
+    """
+    Create a figure with three Lambert Conformal map panels.
+
+    Returns
+    -------
+    fig : matplotlib.figure.Figure
+    axes : ndarray of matplotlib axes
+    proj_data : cartopy CRS
+        CRS of the input longitude/latitude data.
+    """
     proj_map = ccrs.LambertConformal(
         central_longitude=central_lon,
         central_latitude=central_lat,
@@ -162,25 +225,26 @@ def make_two_map_axes(central_lon=10.0, central_lat=62.0, extent=None):
 
     fig, axes = plt.subplots(
         1,
-        2,
-        figsize=FIGSIZE,
-        dpi=FIG_DPI,
+        3,
+        figsize=(15, 7.5),
         subplot_kw={"projection": proj_map},
-        constrained_layout=True,
     )
 
     for ax in axes:
-        ax.coastlines(resolution="10m", linewidth=0.5)
-        ax.add_feature(cfeature.BORDERS.with_scale("10m"), linewidth=0.35)
+        ax.coastlines(resolution="10m", linewidth=0.6)
+        ax.add_feature(cfeature.BORDERS.with_scale("10m"), linewidth=0.4)
         if extent is not None:
             ax.set_extent(extent, crs=proj_data)
 
     return fig, axes, proj_data
 
 
-def format_colorbar(cbar, label, tick_labels=None):
+def format_colorbar(cbar, label, tick_labels=None, tick_labelsize=12, axis_labelsize=12):
+    """
+    Apply consistent formatting to a horizontal colorbar.
+    """
     cbar.set_label(label, fontsize=axis_labelsize)
-    cbar.ax.tick_params(labelsize=tick_labelsize, length=2)
+    cbar.ax.tick_params(labelsize=tick_labelsize)
 
     if tick_labels is not None:
         cbar.ax.set_xticklabels(tick_labels, fontsize=tick_labelsize)
@@ -189,7 +253,18 @@ def format_colorbar(cbar, label, tick_labels=None):
 # =============================================================================
 # Plotting helpers
 # =============================================================================
-def plot_precipitation(ax, da, lon, lat, proj_data):
+def plot_precipitation(
+    ax,
+    da,
+    lon,
+    lat,
+    proj_data,
+    tick_labelsize=12,
+    axis_labelsize=12,
+):
+    """
+    Plot precipitation with contourf.
+    """
     cf = ax.contourf(
         lon.values,
         lat.values,
@@ -204,21 +279,26 @@ def plot_precipitation(ax, da, lon, lat, proj_data):
         cf,
         ax=ax,
         orientation="horizontal",
-        shrink=0.88,
-        pad=0.035,
-        aspect=30,
+        shrink=0.9,
+        pad=0.02,
     )
-
     format_colorbar(
         cbar,
         label="2-day accumulated precipitation (mm)",
         tick_labels=np.arange(0, 160, 20),
+        tick_labelsize=tick_labelsize,
+        axis_labelsize=axis_labelsize,
     )
 
     return cf
 
 
 def categorize_return_period(T, edges):
+    """
+    Convert return period values to category indices.
+
+    Values < 1 year and non-finite values are set to NaN.
+    """
     values = T.values
     categories = np.digitize(values, edges, right=False) - 1
     categories = categories.astype(float)
@@ -230,16 +310,31 @@ def categorize_return_period(T, edges):
 
 
 def build_return_period_cmap(n_labels):
+    """
+    Build a discrete colormap for return period categories.
+
+    The first category (1-5 years) is set to white to match the intended styling.
+    """
     base_cmap = plt.get_cmap(RETURN_CMAP)
     colors = base_cmap(np.linspace(0.3, 0.95, n_labels))
     colors[0] = np.array([1.0, 1.0, 1.0, 1.0])
     return mcolors.ListedColormap(colors)
 
 
-def plot_return_period(ax, da, lon, lat, proj_data):
+def plot_return_period(
+    ax,
+    da,
+    lon,
+    lat,
+    proj_data,
+    tick_labelsize=12,
+    axis_labelsize=12,
+):
+    """
+    Plot categorized return period map.
+    """
     cat = categorize_return_period(da, CATEGORY_EDGES)
     cmap = build_return_period_cmap(len(CATEGORY_LABELS))
-    cmap.set_bad("white")
 
     mesh = ax.pcolormesh(
         lon.values,
@@ -249,49 +344,142 @@ def plot_return_period(ax, da, lon, lat, proj_data):
         cmap=cmap,
         vmin=-0.5,
         vmax=len(CATEGORY_LABELS) - 0.5,
+    )
+
+    mesh.cmap.set_bad("white")
+
+    cbar = plt.colorbar(
+        mesh,
+        ax=ax,
+        orientation="horizontal",
+        shrink=0.9,
+        pad=0.02,
+        ticks=np.arange(len(CATEGORY_LABELS)),
+    )
+    format_colorbar(
+        cbar,
+        label="Return period (years)",
+        tick_labels=CATEGORY_LABELS,
+        tick_labelsize=tick_labelsize,
+        axis_labelsize=axis_labelsize,
+    )
+
+    return mesh
+
+
+def centers_to_edges(centers):
+    """
+    Convert 1D grid-cell centers to edges.
+    """
+    centers = np.asarray(centers)
+
+    if centers.ndim != 1:
+        raise ValueError("centers must be 1D")
+    if centers.size < 2:
+        raise ValueError("Need at least two centers to infer edges")
+
+    edges = np.empty(centers.size + 1, dtype=float)
+    edges[1:-1] = 0.5 * (centers[:-1] + centers[1:])
+    edges[0] = centers[0] - 0.5 * (centers[1] - centers[0])
+    edges[-1] = centers[-1] + 0.5 * (centers[-1] - centers[-2])
+
+    return edges
+
+
+def plot_weights(
+    ax,
+    da_weights,
+    proj_data,
+    tick_labelsize=12,
+    axis_labelsize=12,
+):
+    """
+    Plot catchment weights as a pcolormesh.
+
+    Important styling choice:
+    Zero-valued weights are masked so that they are shown in white,
+    matching the white low-end category used in the other two panels.
+    """
+    lats = da_weights.latitude.values
+    lons = da_weights.longitude.values
+    weights = da_weights.values
+
+    lat_edges = centers_to_edges(lats)
+    lon_edges = centers_to_edges(lons)
+
+    weights_plot = weights.copy()
+
+    # Make zero weights white by masking them
+    weights_plot = np.where(weights_plot == 0, np.nan, weights_plot)
+
+    # Ensure ascending edge order for plotting
+    if lat_edges[0] > lat_edges[-1]:
+        lat_edges = lat_edges[::-1]
+        weights_plot = weights_plot[::-1, :]
+
+    if lon_edges[0] > lon_edges[-1]:
+        lon_edges = lon_edges[::-1]
+        weights_plot = weights_plot[:, ::-1]
+
+    lon_e, lat_e = np.meshgrid(lon_edges, lat_edges)
+
+    cmap = plt.get_cmap(WEIGHT_CMAP).copy()
+    cmap.set_bad("white")
+
+    mesh = ax.pcolormesh(
+        lon_e,
+        lat_e,
+        weights_plot,
+        cmap=cmap,
+        vmin=WEIGHT_VMIN,
+        vmax=WEIGHT_VMAX,
         shading="auto",
+        transform=proj_data,
     )
 
     cbar = plt.colorbar(
         mesh,
         ax=ax,
         orientation="horizontal",
-        shrink=0.88,
-        pad=0.035,
-        aspect=30,
-        ticks=np.arange(len(CATEGORY_LABELS)),
+        shrink=0.9,
+        pad=0.02,
     )
-
     format_colorbar(
         cbar,
-        label="Return period (years)",
-        tick_labels=CATEGORY_LABELS,
+        label="Catchment weight (fraction)",
+        tick_labelsize=tick_labelsize,
+        axis_labelsize=axis_labelsize,
     )
 
     return mesh
 
 
 def plot_catchment_boundaries(ax, catchment_boundaries, proj_data):
+    """
+    Plot outer borders of the catchments.
+    """
     for item in catchment_boundaries:
         ax.add_geometries(
             [item["geometry"]],
             crs=proj_data,
             facecolor="none",
             edgecolor=item["color"],
-            linewidth=1.4,
+            linewidth=2.0,
             zorder=5,
         )
 
 
-def plot_station_markers(ax, stations, proj_data, fontsize=8):
+def plot_station_markers(ax, stations, proj_data, fontsize=11):
+    """
+    Plot station markers as yellow dots with labels.
+    """
     for station in stations:
         ax.plot(
             station["lon"],
             station["lat"],
             marker="o",
-            markersize=5,
+            markersize=8,
             markeredgecolor="black",
-            markeredgewidth=0.6,
             markerfacecolor="yellow",
             transform=proj_data,
             zorder=6,
@@ -315,7 +503,10 @@ def plot_station_markers(ax, stations, proj_data, fontsize=8):
         )
 
 
-def finalize_figure(fig, axes, savepath=None, write2file=False):
+def finalize_figure(fig, axes, savepath=None, write2file=False, title_fontsize=12):
+    """
+    Add panel titles, finalize layout, optionally save, and show figure.
+    """
     axes[0].set_title(
         "(a) Storm Hans precipitation 2023-08-07 to 2023-08-09",
         fontsize=title_fontsize,
@@ -324,14 +515,16 @@ def finalize_figure(fig, axes, savepath=None, write2file=False):
         "(b) Storm Hans return period",
         fontsize=title_fontsize,
     )
+    axes[2].set_title(
+        "(c) Catchment weights",
+        fontsize=title_fontsize,
+    )
+
+    fig.subplots_adjust(wspace=0.01, bottom=0.0, top=1.0)
+    plt.tight_layout()
 
     if write2file:
-        fig.savefig(
-            savepath,
-            dpi=FIG_DPI,
-            bbox_inches="tight",
-            pad_inches=0.02,
-        )
+        fig.savefig(savepath, bbox_inches="tight")
 
     plt.show()
 
@@ -341,23 +534,38 @@ def finalize_figure(fig, axes, savepath=None, write2file=False):
 # =============================================================================
 if __name__ == "__main__":
 
+    # 1) Load precipitation and return period data
     ds_senorge, precip, return_period, lon, lat = load_event_and_return_period_data(
         filename_in_senorge
     )
 
+    # 2) Load weights
+    ds_weights, da_weights = load_weights_data(filename_in_weights)
+
+    # 3) Load catchment borders
     catchment_boundaries = load_catchment_outer_boundaries(
         CATCHMENTS,
         base_dir=path_in_catchment,
         crs_if_missing=CATCHMENT_CRS_IF_MISSING,
     )
 
-    fig, axes, proj_data = make_two_map_axes(
+    # 4) Create figure and map axes
+    fig, axes, proj_data = make_three_map_axes(
         central_lon=CENTRAL_LON,
         central_lat=CENTRAL_LAT,
         extent=MAP_EXTENT,
     )
 
-    plot_precipitation(axes[0], precip, lon, lat, proj_data)
+    # 5) Left panel: precipitation
+    plot_precipitation(
+        axes[0],
+        precip,
+        lon,
+        lat,
+        proj_data,
+        tick_labelsize=tick_labelsize,
+        axis_labelsize=axis_labelsize,
+    )
     plot_catchment_boundaries(axes[0], catchment_boundaries, proj_data)
     plot_station_markers(
         axes[0],
@@ -366,7 +574,16 @@ if __name__ == "__main__":
         fontsize=station_labelsize,
     )
 
-    plot_return_period(axes[1], return_period, lon, lat, proj_data)
+    # 6) Middle panel: return period
+    plot_return_period(
+        axes[1],
+        return_period,
+        lon,
+        lat,
+        proj_data,
+        tick_labelsize=tick_labelsize,
+        axis_labelsize=axis_labelsize,
+    )
     plot_catchment_boundaries(axes[1], catchment_boundaries, proj_data)
     plot_station_markers(
         axes[1],
@@ -375,11 +592,31 @@ if __name__ == "__main__":
         fontsize=station_labelsize,
     )
 
+    # 7) Right panel: catchment weights
+    plot_weights(
+        axes[2],
+        da_weights,
+        proj_data,
+        tick_labelsize=tick_labelsize,
+        axis_labelsize=axis_labelsize,
+    )
+    plot_catchment_boundaries(axes[2], catchment_boundaries, proj_data)
+    plot_station_markers(
+        axes[2],
+        STATIONS,
+        proj_data,
+        fontsize=station_labelsize,
+    )
+
+    # 8) Finalize and optionally save figure
     finalize_figure(
         fig,
         axes,
         savepath=filename_out,
         write2file=write2file,
+        title_fontsize=title_fontsize,
     )
 
+    # 9) Close datasets
     ds_senorge.close()
+    ds_weights.close()
