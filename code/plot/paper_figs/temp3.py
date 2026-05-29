@@ -7,13 +7,15 @@ The script:
 3. Plots event-relative days -2, -1, 0, +1, +2
 4. Can plot either 1-day or 2-day accumulated precipitation
 5. Converts raw precipitation from meters to mm when reading
-6. Uses the 0.5x0.5 file first, then falls back to the matching 0.25x0.25 file
-7. Overlays the selected catchment boundary in red
+6. Converts raw mean sea level pressure from Pa to hPa when reading
+7. Overlays labelled grey MSLP contours without temporal accumulation
+8. Uses the 0.5x0.5 file first, then falls back to the matching 0.25x0.25 file
+9. Overlays the selected catchment boundary in red
 
 Definition:
 - ACCUMULATION_DAYS = 1 plots precipitation on the target day.
 - ACCUMULATION_DAYS = 2 plots target day - 1 plus target day.
-  Thus, day 0 is day -1 + day 0.
+- MSLP contours are always plotted for the target day only.
 """
 
 # =============================================================================
@@ -38,27 +40,21 @@ from Dunnsigouin_etal_2026 import config
 path_in_catchment = config.dirs["nve"]
 path_out = config.dirs["fig"]
 
-# --- Choose catchment and event
 CATCHMENT_NAME = "drammen"   # "drammen" or "glomma"
 EVENT_RANK = 1               # choose 1-5
-
-# --- Choose accumulation window
 ACCUMULATION_DAYS = 1        # choose 1 or 2
 
 filename_out = (
-    f"{path_out}fig-event-evolution-"
-    f"{CATCHMENT_NAME}-rank{EVENT_RANK}-{ACCUMULATION_DAYS}day.png"
+    f"{path_out}xy-tp-event-evolution-"
+    f"{CATCHMENT_NAME}-rank{EVENT_RANK}-{ACCUMULATION_DAYS}day-msl.png"
 )
-write2file = False
+write2file = True
 
-# --- Variable names
 PRECIP_VAR = "tp24"
-MSL_VAR = "msl"  # for later use
+MSL_VAR = "msl"
 
-# --- Event-relative days to plot
 EVENT_LAGS = [-2, -1, 0, 1, 2]
 
-# --- Figure settings
 FIG_WIDTH_IN = 16
 FIG_HEIGHT_IN = 12
 
@@ -68,15 +64,14 @@ MAP_HSPACE = 0.08
 tick_labelsize = 12
 axis_labelsize = 13
 title_fontsize = 14
+contour_labelsize = 9
 
-# --- Map projection and extent
 CENTRAL_LON = 10.0
 CENTRAL_LAT = 62.0
-MAP_EXTENT = [4.75, 12.75, 58.0, 63.0]
+#MAP_EXTENT = [4.75, 12.75, 58.0, 63.0]
 
-#MAP_EXTENT = [-20, 30, 50, 70]
+MAP_EXTENT = [-10, 25, 50, 70]
 
-# --- Precipitation plotting
 if ACCUMULATION_DAYS == 1:
     PRECIP_LEVELS = np.arange(0, 61, 5)
 elif ACCUMULATION_DAYS == 2:
@@ -86,7 +81,11 @@ else:
 
 PRECIP_CMAP = "GnBu"
 
-# --- Catchment CRS if missing
+# Mean sea level pressure contours in hPa
+MSL_CONTOUR_LEVELS = np.arange(960, 1045, 5)
+MSL_CONTOUR_COLOR = "0.5"
+MSL_CONTOUR_LINEWIDTH = 1.4
+
 CATCHMENT_CRS_IF_MISSING = "EPSG:4326"
 
 
@@ -94,9 +93,6 @@ CATCHMENT_CRS_IF_MISSING = "EPSG:4326"
 # Catchment metadata and event metadata
 # =============================================================================
 def get_catchment_metadata(catchment_name):
-    """
-    Return catchment-specific metadata.
-    """
     catchments = {
         "drammen": {
             "label": "Drammen",
@@ -118,9 +114,6 @@ def get_catchment_metadata(catchment_name):
 
 
 def get_top_events(catchment_name):
-    """
-    Return top-5 event metadata for selected catchment.
-    """
     events = {
         "drammen": [
             {
@@ -189,7 +182,6 @@ def get_top_events(catchment_name):
                     "tp24_0.5x0.5_2021-04-26.nc",
             },
         ],
-
         "glomma": [
             {
                 "rank": 1,
@@ -268,12 +260,7 @@ def get_top_events(catchment_name):
 
 
 def get_selected_event(catchment_name, event_rank):
-    """
-    Return one selected event by catchment and rank.
-    """
-    events = get_top_events(catchment_name)
-
-    for event in events:
+    for event in get_top_events(catchment_name):
         if event["rank"] == event_rank:
             return event
 
@@ -286,20 +273,21 @@ def get_selected_event(catchment_name, event_rank):
 # File helpers
 # =============================================================================
 def get_early_lead_file(source_file):
-    """
-    Convert the 0.5x0.5 lead-day 16-46 file path to the matching
-    0.25x0.25 lead-day 1-15 file path.
-    """
     return source_file.replace("0.5x0.5", "0.25x0.25")
 
 
-def get_time_coord_name(da):
+def get_msl_file(precip_file):
     """
-    Identify time coordinate name.
-    """
-    time_candidates = ["time", "valid_time"]
+    Infer matching MSL file from precipitation file.
 
-    for name in time_candidates:
+    This assumes the same directory structure and filename convention,
+    replacing tp24 with msl.
+    """
+    return precip_file.replace("/tp24/", "/msl/").replace("tp24_", "msl_")
+
+
+def get_time_coord_name(da):
+    for name in ["time", "valid_time"]:
         if name in da.dims or name in da.coords:
             return name
 
@@ -307,36 +295,39 @@ def get_time_coord_name(da):
 
 
 def get_lon_lat(da):
-    """
-    Return longitude and latitude coordinates.
-    """
     lon = da["longitude"] if "longitude" in da.coords else da["lon"]
     lat = da["latitude"] if "latitude" in da.coords else da["lat"]
-
     return lon, lat
 
 
 # =============================================================================
 # Data loading and selection
 # =============================================================================
-def load_dataset(filename):
+def load_dataset(filename, variable):
     """
-    Open dataset and convert precipitation from meters to millimeters.
+    Open dataset and convert units.
+
+    tp24:
+        meters to mm
+
+    msl:
+        Pa to hPa
     """
     ds = xr.open_dataset(filename)
 
-    if PRECIP_VAR in ds:
-        ds[PRECIP_VAR] = ds[PRECIP_VAR] * 1000.0
-        ds[PRECIP_VAR].attrs["units"] = "mm"
+    if variable == PRECIP_VAR and variable in ds:
+        ds[variable] = ds[variable] * 1000.0
+        ds[variable].attrs["units"] = "mm"
+
+    if variable == MSL_VAR and variable in ds:
+        ds[variable] = ds[variable] / 100.0
+        ds[variable].attrs["units"] = "hPa"
 
     return ds
 
 
-def select_event_member(ds, event):
-    """
-    Select hdate and ensemble member for one event.
-    """
-    da = ds[PRECIP_VAR]
+def select_event_member(ds, event, variable):
+    da = ds[variable]
 
     hdate_dim_candidates = ["hdate", "hindcast_date"]
     member_dim_candidates = ["number", "member", "ensemble_member", "realization"]
@@ -356,37 +347,40 @@ def select_event_member(ds, event):
 
 
 def has_date(da, target_date):
-    """
-    Check whether target_date exists in the DataArray time coordinate.
-    """
     time_name = get_time_coord_name(da)
     target_date = np.datetime64(target_date, "ns")
-
     times = da[time_name].values.astype("datetime64[ns]")
-
     return target_date in times
 
 
 def select_date(da, target_date):
-    """
-    Select one valid date from DataArray.
-    """
     time_name = get_time_coord_name(da)
     target_date = np.datetime64(target_date, "ns")
-
     return da.sel({time_name: target_date})
 
 
-def load_single_day_precip(event, target_date):
+def load_single_day_variable(event, target_date, variable):
     """
-    Load one daily precipitation field.
+    Load one daily field for either precipitation or MSLP.
 
-    Try the original 0.5x0.5 file first.
-    If target_date is missing, try the matching 0.25x0.25 file.
+    For precipitation:
+        uses event source file.
+
+    For MSLP:
+        infers matching msl file from the precipitation source file.
+
+    Tries 0.5x0.5 first, then matching 0.25x0.25 file.
     """
+    if variable == PRECIP_VAR:
+        base_file = event["source_file"]
+    elif variable == MSL_VAR:
+        base_file = get_msl_file(event["source_file"])
+    else:
+        raise ValueError(f"Unknown variable: {variable}")
+
     files_to_try = [
-        event["source_file"],
-        get_early_lead_file(event["source_file"]),
+        base_file,
+        get_early_lead_file(base_file),
     ]
 
     for filename in files_to_try:
@@ -394,10 +388,10 @@ def load_single_day_precip(event, target_date):
         if not os.path.exists(filename):
             continue
 
-        ds = load_dataset(filename)
+        ds = load_dataset(filename, variable=variable)
 
         try:
-            da = select_event_member(ds, event)
+            da = select_event_member(ds, event, variable=variable)
 
             if has_date(da, target_date):
                 da_day = select_date(da, target_date).load()
@@ -407,7 +401,7 @@ def load_single_day_precip(event, target_date):
             ds.close()
 
     raise ValueError(
-        f"Could not find date {target_date} in either "
+        f"Could not find date {target_date} for {variable} in either "
         f"0.5x0.5 or 0.25x0.25 file."
     )
 
@@ -441,9 +435,10 @@ def load_event_precip(event, target_date, accumulation_days=1):
     source_files_used = []
 
     for date_needed in dates_needed:
-        da_day, source_used = load_single_day_precip(
+        da_day, source_used = load_single_day_variable(
             event,
             target_date=date_needed,
+            variable=PRECIP_VAR,
         )
         daily_fields.append(da_day)
         source_files_used.append(source_used)
@@ -457,6 +452,21 @@ def load_event_precip(event, target_date, accumulation_days=1):
     return da_out, source_files_used
 
 
+def load_event_msl(event, target_date):
+    """
+    Load MSLP for target_date only.
+
+    MSLP is not accumulated over multiple days.
+    """
+    da_msl, source_used = load_single_day_variable(
+        event,
+        target_date=target_date,
+        variable=MSL_VAR,
+    )
+
+    return da_msl, source_used
+
+
 # =============================================================================
 # Catchment geometry helper
 # =============================================================================
@@ -465,9 +475,6 @@ def load_catchment_outer_boundary(
     base_dir,
     crs_if_missing="EPSG:4326",
 ):
-    """
-    Load catchment polygon, dissolve it, and keep only the outer boundary.
-    """
     plot_crs = "EPSG:4326"
     metric_crs = "EPSG:32633"
 
@@ -500,9 +507,6 @@ def load_catchment_outer_boundary(
 # Plot setup helpers
 # =============================================================================
 def make_map_axes(central_lon=10.0, central_lat=62.0, extent=None):
-    """
-    Create 2 x 3 Lambert Conformal map layout.
-    """
     proj_map = ccrs.LambertConformal(
         central_longitude=central_lon,
         central_latitude=central_lat,
@@ -524,7 +528,7 @@ def make_map_axes(central_lon=10.0, central_lat=62.0, extent=None):
             continue
 
         ax.coastlines(resolution="10m", linewidth=0.5)
-        ax.add_feature(cfeature.BORDERS.with_scale("10m"), linewidth=0.4)
+        #ax.add_feature(cfeature.BORDERS.with_scale("10m"), linewidth=0.4)
 
         if extent is not None:
             ax.set_extent(extent, crs=proj_data)
@@ -533,9 +537,6 @@ def make_map_axes(central_lon=10.0, central_lat=62.0, extent=None):
 
 
 def centers_to_edges(centers):
-    """
-    Convert 1D grid-cell centers to edges.
-    """
     centers = np.asarray(centers)
 
     if centers.ndim != 1:
@@ -555,11 +556,7 @@ def centers_to_edges(centers):
 # Plotting helpers
 # =============================================================================
 def plot_precipitation(ax, da_precip, proj_data):
-    """
-    Plot precipitation.
-    """
     lon, lat = get_lon_lat(da_precip)
-
     precip = da_precip.values
 
     lon_edges = centers_to_edges(lon.values)
@@ -589,26 +586,45 @@ def plot_precipitation(ax, da_precip, proj_data):
     return mesh
 
 
+def plot_msl_contours(ax, da_msl, proj_data):
+    """
+    Plot labelled mean sea level pressure contours in hPa.
+    """
+    lon, lat = get_lon_lat(da_msl)
+    msl = da_msl.values
+
+    contour = ax.contour(
+        lon.values,
+        lat.values,
+        msl,
+        levels=MSL_CONTOUR_LEVELS,
+        colors=MSL_CONTOUR_COLOR,
+        linewidths=MSL_CONTOUR_LINEWIDTH,
+        transform=proj_data,
+        zorder=6,
+    )
+
+    ax.clabel(
+        contour,
+        inline=True,
+        inline_spacing=4,
+        fontsize=contour_labelsize,
+        fmt="%d",
+        colors=MSL_CONTOUR_COLOR,
+    )
+
+    return contour
+
+
 def plot_catchment_boundary(ax, geometry, proj_data):
-    """
-    Overlay selected catchment boundary.
-    """
     ax.add_geometries(
         [geometry],
         crs=proj_data,
         facecolor="none",
         edgecolor="red",
-        linewidth=1.8,
-        zorder=5,
+        linewidth=1.0,
+        zorder=7,
     )
-
-
-# Placeholder for later
-def plot_msl_contours(ax, da_msl, proj_data):
-    """
-    Placeholder for later mean-sea-level pressure contours.
-    """
-    pass
 
 
 def finalize_figure(
@@ -622,9 +638,6 @@ def finalize_figure(
     savepath=None,
     write2file=False,
 ):
-    """
-    Add titles, shared colorbar, layout, save, and show.
-    """
     plot_axes = [axes[0, 0], axes[0, 1], axes[0, 2], axes[1, 0], axes[1, 1]]
 
     for ax, lag, date, files_used in zip(
@@ -729,17 +742,28 @@ if __name__ == "__main__":
 
     for ax, lag, target_date in zip(plot_axes, EVENT_LAGS, event_days):
 
-        da_precip, files_used = load_event_precip(
+        da_precip, precip_files_used = load_event_precip(
             event,
             target_date=target_date,
             accumulation_days=ACCUMULATION_DAYS,
         )
 
-        source_files_used.append(files_used)
+        da_msl, msl_file_used = load_event_msl(
+            event,
+            target_date=target_date,
+        )
+
+        source_files_used.append(precip_files_used)
 
         mesh = plot_precipitation(
             ax,
             da_precip,
+            proj_data,
+        )
+
+        plot_msl_contours(
+            ax,
+            da_msl,
             proj_data,
         )
 

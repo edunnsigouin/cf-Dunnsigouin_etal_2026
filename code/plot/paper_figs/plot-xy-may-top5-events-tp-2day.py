@@ -1,25 +1,18 @@
 """
-Plot time evolution of one top S2S precipitation event.
+Plot top-5 month of May S2S 2-day accumulated precipitation events for one catchment.
 
-The script:
-1. Selects one catchment and one ranked event
-2. Uses date_of_max as event day 0
-3. Plots event-relative days -2, -1, 0, +1, +2
-4. Can plot either 1-day or 2-day accumulated precipitation
-5. Converts raw precipitation from meters to mm when reading
-6. Uses the 0.5x0.5 file first, then falls back to the matching 0.25x0.25 file
-7. Overlays the selected catchment boundary in red
+Raw data are 1-day accumulated precipitation in meters.
+The script converts to mm when reading, then computes 2-day accumulations.
 
-Definition:
-- ACCUMULATION_DAYS = 1 plots precipitation on the target day.
-- ACCUMULATION_DAYS = 2 plots target day - 1 plus target day.
-  Thus, day 0 is day -1 + day 0.
+Layout:
+- 5 event panels
+- shared colorbar in empty 6th panel
+- 16 x 12 inch publication-style figure
 """
 
 # =============================================================================
 # Imports
 # =============================================================================
-import os
 import numpy as np
 import xarray as xr
 import matplotlib.pyplot as plt
@@ -38,31 +31,20 @@ from Dunnsigouin_etal_2026 import config
 path_in_catchment = config.dirs["nve"]
 path_out = config.dirs["fig"]
 
-# --- Choose catchment and event
-CATCHMENT_NAME = "drammen"   # "drammen" or "glomma"
-EVENT_RANK = 1               # choose 1-5
+# --- Choose catchment
+CATCHMENT_NAME = "drammen"
 
-# --- Choose accumulation window
-ACCUMULATION_DAYS = 1        # choose 1 or 2
-
-filename_out = (
-    f"{path_out}fig-event-evolution-"
-    f"{CATCHMENT_NAME}-rank{EVENT_RANK}-{ACCUMULATION_DAYS}day.png"
-)
-write2file = False
+filename_out = f"{path_out}xy-tp-2day-top5-events-{CATCHMENT_NAME}.png"
+write2file = True
 
 # --- Variable names
 PRECIP_VAR = "tp24"
-MSL_VAR = "msl"  # for later use
-
-# --- Event-relative days to plot
-EVENT_LAGS = [-2, -1, 0, 1, 2]
 
 # --- Figure settings
-FIG_WIDTH_IN = 16
-FIG_HEIGHT_IN = 12
+FIG_WIDTH_IN = 12
+FIG_HEIGHT_IN = 8
 
-MAP_WSPACE = 0.02
+MAP_WSPACE = 0.0
 MAP_HSPACE = 0.08
 
 tick_labelsize = 12
@@ -74,16 +56,8 @@ CENTRAL_LON = 10.0
 CENTRAL_LAT = 62.0
 MAP_EXTENT = [4.75, 12.75, 58.0, 63.0]
 
-#MAP_EXTENT = [-20, 30, 50, 70]
-
 # --- Precipitation plotting
-if ACCUMULATION_DAYS == 1:
-    PRECIP_LEVELS = np.arange(0, 61, 5)
-elif ACCUMULATION_DAYS == 2:
-    PRECIP_LEVELS = np.arange(0, 121, 10)
-else:
-    raise ValueError("ACCUMULATION_DAYS must be either 1 or 2.")
-
+PRECIP_LEVELS = np.arange(0, 121, 10)
 PRECIP_CMAP = "GnBu"
 
 # --- Catchment CRS if missing
@@ -267,57 +241,8 @@ def get_top_events(catchment_name):
     return events[catchment_name]
 
 
-def get_selected_event(catchment_name, event_rank):
-    """
-    Return one selected event by catchment and rank.
-    """
-    events = get_top_events(catchment_name)
-
-    for event in events:
-        if event["rank"] == event_rank:
-            return event
-
-    raise ValueError(
-        f"Rank {event_rank} not found for catchment {catchment_name}."
-    )
-
-
 # =============================================================================
-# File helpers
-# =============================================================================
-def get_early_lead_file(source_file):
-    """
-    Convert the 0.5x0.5 lead-day 16-46 file path to the matching
-    0.25x0.25 lead-day 1-15 file path.
-    """
-    return source_file.replace("0.5x0.5", "0.25x0.25")
-
-
-def get_time_coord_name(da):
-    """
-    Identify time coordinate name.
-    """
-    time_candidates = ["time", "valid_time"]
-
-    for name in time_candidates:
-        if name in da.dims or name in da.coords:
-            return name
-
-    raise ValueError("Could not identify time coordinate.")
-
-
-def get_lon_lat(da):
-    """
-    Return longitude and latitude coordinates.
-    """
-    lon = da["longitude"] if "longitude" in da.coords else da["lon"]
-    lat = da["latitude"] if "latitude" in da.coords else da["lat"]
-
-    return lon, lat
-
-
-# =============================================================================
-# Data loading and selection
+# Data loading and processing
 # =============================================================================
 def load_dataset(filename):
     """
@@ -325,9 +250,8 @@ def load_dataset(filename):
     """
     ds = xr.open_dataset(filename)
 
-    if PRECIP_VAR in ds:
-        ds[PRECIP_VAR] = ds[PRECIP_VAR] * 1000.0
-        ds[PRECIP_VAR].attrs["units"] = "mm"
+    ds[PRECIP_VAR] = ds[PRECIP_VAR] * 1000.0
+    ds[PRECIP_VAR].attrs["units"] = "mm"
 
     return ds
 
@@ -344,117 +268,47 @@ def select_event_member(ds, event):
     if event["model_type"] == "hindcast":
         for dim in hdate_dim_candidates:
             if dim in da.dims or dim in da.coords:
-                da = da.sel({dim: event["hdate"]})
+                da = da.sel({dim: event["hdate"]},method='nearest')
                 break
 
     for dim in member_dim_candidates:
         if dim in da.dims or dim in da.coords:
-            da = da.sel({dim: event["ensemble_member"]})
+            da = da.sel({dim: event["ensemble_member"]},method='nearest')
             break
 
     return da
 
 
-def has_date(da, target_date):
+def compute_2day_accumulation(da, date_of_max):
     """
-    Check whether target_date exists in the DataArray time coordinate.
+    Sum 1-day precipitation over date_of_max - 1 day and date_of_max.
     """
-    time_name = get_time_coord_name(da)
-    target_date = np.datetime64(target_date, "ns")
+    date_of_max = np.datetime64(date_of_max)
+    date_start = date_of_max - np.timedelta64(1, "D")
 
-    times = da[time_name].values.astype("datetime64[ns]")
+    time_dim_candidates = ["time", "valid_time"]
 
-    return target_date in times
-
-
-def select_date(da, target_date):
-    """
-    Select one valid date from DataArray.
-    """
-    time_name = get_time_coord_name(da)
-    target_date = np.datetime64(target_date, "ns")
-
-    return da.sel({time_name: target_date})
-
-
-def load_single_day_precip(event, target_date):
-    """
-    Load one daily precipitation field.
-
-    Try the original 0.5x0.5 file first.
-    If target_date is missing, try the matching 0.25x0.25 file.
-    """
-    files_to_try = [
-        event["source_file"],
-        get_early_lead_file(event["source_file"]),
-    ]
-
-    for filename in files_to_try:
-
-        if not os.path.exists(filename):
-            continue
-
-        ds = load_dataset(filename)
-
-        try:
-            da = select_event_member(ds, event)
-
-            if has_date(da, target_date):
-                da_day = select_date(da, target_date).load()
-                return da_day, filename
-
-        finally:
-            ds.close()
-
-    raise ValueError(
-        f"Could not find date {target_date} in either "
-        f"0.5x0.5 or 0.25x0.25 file."
-    )
-
-
-def load_event_precip(event, target_date, accumulation_days=1):
-    """
-    Load precipitation for one event-relative target date.
-
-    If accumulation_days = 1:
-        returns precipitation on target_date.
-
-    If accumulation_days = 2:
-        returns precipitation from target_date - 1 day + target_date.
-
-    The target_date is always the ending date of the accumulation window.
-    """
-    if accumulation_days not in [1, 2]:
-        raise ValueError("accumulation_days must be either 1 or 2.")
-
-    target_date = np.datetime64(target_date, "D")
-
-    if accumulation_days == 1:
-        dates_needed = [target_date]
+    for dim in time_dim_candidates:
+        if dim in da.dims or dim in da.coords:
+            time_dim = dim
+            break
     else:
-        dates_needed = [
-            target_date - np.timedelta64(1, "D"),
-            target_date,
-        ]
+        raise ValueError("Could not identify time dimension.")
 
-    daily_fields = []
-    source_files_used = []
+    da_2day = da.sel({time_dim: slice(date_start, date_of_max)}).sum(time_dim)
+    da_2day.attrs["units"] = "mm"
 
-    for date_needed in dates_needed:
-        da_day, source_used = load_single_day_precip(
-            event,
-            target_date=date_needed,
-        )
-        daily_fields.append(da_day)
-        source_files_used.append(source_used)
+    return da_2day
 
-    if accumulation_days == 1:
-        da_out = daily_fields[0]
-    else:
-        da_out = daily_fields[0] + daily_fields[1]
-        da_out.attrs["units"] = "mm"
 
-    return da_out, source_files_used
+def get_lon_lat(da):
+    """
+    Return longitude and latitude coordinates.
+    """
+    lon = da["longitude"] if "longitude" in da.coords else da["lon"]
+    lat = da["latitude"] if "latitude" in da.coords else da["lat"]
+
+    return lon, lat
 
 
 # =============================================================================
@@ -518,7 +372,6 @@ def make_map_axes(central_lon=10.0, central_lat=62.0, extent=None):
     )
 
     for i, ax in enumerate(axes.flat):
-
         if i == 5:
             ax.set_axis_off()
             continue
@@ -538,11 +391,6 @@ def centers_to_edges(centers):
     """
     centers = np.asarray(centers)
 
-    if centers.ndim != 1:
-        raise ValueError("centers must be 1D")
-    if centers.size < 2:
-        raise ValueError("Need at least two centers to infer edges")
-
     edges = np.empty(centers.size + 1, dtype=float)
     edges[1:-1] = 0.5 * (centers[:-1] + centers[1:])
     edges[0] = centers[0] - 0.5 * (centers[1] - centers[0])
@@ -554,12 +402,10 @@ def centers_to_edges(centers):
 # =============================================================================
 # Plotting helpers
 # =============================================================================
-def plot_precipitation(ax, da_precip, proj_data):
+def plot_precipitation(ax, da_precip, lon, lat, proj_data):
     """
-    Plot precipitation.
+    Plot 2-day accumulated precipitation.
     """
-    lon, lat = get_lon_lat(da_precip)
-
     precip = da_precip.values
 
     lon_edges = centers_to_edges(lon.values)
@@ -603,73 +449,29 @@ def plot_catchment_boundary(ax, geometry, proj_data):
     )
 
 
-# Placeholder for later
-def plot_msl_contours(ax, da_msl, proj_data):
-    """
-    Placeholder for later mean-sea-level pressure contours.
-    """
-    pass
-
-
-def finalize_figure(
-    fig,
-    axes,
-    mesh,
-    event,
-    catchment_metadata,
-    event_days,
-    source_files_used,
-    savepath=None,
-    write2file=False,
-):
+def finalize_figure(fig, axes, mesh, events, savepath=None, write2file=False):
     """
     Add titles, shared colorbar, layout, save, and show.
     """
     plot_axes = [axes[0, 0], axes[0, 1], axes[0, 2], axes[1, 0], axes[1, 1]]
 
-    for ax, lag, date, files_used in zip(
-        plot_axes,
-        EVENT_LAGS,
-        event_days,
-        source_files_used,
-    ):
-        resolutions = []
-        for filename in files_used:
-            basename = os.path.basename(filename)
-            if "0.25x0.25" in basename:
-                resolutions.append("0.25°")
-            elif "0.5x0.5" in basename:
-                resolutions.append("0.5°")
-            else:
-                resolutions.append("?")
-
-        resolution_text = "+".join(resolutions)
-
+    for ax, event in zip(plot_axes, events):
         ax.set_title(
-            f"Day {lag:+d}: {date} ({resolution_text})",
+            f"Rank {event['rank']}: {event['max_value']:.1f} mm",
             fontsize=title_fontsize,
             pad=3,
         )
-
-    fig.suptitle(
-        (
-            f"{catchment_metadata['label']} | "
-            f"Rank {event['rank']} event | "
-            f"max 2-day precipitation = {event['max_value']:.1f} mm"
-        ),
-        fontsize=title_fontsize + 2,
-        y=0.98,
-    )
 
     fig.subplots_adjust(
         left=0.03,
         right=0.98,
         bottom=0.06,
-        top=0.92,
+        top=0.94,
         wspace=MAP_WSPACE,
         hspace=MAP_HSPACE,
     )
 
+    # Colorbar in empty sixth panel
     cax = fig.add_axes([0.69, 0.27, 0.23, 0.025])
 
     cbar = fig.colorbar(
@@ -677,10 +479,7 @@ def finalize_figure(
         cax=cax,
         orientation="horizontal",
     )
-    cbar.set_label(
-        f"{ACCUMULATION_DAYS}-day accumulated precipitation (mm)",
-        fontsize=axis_labelsize,
-    )
+    cbar.set_label("2-day accumulated precipitation (mm)", fontsize=axis_labelsize)
     cbar.ax.tick_params(labelsize=tick_labelsize)
 
     if write2file:
@@ -695,14 +494,7 @@ def finalize_figure(
 if __name__ == "__main__":
 
     catchment_metadata = get_catchment_metadata(CATCHMENT_NAME)
-    event = get_selected_event(CATCHMENT_NAME, EVENT_RANK)
-
-    date_of_max = np.datetime64(event["date_of_max"], "D")
-
-    event_days = [
-        str(date_of_max + np.timedelta64(lag, "D"))
-        for lag in EVENT_LAGS
-    ]
+    events = get_top_events(CATCHMENT_NAME)
 
     catchment_boundary = load_catchment_outer_boundary(
         catchment_metadata["geojson"],
@@ -724,22 +516,28 @@ if __name__ == "__main__":
         axes[1, 1],
     ]
 
+    datasets = []
     mesh = None
-    source_files_used = []
 
-    for ax, lag, target_date in zip(plot_axes, EVENT_LAGS, event_days):
+    for ax, event in zip(plot_axes, events):
 
-        da_precip, files_used = load_event_precip(
-            event,
-            target_date=target_date,
-            accumulation_days=ACCUMULATION_DAYS,
+        ds = load_dataset(event["source_file"])
+        datasets.append(ds)
+
+        da_event = select_event_member(ds, event)
+
+        da_2day = compute_2day_accumulation(
+            da_event,
+            date_of_max=event["date_of_max"],
         )
 
-        source_files_used.append(files_used)
+        lon, lat = get_lon_lat(da_2day)
 
         mesh = plot_precipitation(
             ax,
-            da_precip,
+            da_2day,
+            lon,
+            lat,
             proj_data,
         )
 
@@ -753,10 +551,10 @@ if __name__ == "__main__":
         fig,
         axes,
         mesh,
-        event,
-        catchment_metadata,
-        event_days,
-        source_files_used,
+        events,
         savepath=filename_out,
         write2file=write2file,
     )
+
+    for ds in datasets:
+        ds.close()

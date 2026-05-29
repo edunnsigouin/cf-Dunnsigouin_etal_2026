@@ -1,17 +1,24 @@
 """
-Plot one top-5 S2S 2-day accumulated precipitation event.
+Plot time evolution of one top S2S precipitation event.
 
-The raw files contain 1-day accumulated precipitation. This script:
-1. Opens one forecast or hindcast NetCDF file
-2. Selects one ensemble member and, for hindcasts, one hdate
-3. Computes the 2-day precipitation accumulation ending on DATE_OF_MAX
-4. Plots the event on a Lambert Conformal Cartopy map
-5. Overlays the Drammen catchment boundary in red
+The script:
+1. Selects one catchment and one ranked event
+2. Uses date_of_max as event day 0
+3. Plots daily precipitation for event-relative days -2, -1, 0, +1, +2
+4. Converts raw precipitation from meters to mm when reading
+5. Uses the 0.5x0.5 file first, then falls back to the matching 0.25x0.25 file
+6. Overlays the selected catchment boundary in red
+
+Note:
+- The 0.5x0.5 files contain lead days 16-46.
+- The matching 0.25x0.25 files contain lead days 1-15.
+- msl contour plotting can be added later.
 """
 
 # =============================================================================
 # Imports
 # =============================================================================
+import os
 import numpy as np
 import xarray as xr
 import matplotlib.pyplot as plt
@@ -30,209 +37,369 @@ from Dunnsigouin_etal_2026 import config
 path_in_catchment = config.dirs["nve"]
 path_out = config.dirs["fig"]
 
-filename_out = f"{path_out}fig-top5-event-precip.png"
+# --- Choose catchment and event
+CATCHMENT_NAME = "drammen"   # "drammen" or "glomma"
+EVENT_RANK = 1               # choose 1-5
+
+filename_out = f"{path_out}fig-event-evolution-{CATCHMENT_NAME}-rank{EVENT_RANK}.png"
 write2file = False
 
-# Choose which event to plot (1-5)
-EVENT_NUMBER = 4
-
-TOP_EVENTS = {
-
-    1: {
-        "label": "Rank 1",
-        "max_value": 100.26,
-        "model_type": "hindcast",
-        "forecast_date": "2021-04-26",
-        "date_of_max": "2021-06-06",
-        "hdate": 20150426.0,
-        "ensemble_member": 7,
-        "source_file":
-            "/nird/datapeak/NS9873K/etdu/raw/s2s/mars/ecmwf/"
-            "hindcast/sfc/daily/europe/tp24/"
-            "tp24_0.5x0.5_2021-04-26.nc",
-    },
-
-    2: {
-        "label": "Rank 2",
-        "max_value": 85.55,
-        "model_type": "hindcast",
-        "forecast_date": "2022-04-28",
-        "date_of_max": "2022-06-02",
-        "hdate": 20140428.0,
-        "ensemble_member": 2,
-        "source_file":
-            "/nird/datapeak/NS9873K/etdu/raw/s2s/mars/ecmwf/"
-            "hindcast/sfc/daily/europe/tp24/"
-            "tp24_0.5x0.5_2022-04-28.nc",
-    },
-
-    3: {
-        "label": "Rank 3",
-        "max_value": 84.83,
-        "model_type": "hindcast",
-        "forecast_date": "2021-04-29",
-        "date_of_max": "2021-05-28",
-        "hdate": 20190429.0,
-        "ensemble_member": 4,
-        "source_file":
-            "/nird/datapeak/NS9873K/etdu/raw/s2s/mars/ecmwf/"
-            "hindcast/sfc/daily/europe/tp24/"
-            "tp24_0.5x0.5_2021-04-29.nc",
-    },
-
-    4: {
-        "label": "Rank 4",
-        "max_value": 81.35,
-        "model_type": "hindcast",
-        "forecast_date": "2020-04-23",
-        "date_of_max": "2020-06-03",
-        "hdate": 20150423.0,
-        "ensemble_member": 51, # member 11 is labelled wrong as 51!
-        "source_file":
-            "/nird/datapeak/NS9873K/etdu/raw/s2s/mars/ecmwf/"
-            "hindcast/sfc/daily/europe/tp24/"
-            "tp24_0.5x0.5_2020-04-23.nc",
-    },
-
-    5: {
-        "label": "Rank 5",
-        "max_value": 77.56,
-        "model_type": "forecast",
-        "forecast_date": "2021-04-26",
-        "date_of_max": "2021-06-07",
-        "hdate": None,
-        "ensemble_member": 17,
-        "source_file":
-            "/nird/datapeak/NS9873K/etdu/raw/s2s/mars/ecmwf/"
-            "forecast/sfc/daily/europe/tp24/"
-            "tp24_0.5x0.5_2021-04-26.nc",
-    },
-}
-
-EVENT = TOP_EVENTS[EVENT_NUMBER]
-
-EVENT_LABEL = EVENT["label"]
-MAX_VALUE = EVENT["max_value"]
-MODEL_TYPE = EVENT["model_type"]
-FORECAST_DATE = EVENT["forecast_date"]
-DATE_OF_MAX = EVENT["date_of_max"]
-HDATE = EVENT["hdate"]
-ENSEMBLE_MEMBER = EVENT["ensemble_member"]
-SOURCE_FILE = EVENT["source_file"]
-
-
+# --- Variable names
 PRECIP_VAR = "tp24"
+MSL_VAR = "msl"  # for later use
 
-FIG_WIDTH_IN = 7.2
-FIG_HEIGHT_IN = 5.5
+# --- Event-relative days to plot
+EVENT_LAGS = [-2, -1, 0, 1, 2]
 
+# --- Figure settings
+FIG_WIDTH_IN = 16
+FIG_HEIGHT_IN = 12
+
+MAP_WSPACE = 0.02
+MAP_HSPACE = 0.08
+
+tick_labelsize = 12
+axis_labelsize = 13
+title_fontsize = 14
+
+# --- Map projection and extent
 CENTRAL_LON = 10.0
 CENTRAL_LAT = 62.0
-
 MAP_EXTENT = [4.75, 12.75, 58.0, 63.0]
 
-PRECIP_LEVELS = np.arange(0, 121, 10)
+# --- Precipitation plotting
+PRECIP_LEVELS = np.arange(0, 61, 5)
 PRECIP_CMAP = "GnBu"
 
-tick_labelsize = 10
-axis_labelsize = 11
-title_fontsize = 12
-
-CATCHMENT_GEOJSON = "catchment_nve_regine_drammen.geojson"
+# --- Catchment CRS if missing
 CATCHMENT_CRS_IF_MISSING = "EPSG:4326"
 
 
+# =============================================================================
+# Catchment metadata and event metadata
+# =============================================================================
+def get_catchment_metadata(catchment_name):
+    """
+    Return catchment-specific metadata.
+    """
+    catchments = {
+        "drammen": {
+            "label": "Drammen",
+            "geojson": "catchment_nve_regine_drammen.geojson",
+        },
+        "glomma": {
+            "label": "Glomma",
+            "geojson": "catchment_nve_regine_glomma.geojson",
+        },
+    }
+
+    if catchment_name not in catchments:
+        raise ValueError(
+            f"Unknown catchment: {catchment_name}. "
+            f"Available catchments: {list(catchments.keys())}"
+        )
+
+    return catchments[catchment_name]
+
+
+def get_top_events(catchment_name):
+    """
+    Return top-5 event metadata for selected catchment.
+    """
+    events = {
+        "drammen": [
+            {
+                "rank": 1,
+                "max_value": 100.26,
+                "model_type": "hindcast",
+                "forecast_date": "2021-04-26",
+                "date_of_max": "2021-06-06",
+                "hdate": 20150426.0,
+                "ensemble_member": 7,
+                "source_file":
+                    "/nird/datapeak/NS9873K/etdu/raw/s2s/mars/ecmwf/"
+                    "hindcast/sfc/daily/europe/tp24/"
+                    "tp24_0.5x0.5_2021-04-26.nc",
+            },
+            {
+                "rank": 2,
+                "max_value": 85.55,
+                "model_type": "hindcast",
+                "forecast_date": "2022-04-28",
+                "date_of_max": "2022-06-02",
+                "hdate": 20140428.0,
+                "ensemble_member": 2,
+                "source_file":
+                    "/nird/datapeak/NS9873K/etdu/raw/s2s/mars/ecmwf/"
+                    "hindcast/sfc/daily/europe/tp24/"
+                    "tp24_0.5x0.5_2022-04-28.nc",
+            },
+            {
+                "rank": 3,
+                "max_value": 84.83,
+                "model_type": "hindcast",
+                "forecast_date": "2021-04-29",
+                "date_of_max": "2021-05-28",
+                "hdate": 20190429.0,
+                "ensemble_member": 4,
+                "source_file":
+                    "/nird/datapeak/NS9873K/etdu/raw/s2s/mars/ecmwf/"
+                    "hindcast/sfc/daily/europe/tp24/"
+                    "tp24_0.5x0.5_2021-04-29.nc",
+            },
+            {
+                "rank": 4,
+                "max_value": 81.35,
+                "model_type": "hindcast",
+                "forecast_date": "2020-04-23",
+                "date_of_max": "2020-06-03",
+                "hdate": 20150423.0,
+                "ensemble_member": 51,
+                "source_file":
+                    "/nird/datapeak/NS9873K/etdu/raw/s2s/mars/ecmwf/"
+                    "hindcast/sfc/daily/europe/tp24/"
+                    "tp24_0.5x0.5_2020-04-23.nc",
+            },
+            {
+                "rank": 5,
+                "max_value": 77.56,
+                "model_type": "forecast",
+                "forecast_date": "2021-04-26",
+                "date_of_max": "2021-06-07",
+                "hdate": None,
+                "ensemble_member": 17,
+                "source_file":
+                    "/nird/datapeak/NS9873K/etdu/raw/s2s/mars/ecmwf/"
+                    "forecast/sfc/daily/europe/tp24/"
+                    "tp24_0.5x0.5_2021-04-26.nc",
+            },
+        ],
+
+        "glomma": [
+            {
+                "rank": 1,
+                "max_value": 101.00,
+                "model_type": "hindcast",
+                "forecast_date": "2022-04-28",
+                "date_of_max": "2022-06-02",
+                "hdate": 20140428.0,
+                "ensemble_member": 2,
+                "source_file":
+                    "/nird/datapeak/NS9873K/etdu/raw/s2s/mars/ecmwf/"
+                    "hindcast/sfc/daily/europe/tp24/"
+                    "tp24_0.5x0.5_2022-04-28.nc",
+            },
+            {
+                "rank": 2,
+                "max_value": 73.97,
+                "model_type": "hindcast",
+                "forecast_date": "2022-04-21",
+                "date_of_max": "2022-05-31",
+                "hdate": 20160421.0,
+                "ensemble_member": 2,
+                "source_file":
+                    "/nird/datapeak/NS9873K/etdu/raw/s2s/mars/ecmwf/"
+                    "hindcast/sfc/daily/europe/tp24/"
+                    "tp24_0.5x0.5_2022-04-21.nc",
+            },
+            {
+                "rank": 3,
+                "max_value": 63.55,
+                "model_type": "hindcast",
+                "forecast_date": "2022-04-11",
+                "date_of_max": "2022-05-10",
+                "hdate": 20150411.0,
+                "ensemble_member": 3,
+                "source_file":
+                    "/nird/datapeak/NS9873K/etdu/raw/s2s/mars/ecmwf/"
+                    "hindcast/sfc/daily/europe/tp24/"
+                    "tp24_0.5x0.5_2022-04-11.nc",
+            },
+            {
+                "rank": 4,
+                "max_value": 61.12,
+                "model_type": "hindcast",
+                "forecast_date": "2021-04-15",
+                "date_of_max": "2021-05-29",
+                "hdate": 20150415.0,
+                "ensemble_member": 8,
+                "source_file":
+                    "/nird/datapeak/NS9873K/etdu/raw/s2s/mars/ecmwf/"
+                    "hindcast/sfc/daily/europe/tp24/"
+                    "tp24_0.5x0.5_2021-04-15.nc",
+            },
+            {
+                "rank": 5,
+                "max_value": 57.02,
+                "model_type": "forecast",
+                "forecast_date": "2023-04-03",
+                "date_of_max": "2023-04-29",
+                "hdate": None,
+                "ensemble_member": 43,
+                "source_file":
+                    "/nird/datapeak/NS9873K/etdu/raw/s2s/mars/ecmwf/"
+                    "forecast/sfc/daily/europe/tp24/"
+                    "tp24_0.5x0.5_2023-04-03.nc",
+            },
+        ],
+    }
+
+    if catchment_name not in events:
+        raise ValueError(
+            f"No event metadata available for catchment: {catchment_name}"
+        )
+
+    return events[catchment_name]
+
+
+def get_selected_event(catchment_name, event_rank):
+    """
+    Return one selected event by catchment and rank.
+    """
+    events = get_top_events(catchment_name)
+
+    for event in events:
+        if event["rank"] == event_rank:
+            return event
+
+    raise ValueError(
+        f"Rank {event_rank} not found for catchment {catchment_name}."
+    )
+
 
 # =============================================================================
-# Data loading and processing
+# File helpers
+# =============================================================================
+def get_early_lead_file(source_file):
+    """
+    Convert the 0.5x0.5 lead-day 16-46 file path to the matching
+    0.25x0.25 lead-day 1-15 file path.
+    """
+    return source_file.replace("0.5x0.5", "0.25x0.25")
+
+
+def get_time_coord_name(da):
+    """
+    Identify time coordinate name.
+    """
+    time_candidates = ["time", "valid_time"]
+
+    for name in time_candidates:
+        if name in da.dims or name in da.coords:
+            return name
+
+    raise ValueError("Could not identify time coordinate.")
+
+
+def get_lon_lat(da):
+    """
+    Return longitude and latitude coordinates.
+    """
+    lon = da["longitude"] if "longitude" in da.coords else da["lon"]
+    lat = da["latitude"] if "latitude" in da.coords else da["lat"]
+
+    return lon, lat
+
+
+# =============================================================================
+# Data loading and selection
 # =============================================================================
 def load_dataset(filename):
     """
-    Open the S2S precipitation dataset.
-
-    ECMWF precipitation is stored in meters and is converted
-    immediately to millimeters.
+    Open dataset and convert precipitation from meters to millimeters.
     """
     ds = xr.open_dataset(filename)
 
-    ds[PRECIP_VAR] = ds[PRECIP_VAR] * 1000.0
-    ds[PRECIP_VAR].attrs["units"] = "mm"
+    if PRECIP_VAR in ds:
+        ds[PRECIP_VAR] = ds[PRECIP_VAR] * 1000.0
+        ds[PRECIP_VAR].attrs["units"] = "mm"
 
     return ds
 
-def select_event_member(ds, model_type, hdate=None, ensemble_member=None):
-    """
-    Select the requested hindcast/forecast member.
 
-    This function is intentionally flexible about dimension names.
-    Adjust the candidate names if your files use different names.
+def select_event_member(ds, event):
+    """
+    Select hdate and ensemble member for one event.
     """
     da = ds[PRECIP_VAR]
 
     hdate_dim_candidates = ["hdate", "hindcast_date"]
     member_dim_candidates = ["number", "member", "ensemble_member", "realization"]
 
-    if model_type == "hindcast":
+    if event["model_type"] == "hindcast":
         for dim in hdate_dim_candidates:
             if dim in da.dims or dim in da.coords:
-                da = da.sel({dim: hdate},method='nearest')
+                da = da.sel({dim: event["hdate"]})
                 break
 
-    if ensemble_member is not None:
-        for dim in member_dim_candidates:
-            if dim in da.dims or dim in da.coords:
-                da = da.sel({dim: ensemble_member},method='nearest')
-                break
+    for dim in member_dim_candidates:
+        if dim in da.dims or dim in da.coords:
+            da = da.sel({dim: event["ensemble_member"]})
+            break
 
     return da
 
 
-def compute_2day_accumulation(da, date_of_max):
+def has_date(da, target_date):
     """
-    Compute 2-day accumulated precipitation ending on date_of_max.
-
-    The raw data are 1-day accumulated precipitation, so this sums:
-    date_of_max - 1 day and date_of_max.
+    Check whether target_date exists in the DataArray time coordinate.
     """
-    date_of_max = np.datetime64(date_of_max)
-    date_start = date_of_max - np.timedelta64(1, "D")
+    time_name = get_time_coord_name(da)
+    target_date = np.datetime64(target_date, "ns")
 
-    time_dim_candidates = ["time", "valid_time", "step"]
+    times = da[time_name].values.astype("datetime64[ns]")
 
-    for dim in time_dim_candidates:
-        if dim in da.dims or dim in da.coords:
-            time_dim = dim
-            break
-    else:
-        raise ValueError("Could not identify time dimension.")
-
-    da_2day = da.sel({time_dim: slice(date_start, date_of_max)}).sum(time_dim)
-
-    return da_2day
+    return target_date in times
 
 
-def get_lon_lat(da):
+def select_date(da, target_date):
     """
-    Identify longitude and latitude coordinates.
+    Select one valid date from DataArray.
     """
-    lon_candidates = ["longitude", "lon"]
-    lat_candidates = ["latitude", "lat"]
+    time_name = get_time_coord_name(da)
+    target_date = np.datetime64(target_date, "ns")
 
-    for name in lon_candidates:
-        if name in da.coords:
-            lon = da[name]
-            break
-    else:
-        raise ValueError("Could not identify longitude coordinate.")
+    return da.sel({time_name: target_date})
 
-    for name in lat_candidates:
-        if name in da.coords:
-            lat = da[name]
-            break
-    else:
-        raise ValueError("Could not identify latitude coordinate.")
 
-    return lon, lat
+def load_event_day_precip(event, target_date):
+    """
+    Load daily precipitation for one event-relative target date.
+
+    Try the original 0.5x0.5 file first. If the date is missing,
+    try the matching 0.25x0.25 early-lead file.
+    """
+    files_to_try = [
+        event["source_file"],
+        get_early_lead_file(event["source_file"]),
+    ]
+
+    opened_datasets = []
+
+    try:
+        for filename in files_to_try:
+
+            if not os.path.exists(filename):
+                continue
+
+            ds = load_dataset(filename)
+            opened_datasets.append(ds)
+
+            da = select_event_member(ds, event)
+
+            if has_date(da, target_date):
+                da_day = select_date(da, target_date).load()
+                source_used = filename
+                return da_day, source_used
+
+        raise ValueError(
+            f"Could not find target date {target_date} in either "
+            f"0.5x0.5 or 0.25x0.25 file."
+        )
+
+    finally:
+        for ds in opened_datasets:
+            ds.close()
 
 
 # =============================================================================
@@ -244,7 +411,7 @@ def load_catchment_outer_boundary(
     crs_if_missing="EPSG:4326",
 ):
     """
-    Load Drammen catchment polygon, dissolve it, and keep only the outer boundary.
+    Load catchment polygon, dissolve it, and keep only the outer boundary.
     """
     plot_crs = "EPSG:4326"
     metric_crs = "EPSG:32633"
@@ -275,11 +442,11 @@ def load_catchment_outer_boundary(
 
 
 # =============================================================================
-# Plot helpers
+# Plot setup helpers
 # =============================================================================
-def make_map_axis(central_lon=10.0, central_lat=62.0, extent=None):
+def make_map_axes(central_lon=10.0, central_lat=62.0, extent=None):
     """
-    Create one Lambert Conformal map panel.
+    Create 2 x 3 Lambert Conformal map layout.
     """
     proj_map = ccrs.LambertConformal(
         central_longitude=central_lon,
@@ -287,20 +454,27 @@ def make_map_axis(central_lon=10.0, central_lat=62.0, extent=None):
     )
     proj_data = ccrs.PlateCarree()
 
-    fig, ax = plt.subplots(
-        1,
-        1,
+    fig, axes = plt.subplots(
+        2,
+        3,
         figsize=(FIG_WIDTH_IN, FIG_HEIGHT_IN),
         subplot_kw={"projection": proj_map},
+        constrained_layout=False,
     )
 
-    ax.coastlines(resolution="10m", linewidth=0.5)
-    ax.add_feature(cfeature.BORDERS.with_scale("10m"), linewidth=0.4)
+    for i, ax in enumerate(axes.flat):
 
-    if extent is not None:
-        ax.set_extent(extent, crs=proj_data)
+        if i == 5:
+            ax.set_axis_off()
+            continue
 
-    return fig, ax, proj_data
+        ax.coastlines(resolution="10m", linewidth=0.5)
+        ax.add_feature(cfeature.BORDERS.with_scale("10m"), linewidth=0.4)
+
+        if extent is not None:
+            ax.set_extent(extent, crs=proj_data)
+
+    return fig, axes, proj_data
 
 
 def centers_to_edges(centers):
@@ -308,6 +482,11 @@ def centers_to_edges(centers):
     Convert 1D grid-cell centers to edges.
     """
     centers = np.asarray(centers)
+
+    if centers.ndim != 1:
+        raise ValueError("centers must be 1D")
+    if centers.size < 2:
+        raise ValueError("Need at least two centers to infer edges")
 
     edges = np.empty(centers.size + 1, dtype=float)
     edges[1:-1] = 0.5 * (centers[:-1] + centers[1:])
@@ -317,33 +496,33 @@ def centers_to_edges(centers):
     return edges
 
 
-def plot_precipitation(ax, da_precip, lon, lat, proj_data):
+# =============================================================================
+# Plotting helpers
+# =============================================================================
+def plot_precipitation(ax, da_precip, proj_data):
     """
-    Plot 2-day accumulated precipitation.
+    Plot daily precipitation.
     """
+    lon, lat = get_lon_lat(da_precip)
+
     precip = da_precip.values
 
-    if lon.ndim == 1 and lat.ndim == 1:
-        lon_edges = centers_to_edges(lon.values)
-        lat_edges = centers_to_edges(lat.values)
+    lon_edges = centers_to_edges(lon.values)
+    lat_edges = centers_to_edges(lat.values)
 
-        if lat_edges[0] > lat_edges[-1]:
-            lat_edges = lat_edges[::-1]
-            precip = precip[::-1, :]
+    if lat_edges[0] > lat_edges[-1]:
+        lat_edges = lat_edges[::-1]
+        precip = precip[::-1, :]
 
-        if lon_edges[0] > lon_edges[-1]:
-            lon_edges = lon_edges[::-1]
-            precip = precip[:, ::-1]
+    if lon_edges[0] > lon_edges[-1]:
+        lon_edges = lon_edges[::-1]
+        precip = precip[:, ::-1]
 
-        lon_plot, lat_plot = np.meshgrid(lon_edges, lat_edges)
-
-    else:
-        lon_plot = lon.values
-        lat_plot = lat.values
+    lon_e, lat_e = np.meshgrid(lon_edges, lat_edges)
 
     mesh = ax.pcolormesh(
-        lon_plot,
-        lat_plot,
+        lon_e,
+        lat_e,
         precip,
         cmap=PRECIP_CMAP,
         vmin=PRECIP_LEVELS.min(),
@@ -357,7 +536,7 @@ def plot_precipitation(ax, da_precip, lon, lat, proj_data):
 
 def plot_catchment_boundary(ax, geometry, proj_data):
     """
-    Overlay Drammen catchment boundary.
+    Overlay selected catchment boundary.
     """
     ax.add_geometries(
         [geometry],
@@ -369,34 +548,85 @@ def plot_catchment_boundary(ax, geometry, proj_data):
     )
 
 
-def finalize_figure(fig, ax, mesh, savepath=None, write2file=False):
+# Placeholder for later
+def plot_msl_contours(ax, da_msl, proj_data):
     """
-    Add title, colorbar, save, and show.
+    Placeholder for later mean-sea-level pressure contours.
+
+    Example later:
+    ax.contour(
+        lon,
+        lat,
+        msl / 100.0,
+        levels=np.arange(960, 1045, 5),
+        colors="0.4",
+        linewidths=0.8,
+        transform=proj_data,
+    )
     """
-    title = (
-        f"{EVENT_LABEL}: 2-day accumulated precipitation\n"
-        f"valid ending {DATE_OF_MAX}, {MODEL_TYPE}, "
-        f"member {ENSEMBLE_MEMBER}"
+    pass
+
+
+def finalize_figure(
+    fig,
+    axes,
+    mesh,
+    event,
+    catchment_metadata,
+    event_days,
+    source_files_used,
+    savepath=None,
+    write2file=False,
+):
+    """
+    Add titles, shared colorbar, layout, save, and show.
+    """
+    plot_axes = [axes[0, 0], axes[0, 1], axes[0, 2], axes[1, 0], axes[1, 1]]
+
+    for ax, lag, date, source_file in zip(
+        plot_axes,
+        EVENT_LAGS,
+        event_days,
+        source_files_used,
+    ):
+        basename = os.path.basename(source_file)
+        resolution = "0.25°" if "0.25x0.25" in basename else "0.5°"
+
+        ax.set_title(
+            f"Day {lag:+d}: {date} ({resolution})",
+            fontsize=title_fontsize,
+            pad=3,
+        )
+
+    fig.suptitle(
+        (
+            f"{catchment_metadata['label']} | "
+            f"Rank {event['rank']} event | "
+            f"max 2-day precipitation = {event['max_value']:.1f} mm"
+        ),
+        fontsize=title_fontsize + 2,
+        y=0.98,
     )
 
-    ax.set_title(title, fontsize=title_fontsize, pad=4)
+    fig.subplots_adjust(
+        left=0.03,
+        right=0.98,
+        bottom=0.06,
+        top=0.92,
+        wspace=MAP_WSPACE,
+        hspace=MAP_HSPACE,
+    )
+
+    # Colorbar in empty sixth panel
+    cax = fig.add_axes([0.69, 0.27, 0.23, 0.025])
 
     cbar = fig.colorbar(
         mesh,
-        ax=ax,
+        cax=cax,
         orientation="horizontal",
-        shrink=0.82,
-        pad=0.04,
     )
-    cbar.set_label("2-day accumulated precipitation (mm)", fontsize=axis_labelsize)
+    cbar.set_label("Daily precipitation (mm)", fontsize=axis_labelsize)
     cbar.ax.tick_params(labelsize=tick_labelsize)
-
-    fig.subplots_adjust(
-        left=0.04,
-        right=0.98,
-        bottom=0.08,
-        top=0.90,
-    )
 
     if write2file:
         fig.savefig(savepath, dpi=300)
@@ -409,58 +639,67 @@ def finalize_figure(fig, ax, mesh, savepath=None, write2file=False):
 # =============================================================================
 if __name__ == "__main__":
 
-    ds = load_dataset(SOURCE_FILE)
+    catchment_metadata = get_catchment_metadata(CATCHMENT_NAME)
+    event = get_selected_event(CATCHMENT_NAME, EVENT_RANK)
 
-    print(ds)
-    
-    da_event = select_event_member(
-        ds,
-        model_type=MODEL_TYPE,
-        hdate=HDATE,
-        ensemble_member=ENSEMBLE_MEMBER,
-    )
+    date_of_max = np.datetime64(event["date_of_max"], "D")
+    event_days = [
+        str(date_of_max + np.timedelta64(lag, "D"))
+        for lag in EVENT_LAGS
+    ]
 
-
-    da_2day = compute_2day_accumulation(
-        da_event,
-        date_of_max=DATE_OF_MAX,
-    )
-
-    lon, lat = get_lon_lat(da_2day)
-
-    drammen_boundary = load_catchment_outer_boundary(
-        CATCHMENT_GEOJSON,
+    catchment_boundary = load_catchment_outer_boundary(
+        catchment_metadata["geojson"],
         base_dir=path_in_catchment,
         crs_if_missing=CATCHMENT_CRS_IF_MISSING,
     )
 
-    fig, ax, proj_data = make_map_axis(
+    fig, axes, proj_data = make_map_axes(
         central_lon=CENTRAL_LON,
         central_lat=CENTRAL_LAT,
         extent=MAP_EXTENT,
     )
 
-    mesh = plot_precipitation(
-        ax,
-        da_2day,
-        lon,
-        lat,
-        proj_data,
-    )
+    plot_axes = [
+        axes[0, 0],
+        axes[0, 1],
+        axes[0, 2],
+        axes[1, 0],
+        axes[1, 1],
+    ]
 
-    plot_catchment_boundary(
-        ax,
-        drammen_boundary,
-        proj_data,
-    )
+    mesh = None
+    source_files_used = []
+
+    for ax, lag, target_date in zip(plot_axes, EVENT_LAGS, event_days):
+
+        da_day, source_used = load_event_day_precip(
+            event,
+            target_date=target_date,
+        )
+
+        source_files_used.append(source_used)
+
+        mesh = plot_precipitation(
+            ax,
+            da_day,
+            proj_data,
+        )
+
+        plot_catchment_boundary(
+            ax,
+            catchment_boundary,
+            proj_data,
+        )
 
     finalize_figure(
         fig,
-        ax,
+        axes,
         mesh,
+        event,
+        catchment_metadata,
+        event_days,
+        source_files_used,
         savepath=filename_out,
         write2file=write2file,
     )
-
-    ds.close()
-
