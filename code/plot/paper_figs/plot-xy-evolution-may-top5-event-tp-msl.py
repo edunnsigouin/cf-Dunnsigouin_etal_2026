@@ -45,10 +45,10 @@ EVENT_RANK = 1               # choose 1-5
 ACCUMULATION_DAYS = 1        # choose 1 or 2
 
 filename_out = (
-    f"{path_out}fig-event-evolution-"
-    f"{CATCHMENT_NAME}-rank{EVENT_RANK}-{ACCUMULATION_DAYS}day-mslp.png"
+    f"{path_out}xy-tp-event-evolution-"
+    f"{CATCHMENT_NAME}-rank{EVENT_RANK}-{ACCUMULATION_DAYS}day-msl.png"
 )
-write2file = False
+write2file = True
 
 PRECIP_VAR = "tp24"
 MSL_VAR = "msl"
@@ -68,7 +68,9 @@ contour_labelsize = 9
 
 CENTRAL_LON = 10.0
 CENTRAL_LAT = 62.0
-MAP_EXTENT = [4.75, 12.75, 58.0, 63.0]
+#MAP_EXTENT = [4.75, 12.75, 58.0, 63.0]
+
+MAP_EXTENT = [-10, 25, 50, 70]
 
 if ACCUMULATION_DAYS == 1:
     PRECIP_LEVELS = np.arange(0, 61, 5)
@@ -81,7 +83,7 @@ PRECIP_CMAP = "GnBu"
 
 # Mean sea level pressure contours in hPa
 MSL_CONTOUR_LEVELS = np.arange(960, 1045, 5)
-MSL_CONTOUR_COLOR = "0.35"
+MSL_CONTOUR_COLOR = "0.5"
 MSL_CONTOUR_LINEWIDTH = 1.4
 
 CATCHMENT_CRS_IF_MISSING = "EPSG:4326"
@@ -526,7 +528,7 @@ def make_map_axes(central_lon=10.0, central_lat=62.0, extent=None):
             continue
 
         ax.coastlines(resolution="10m", linewidth=0.5)
-        ax.add_feature(cfeature.BORDERS.with_scale("10m"), linewidth=0.4)
+        #ax.add_feature(cfeature.BORDERS.with_scale("10m"), linewidth=0.4)
 
         if extent is not None:
             ax.set_extent(extent, crs=proj_data)
@@ -620,7 +622,7 @@ def plot_catchment_boundary(ax, geometry, proj_data):
         crs=proj_data,
         facecolor="none",
         edgecolor="red",
-        linewidth=1.8,
+        linewidth=1.0,
         zorder=7,
     )
 
