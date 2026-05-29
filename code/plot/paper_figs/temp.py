@@ -54,7 +54,7 @@ FIG_DPI = 300
 # --- Font sizes
 tick_labelsize = 8
 axis_labelsize = 8
-title_fontsize = 9
+title_fontsize = 5
 station_labelsize = 8
 
 # --- Map projection and extent
@@ -169,10 +169,13 @@ def make_two_map_axes(central_lon=10.0, central_lat=62.0, extent=None):
         subplot_kw={"projection": proj_map},
     )
 
-    # Tight spacing between panels
-    #fig.subplots_adjust(
-    #    wspace=-0.0,  # << very small horizontal spacing
-    #)
+    fig.subplots_adjust(
+        left=0.05,
+        right=0.95,
+        bottom=0.05,
+        top=0.95,
+        wspace=0.0, 
+    )
     
     for ax in axes:
         ax.coastlines(resolution="10m", linewidth=0.5)
@@ -209,7 +212,7 @@ def plot_precipitation(ax, da, lon, lat, proj_data):
         cf,
         ax=ax,
         orientation="horizontal",
-        shrink=0.7,
+        shrink=0.8,
         pad=0.035,
         aspect=30,
     )
@@ -261,7 +264,7 @@ def plot_return_period(ax, da, lon, lat, proj_data):
         mesh,
         ax=ax,
         orientation="horizontal",
-        shrink=0.7,
+        shrink=0.8,
         pad=0.035,
         aspect=30,
         ticks=np.arange(len(CATEGORY_LABELS)),
