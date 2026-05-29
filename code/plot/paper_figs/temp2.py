@@ -43,9 +43,9 @@ MAP_WSPACE = -0.5
 MAP_HSPACE = 0.1
 
 # --- Font sizes
-tick_labelsize = 11
+tick_labelsize = 12
 axis_labelsize = 12
-title_fontsize = 12
+title_fontsize = 13
 station_labelsize = 8
 
 # --- Map projection and extent
@@ -326,20 +326,8 @@ def finalize_figure(fig, axes, mesh, savepath=None, write2file=False):
             pad=2,
         )
 
-    # Use lower-right panel as the colorbar container
-    cax_container = axes[1, 2]
-    cax_container.set_axis_off()
-
-    # Place colorbar inside the empty sixth grid cell
-    bbox = cax_container.get_position()
-
-    cbar_height = 0.025
-    cbar_width = bbox.width * 0.85
-    cbar_x = bbox.x0 + 0.5 * (bbox.width - cbar_width)
-    cbar_y = bbox.y0 + 0.48 * bbox.height
-
-    cax = fig.add_axes([cbar_x, cbar_y, cbar_width, cbar_height])
-
+    cax = fig.add_axes([0.624, 0.445, 0.20, 0.03])
+    
     cbar = fig.colorbar(
         mesh,
         cax=cax,
@@ -362,7 +350,7 @@ def finalize_figure(fig, axes, mesh, savepath=None, write2file=False):
     )
 
     if write2file:
-        fig.savefig(savepath, dpi=300)
+        fig.savefig(savepath, dpi=300, bbox_inches="tight")
 
     plt.show()
 
