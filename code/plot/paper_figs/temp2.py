@@ -350,7 +350,7 @@ def finalize_figure(fig, axes, mesh, savepath=None, write2file=False):
     )
 
     if write2file:
-        fig.savefig(savepath, dpi=300, bbox_inches="tight")
+        fig.savefig(savepath, dpi=300)
 
     plt.show()
 
