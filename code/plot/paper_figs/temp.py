@@ -1,12 +1,12 @@
 """
-Fig 1 for Hans paper.
+Plot one top-5 S2S 2-day accumulated precipitation event.
 
-Plot catchment weights for five catchments.
-
-Layout:
-- 3 panels in the top row
-- 2 panels in the bottom row
-- shared colorbar in the empty 6th panel
+The raw files contain 1-day accumulated precipitation. This script:
+1. Opens one forecast or hindcast NetCDF file
+2. Selects one ensemble member and, for hindcasts, one hdate
+3. Computes the 2-day precipitation accumulation ending on DATE_OF_MAX
+4. Plots the event on a Lambert Conformal Cartopy map
+5. Overlays the Drammen catchment boundary in red
 """
 
 # =============================================================================
@@ -30,76 +30,222 @@ from Dunnsigouin_etal_2026 import config
 path_in_catchment = config.dirs["nve"]
 path_out = config.dirs["fig"]
 
-filename_out = f"{path_out}fig-S1.png"
+filename_out = f"{path_out}fig-top5-event-precip.png"
 write2file = False
 
-tick_labelsize = 12
-axis_labelsize = 12
-title_fontsize = 12
-station_labelsize = 11
+# Choose which event to plot (1-5)
+EVENT_NUMBER = 4
+
+TOP_EVENTS = {
+
+    1: {
+        "label": "Rank 1",
+        "max_value": 100.26,
+        "model_type": "hindcast",
+        "forecast_date": "2021-04-26",
+        "date_of_max": "2021-06-06",
+        "hdate": 20150426.0,
+        "ensemble_member": 7,
+        "source_file":
+            "/nird/datapeak/NS9873K/etdu/raw/s2s/mars/ecmwf/"
+            "hindcast/sfc/daily/europe/tp24/"
+            "tp24_0.5x0.5_2021-04-26.nc",
+    },
+
+    2: {
+        "label": "Rank 2",
+        "max_value": 85.55,
+        "model_type": "hindcast",
+        "forecast_date": "2022-04-28",
+        "date_of_max": "2022-06-02",
+        "hdate": 20140428.0,
+        "ensemble_member": 2,
+        "source_file":
+            "/nird/datapeak/NS9873K/etdu/raw/s2s/mars/ecmwf/"
+            "hindcast/sfc/daily/europe/tp24/"
+            "tp24_0.5x0.5_2022-04-28.nc",
+    },
+
+    3: {
+        "label": "Rank 3",
+        "max_value": 84.83,
+        "model_type": "hindcast",
+        "forecast_date": "2021-04-29",
+        "date_of_max": "2021-05-28",
+        "hdate": 20190429.0,
+        "ensemble_member": 4,
+        "source_file":
+            "/nird/datapeak/NS9873K/etdu/raw/s2s/mars/ecmwf/"
+            "hindcast/sfc/daily/europe/tp24/"
+            "tp24_0.5x0.5_2021-04-29.nc",
+    },
+
+    4: {
+        "label": "Rank 4",
+        "max_value": 81.35,
+        "model_type": "hindcast",
+        "forecast_date": "2020-04-23",
+        "date_of_max": "2020-06-03",
+        "hdate": 20150423.0,
+        "ensemble_member": 51, # member 11 is labelled wrong as 51!
+        "source_file":
+            "/nird/datapeak/NS9873K/etdu/raw/s2s/mars/ecmwf/"
+            "hindcast/sfc/daily/europe/tp24/"
+            "tp24_0.5x0.5_2020-04-23.nc",
+    },
+
+    5: {
+        "label": "Rank 5",
+        "max_value": 77.56,
+        "model_type": "forecast",
+        "forecast_date": "2021-04-26",
+        "date_of_max": "2021-06-07",
+        "hdate": None,
+        "ensemble_member": 17,
+        "source_file":
+            "/nird/datapeak/NS9873K/etdu/raw/s2s/mars/ecmwf/"
+            "forecast/sfc/daily/europe/tp24/"
+            "tp24_0.5x0.5_2021-04-26.nc",
+    },
+}
+
+EVENT = TOP_EVENTS[EVENT_NUMBER]
+
+EVENT_LABEL = EVENT["label"]
+MAX_VALUE = EVENT["max_value"]
+MODEL_TYPE = EVENT["model_type"]
+FORECAST_DATE = EVENT["forecast_date"]
+DATE_OF_MAX = EVENT["date_of_max"]
+HDATE = EVENT["hdate"]
+ENSEMBLE_MEMBER = EVENT["ensemble_member"]
+SOURCE_FILE = EVENT["source_file"]
+
+
+PRECIP_VAR = "tp24"
+
+FIG_WIDTH_IN = 7.2
+FIG_HEIGHT_IN = 5.5
 
 CENTRAL_LON = 10.0
 CENTRAL_LAT = 62.0
+
 MAP_EXTENT = [4.75, 12.75, 58.0, 63.0]
 
-WEIGHT_CMAP = "BuGn"
-WEIGHT_VMIN = 0.0
-WEIGHT_VMAX = 1.0
+PRECIP_LEVELS = np.arange(0, 121, 10)
+PRECIP_CMAP = "GnBu"
 
+tick_labelsize = 10
+axis_labelsize = 11
+title_fontsize = 12
+
+CATCHMENT_GEOJSON = "catchment_nve_regine_drammen.geojson"
 CATCHMENT_CRS_IF_MISSING = "EPSG:4326"
 
-CATCHMENTS = [
-    {
-        "label": "Bergheim",
-        "weights": "weights_catchment_nevina_bergheim_era5_0.5x0.5.nc",
-        "geojson": "catchment_nve_nevina_bergheim.geojson",
-    },
-    {
-        "label": "Hønefoss",
-        "weights": "weights_catchment_nevina_hønnefoss_era5_0.5x0.5.nc",
-        "geojson": "catchment_nve_nevina_hønnefoss.geojson",
-    },
-    {
-        "label": "Losna",
-        "weights": "weights_catchment_nevina_losna_era5_0.5x0.5.nc",
-        "geojson": "catchment_nve_nevina_losna.geojson",
-    },
-    {
-        "label": "Drammensvassdraget",
-        "weights": "weights_catchment_regine_drammen_era5_0.5x0.5.nc",
-        "geojson": "catchment_nve_regine_drammen.geojson",
-    },
-    {
-        "label": "Glomma",
-        "weights": "weights_catchment_regine_glomma_era5_0.5x0.5.nc",
-        "geojson": "catchment_nve_regine_glomma.geojson",
-    },
-]
-
-STATIONS = [
-    {"name": "Bergheim", "lon": 9.2483, "lat": 60.4761},
-    {"name": "Ål III", "lon": 8.5609, "lat": 60.6391},
-]
 
 
 # =============================================================================
-# Data loading
+# Data loading and processing
 # =============================================================================
-def load_weights_data(filename):
+def load_dataset(filename):
+    """
+    Open the S2S precipitation dataset.
+
+    ECMWF precipitation is stored in meters and is converted
+    immediately to millimeters.
+    """
     ds = xr.open_dataset(filename)
-    da_weights = ds["catchment_weight"]
-    return ds, da_weights
+
+    ds[PRECIP_VAR] = ds[PRECIP_VAR] * 1000.0
+    ds[PRECIP_VAR].attrs["units"] = "mm"
+
+    return ds
+
+def select_event_member(ds, model_type, hdate=None, ensemble_member=None):
+    """
+    Select the requested hindcast/forecast member.
+
+    This function is intentionally flexible about dimension names.
+    Adjust the candidate names if your files use different names.
+    """
+    da = ds[PRECIP_VAR]
+
+    hdate_dim_candidates = ["hdate", "hindcast_date"]
+    member_dim_candidates = ["number", "member", "ensemble_member", "realization"]
+
+    if model_type == "hindcast":
+        for dim in hdate_dim_candidates:
+            if dim in da.dims or dim in da.coords:
+                da = da.sel({dim: hdate},method='nearest')
+                break
+
+    if ensemble_member is not None:
+        for dim in member_dim_candidates:
+            if dim in da.dims or dim in da.coords:
+                da = da.sel({dim: ensemble_member},method='nearest')
+                break
+
+    return da
+
+
+def compute_2day_accumulation(da, date_of_max):
+    """
+    Compute 2-day accumulated precipitation ending on date_of_max.
+
+    The raw data are 1-day accumulated precipitation, so this sums:
+    date_of_max - 1 day and date_of_max.
+    """
+    date_of_max = np.datetime64(date_of_max)
+    date_start = date_of_max - np.timedelta64(1, "D")
+
+    time_dim_candidates = ["time", "valid_time", "step"]
+
+    for dim in time_dim_candidates:
+        if dim in da.dims or dim in da.coords:
+            time_dim = dim
+            break
+    else:
+        raise ValueError("Could not identify time dimension.")
+
+    da_2day = da.sel({time_dim: slice(date_start, date_of_max)}).sum(time_dim)
+
+    return da_2day
+
+
+def get_lon_lat(da):
+    """
+    Identify longitude and latitude coordinates.
+    """
+    lon_candidates = ["longitude", "lon"]
+    lat_candidates = ["latitude", "lat"]
+
+    for name in lon_candidates:
+        if name in da.coords:
+            lon = da[name]
+            break
+    else:
+        raise ValueError("Could not identify longitude coordinate.")
+
+    for name in lat_candidates:
+        if name in da.coords:
+            lat = da[name]
+            break
+    else:
+        raise ValueError("Could not identify latitude coordinate.")
+
+    return lon, lat
 
 
 # =============================================================================
-# Catchment geometry helpers
+# Catchment geometry helper
 # =============================================================================
-def load_single_catchment_outer_boundary(
+def load_catchment_outer_boundary(
     filename,
     base_dir,
     crs_if_missing="EPSG:4326",
-    color="red",
 ):
+    """
+    Load Drammen catchment polygon, dissolve it, and keep only the outer boundary.
+    """
     plot_crs = "EPSG:4326"
     metric_crs = "EPSG:32633"
 
@@ -125,47 +271,42 @@ def load_single_catchment_outer_boundary(
         .to_crs(plot_crs)
     )
 
-    return {
-        "color": color,
-        "geometry": outer_gdf.geometry.iloc[0],
-    }
+    return outer_gdf.geometry.iloc[0]
 
 
 # =============================================================================
-# Plot setup helpers
+# Plot helpers
 # =============================================================================
-def make_weight_map_axes(central_lon=10.0, central_lat=62.0, extent=None):
+def make_map_axis(central_lon=10.0, central_lat=62.0, extent=None):
+    """
+    Create one Lambert Conformal map panel.
+    """
     proj_map = ccrs.LambertConformal(
         central_longitude=central_lon,
         central_latitude=central_lat,
     )
     proj_data = ccrs.PlateCarree()
 
-    fig, axes = plt.subplots(
-        2,
-        3,
-        figsize=(15, 10),
+    fig, ax = plt.subplots(
+        1,
+        1,
+        figsize=(FIG_WIDTH_IN, FIG_HEIGHT_IN),
         subplot_kw={"projection": proj_map},
     )
 
-    for ax in axes.flat:
-        ax.coastlines(resolution="10m", linewidth=0.6)
-        ax.add_feature(cfeature.BORDERS.with_scale("10m"), linewidth=0.4)
-        if extent is not None:
-            ax.set_extent(extent, crs=proj_data)
+    ax.coastlines(resolution="10m", linewidth=0.5)
+    ax.add_feature(cfeature.BORDERS.with_scale("10m"), linewidth=0.4)
 
-    return fig, axes, proj_data
+    if extent is not None:
+        ax.set_extent(extent, crs=proj_data)
 
-
-def format_colorbar(cbar, label, tick_labelsize=12, axis_labelsize=12):
-    cbar.set_label(label, fontsize=axis_labelsize)
-    cbar.ax.tick_params(labelsize=tick_labelsize)
+    return fig, ax, proj_data
 
 
-# =============================================================================
-# Plotting helpers
-# =============================================================================
 def centers_to_edges(centers):
+    """
+    Convert 1D grid-cell centers to edges.
+    """
     centers = np.asarray(centers)
 
     edges = np.empty(centers.size + 1, dtype=float)
@@ -176,36 +317,37 @@ def centers_to_edges(centers):
     return edges
 
 
-def plot_weights(ax, da_weights, proj_data):
-    lats = da_weights.latitude.values
-    lons = da_weights.longitude.values
-    weights = da_weights.values.copy()
+def plot_precipitation(ax, da_precip, lon, lat, proj_data):
+    """
+    Plot 2-day accumulated precipitation.
+    """
+    precip = da_precip.values
 
-    lat_edges = centers_to_edges(lats)
-    lon_edges = centers_to_edges(lons)
+    if lon.ndim == 1 and lat.ndim == 1:
+        lon_edges = centers_to_edges(lon.values)
+        lat_edges = centers_to_edges(lat.values)
 
-    weights = np.where(weights == 0, np.nan, weights)
+        if lat_edges[0] > lat_edges[-1]:
+            lat_edges = lat_edges[::-1]
+            precip = precip[::-1, :]
 
-    if lat_edges[0] > lat_edges[-1]:
-        lat_edges = lat_edges[::-1]
-        weights = weights[::-1, :]
+        if lon_edges[0] > lon_edges[-1]:
+            lon_edges = lon_edges[::-1]
+            precip = precip[:, ::-1]
 
-    if lon_edges[0] > lon_edges[-1]:
-        lon_edges = lon_edges[::-1]
-        weights = weights[:, ::-1]
+        lon_plot, lat_plot = np.meshgrid(lon_edges, lat_edges)
 
-    lon_e, lat_e = np.meshgrid(lon_edges, lat_edges)
-
-    cmap = plt.get_cmap(WEIGHT_CMAP).copy()
-    cmap.set_bad("white")
+    else:
+        lon_plot = lon.values
+        lat_plot = lat.values
 
     mesh = ax.pcolormesh(
-        lon_e,
-        lat_e,
-        weights,
-        cmap=cmap,
-        vmin=WEIGHT_VMIN,
-        vmax=WEIGHT_VMAX,
+        lon_plot,
+        lat_plot,
+        precip,
+        cmap=PRECIP_CMAP,
+        vmin=PRECIP_LEVELS.min(),
+        vmax=PRECIP_LEVELS.max(),
         shading="auto",
         transform=proj_data,
     )
@@ -213,77 +355,48 @@ def plot_weights(ax, da_weights, proj_data):
     return mesh
 
 
-def plot_catchment_boundary(ax, boundary, proj_data):
+def plot_catchment_boundary(ax, geometry, proj_data):
+    """
+    Overlay Drammen catchment boundary.
+    """
     ax.add_geometries(
-        [boundary["geometry"]],
+        [geometry],
         crs=proj_data,
         facecolor="none",
-        edgecolor=boundary["color"],
-        linewidth=2.5,
+        edgecolor="red",
+        linewidth=1.8,
         zorder=5,
     )
 
 
-def plot_station_markers(ax, stations, proj_data, fontsize=11):
-    for station in stations:
-        ax.plot(
-            station["lon"],
-            station["lat"],
-            marker="o",
-            markersize=8,
-            markeredgecolor="black",
-            markerfacecolor="yellow",
-            transform=proj_data,
-            zorder=6,
-        )
+def finalize_figure(fig, ax, mesh, savepath=None, write2file=False):
+    """
+    Add title, colorbar, save, and show.
+    """
+    title = (
+        f"{EVENT_LABEL}: 2-day accumulated precipitation\n"
+        f"valid ending {DATE_OF_MAX}, {MODEL_TYPE}, "
+        f"member {ENSEMBLE_MEMBER}"
+    )
 
-        if station["name"] == "Bergheim":
-            dx, dy = 0.05, 0.05
-        elif station["name"] == "Ål III":
-            dx, dy = -0.65, 0.05
-        else:
-            dx, dy = 0.05, 0.05
-
-        ax.text(
-            station["lon"] + dx,
-            station["lat"] + dy,
-            station["name"],
-            fontsize=fontsize,
-            color="yellow",
-            transform=proj_data,
-            zorder=7,
-        )
-
-
-def finalize_figure(fig, axes, mesh, savepath=None, write2file=False):
-    panel_labels = ["(a)", "(b)", "(c)", "(d)", "(e)"]
-    plot_axes = [axes[0, 0], axes[0, 1], axes[0, 2], axes[1, 0], axes[1, 1]]
-
-    for ax, panel_label, catchment in zip(plot_axes, panel_labels, CATCHMENTS):
-        ax.set_title(
-            f"{panel_label} {catchment['label']}",
-            fontsize=title_fontsize,
-        )
-
-    # Use lower-right panel as colorbar area
-    cax = axes[1, 2]
-    cax.set_axis_off()
+    ax.set_title(title, fontsize=title_fontsize, pad=4)
 
     cbar = fig.colorbar(
         mesh,
-        ax=cax,
+        ax=ax,
         orientation="horizontal",
-        fraction=0.7,
-        pad=0.35,
+        shrink=0.82,
+        pad=0.04,
     )
-    format_colorbar(
-        cbar,
-        label="Catchment weight (fraction)",
-        tick_labelsize=tick_labelsize,
-        axis_labelsize=axis_labelsize,
-    )
+    cbar.set_label("2-day accumulated precipitation (mm)", fontsize=axis_labelsize)
+    cbar.ax.tick_params(labelsize=tick_labelsize)
 
-    fig.subplots_adjust(wspace=0.02, hspace=0.08)
+    fig.subplots_adjust(
+        left=0.04,
+        right=0.98,
+        bottom=0.08,
+        top=0.90,
+    )
 
     if write2file:
         fig.savefig(savepath, dpi=300)
@@ -296,41 +409,58 @@ def finalize_figure(fig, axes, mesh, savepath=None, write2file=False):
 # =============================================================================
 if __name__ == "__main__":
 
-    fig, axes, proj_data = make_weight_map_axes(
+    ds = load_dataset(SOURCE_FILE)
+
+    print(ds)
+    
+    da_event = select_event_member(
+        ds,
+        model_type=MODEL_TYPE,
+        hdate=HDATE,
+        ensemble_member=ENSEMBLE_MEMBER,
+    )
+
+
+    da_2day = compute_2day_accumulation(
+        da_event,
+        date_of_max=DATE_OF_MAX,
+    )
+
+    lon, lat = get_lon_lat(da_2day)
+
+    drammen_boundary = load_catchment_outer_boundary(
+        CATCHMENT_GEOJSON,
+        base_dir=path_in_catchment,
+        crs_if_missing=CATCHMENT_CRS_IF_MISSING,
+    )
+
+    fig, ax, proj_data = make_map_axis(
         central_lon=CENTRAL_LON,
         central_lat=CENTRAL_LAT,
         extent=MAP_EXTENT,
     )
 
-    plot_axes = [axes[0, 0], axes[0, 1], axes[0, 2], axes[1, 0], axes[1, 1]]
+    mesh = plot_precipitation(
+        ax,
+        da_2day,
+        lon,
+        lat,
+        proj_data,
+    )
 
-    datasets = []
-    mesh = None
-
-    for ax, catchment in zip(plot_axes, CATCHMENTS):
-
-        ds_weights, da_weights = load_weights_data(
-            path_in_catchment + catchment["weights"]
-        )
-        datasets.append(ds_weights)
-
-        boundary = load_single_catchment_outer_boundary(
-            catchment["geojson"],
-            base_dir=path_in_catchment,
-            crs_if_missing=CATCHMENT_CRS_IF_MISSING,
-            color="red",
-        )
-
-        mesh = plot_weights(ax, da_weights, proj_data)
-        plot_catchment_boundary(ax, boundary, proj_data)
+    plot_catchment_boundary(
+        ax,
+        drammen_boundary,
+        proj_data,
+    )
 
     finalize_figure(
         fig,
-        axes,
+        ax,
         mesh,
         savepath=filename_out,
         write2file=write2file,
     )
 
-    for ds in datasets:
-        ds.close()
+    ds.close()
+
