@@ -25,6 +25,7 @@ import os
 import numpy as np
 import xarray as xr
 import matplotlib.pyplot as plt
+import matplotlib.colors as mcolors
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
 import geopandas as gpd
@@ -79,12 +80,14 @@ elif ACCUMULATION_DAYS == 2:
 else:
     raise ValueError("ACCUMULATION_DAYS must be either 1 or 2.")
 
-PRECIP_CMAP = "GnBu"
+PRECIP_CMAP = plt.get_cmap("GnBu").copy()
+PRECIP_CMAP.set_under("white")
+PRECIP_ZERO_THRESHOLD = 1e-12
 
 # Mean sea level pressure contours in hPa
 MSL_CONTOUR_LEVELS = np.arange(960, 1045, 5)
-MSL_CONTOUR_COLOR = "0.5"
-MSL_CONTOUR_LINEWIDTH = 1.4
+MSL_CONTOUR_COLOR = "0.75"
+MSL_CONTOUR_LINEWIDTH = 2
 
 CATCHMENT_CRS_IF_MISSING = "EPSG:4326"
 
@@ -555,7 +558,7 @@ def centers_to_edges(centers):
 # =============================================================================
 # Plotting helpers
 # =============================================================================
-def plot_precipitation(ax, da_precip, proj_data):
+def plot_precipitation2(ax, da_precip, proj_data):
     lon, lat = get_lon_lat(da_precip)
     precip = da_precip.values
 
@@ -578,6 +581,36 @@ def plot_precipitation(ax, da_precip, proj_data):
         precip,
         cmap=PRECIP_CMAP,
         vmin=PRECIP_LEVELS.min(),
+        vmax=PRECIP_LEVELS.max(),
+        shading="auto",
+        transform=proj_data,
+    )
+
+    return mesh
+
+def plot_precipitation(ax, da_precip, proj_data):
+    lon, lat = get_lon_lat(da_precip)
+    precip = da_precip.values
+
+    lon_edges = centers_to_edges(lon.values)
+    lat_edges = centers_to_edges(lat.values)
+
+    if lat_edges[0] > lat_edges[-1]:
+        lat_edges = lat_edges[::-1]
+        precip = precip[::-1, :]
+
+    if lon_edges[0] > lon_edges[-1]:
+        lon_edges = lon_edges[::-1]
+        precip = precip[:, ::-1]
+
+    lon_e, lat_e = np.meshgrid(lon_edges, lat_edges)
+
+    mesh = ax.pcolormesh(
+        lon_e,
+        lat_e,
+        precip,
+        cmap=PRECIP_CMAP,
+        vmin=PRECIP_ZERO_THRESHOLD,
         vmax=PRECIP_LEVELS.max(),
         shading="auto",
         transform=proj_data,
@@ -659,7 +692,7 @@ def finalize_figure(
         resolution_text = "+".join(resolutions)
 
         ax.set_title(
-            f"Day {lag:+d}: {date} ({resolution_text})",
+            f"Day {lag:+d}: {date}",
             fontsize=title_fontsize,
             pad=3,
         )
