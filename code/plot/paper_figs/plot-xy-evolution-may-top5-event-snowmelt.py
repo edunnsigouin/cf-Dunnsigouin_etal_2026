@@ -39,14 +39,14 @@ from Dunnsigouin_etal_2026 import config
 path_in_catchment = config.dirs["nve"]
 path_out = config.dirs["fig"]
 
-CATCHMENT_NAME = "drammen"   # "drammen" or "glomma"
+CATCHMENT_NAME = "glomma"   # "drammen" or "glomma"
 EVENT_RANK = 1               # choose 1-5
 
 filename_out = (
-    f"{path_out}fig-swe-change-evolution-"
-    f"{CATCHMENT_NAME}-rank{EVENT_RANK}.png"
+    f"{path_out}xy-tp-event-evolution-"
+    f"{CATCHMENT_NAME}-rank{EVENT_RANK}-snowmelt.png"
 )
-write2file = False
+write2file = True
 
 # --- Variable name
 SNOW_VAR = "sd"
@@ -74,8 +74,8 @@ MAP_EXTENT = [4.75, 12.75, 58.0, 63.0]
 # Negative values = melt; positive values = accumulation
 SNOW_CHANGE_CMAP = "RdBu_r"
 
-SNOW_CHANGE_VMIN = -24.0
-SNOW_CHANGE_VMAX = 24.0
+SNOW_CHANGE_VMIN = -10.0
+SNOW_CHANGE_VMAX = 10.0
 SNOW_CHANGE_TICK_INTERVAL = 2.0
 
 SNOW_CHANGE_TICKS = np.arange(
@@ -628,7 +628,7 @@ def finalize_figure(
         (
             f"{catchment_metadata['label']} | "
             f"Rank {event['rank']} precipitation event | "
-            f"SWE change evolution"
+            f"snowmelt"
         ),
         fontsize=title_fontsize + 2,
         y=0.98,
