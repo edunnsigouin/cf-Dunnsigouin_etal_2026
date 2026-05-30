@@ -74,7 +74,7 @@ CENTRAL_LAT = 62.0
 MAP_EXTENT = [-10, 25, 50, 70]
 
 if ACCUMULATION_DAYS == 1:
-    PRECIP_LEVELS = np.arange(0, 61, 5)
+    PRECIP_LEVELS = np.arange(5, 65, 5)
 elif ACCUMULATION_DAYS == 2:
     PRECIP_LEVELS = np.arange(0, 121, 10)
 else:
@@ -82,7 +82,7 @@ else:
 
 PRECIP_CMAP = plt.get_cmap("GnBu").copy()
 PRECIP_CMAP.set_under("white")
-PRECIP_ZERO_THRESHOLD = 1e-12
+PRECIP_ZERO_THRESHOLD = 5.0 #1e-12
 
 # Mean sea level pressure contours in hPa
 MSL_CONTOUR_LEVELS = np.arange(960, 1045, 5)
