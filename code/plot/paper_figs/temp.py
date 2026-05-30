@@ -1,20 +1,19 @@
+#!/usr/bin/env python3
 """
-Plot evolution of snow water equivalent change during one top S2S event.
+Plot time evolution of one top S2S precipitation event.
 
 The script:
-1. Selects one catchment and one ranked precipitation event
-2. Uses date_of_max as event day 0
-3. Plots SWE change for event-relative lags -2, -1, 0, +1, +2
-4. Converts raw snow water equivalent from meters to mm
-5. Uses the 0.5x0.5 file first, then falls back to the matching 0.25x0.25 file
-6. Overlays the selected catchment boundary in red
-
-Definition for each lag L:
-    SWE change at lag L = sd(day L) - sd(day L - 1)
-
-Interpretation:
-    Negative values = SWE decreased = snow melt / snow loss
-    Positive values = SWE increased = snow accumulation / snow gain
+1. Selects one catchment and one ranked event.
+2. Uses date_of_max as event day 0.
+3. Plots event-relative days -2, -1, 0, +1, +2.
+4. Plots precipitation as shading.
+5. Plots MSLP as grey labelled contours.
+6. Plots snowmelt as orange dots where:
+       sd(day L) - sd(day L - 1) < SNOWMELT_THRESHOLD
+7. Converts precipitation from m to mm, MSLP from Pa to hPa,
+   and snow water equivalent from m to mm.
+8. Uses the 0.5x0.5 file first, then falls back to 0.25x0.25.
+9. Overlays the selected catchment boundary in red.
 """
 
 # =============================================================================
@@ -25,7 +24,6 @@ import numpy as np
 import xarray as xr
 import matplotlib.pyplot as plt
 import cartopy.crs as ccrs
-import cartopy.feature as cfeature
 import geopandas as gpd
 from shapely.geometry import Polygon, MultiPolygon
 
@@ -41,20 +39,20 @@ path_out = config.dirs["fig"]
 
 CATCHMENT_NAME = "drammen"   # "drammen" or "glomma"
 EVENT_RANK = 1               # choose 1-5
+ACCUMULATION_DAYS = 1        # choose 1 or 2
 
 filename_out = (
-    f"{path_out}xy-tp-event-evolution-"
-    f"{CATCHMENT_NAME}-rank{EVENT_RANK}-snowmelt.png"
+    f"{path_out}xy-tp-msl-snowmelt-event-evolution-"
+    f"{CATCHMENT_NAME}-rank{EVENT_RANK}-{ACCUMULATION_DAYS}day.png"
 )
-write2file = False
+write2file = True
 
-# --- Variable name
+PRECIP_VAR = "tp24"
+MSL_VAR = "msl"
 SNOW_VAR = "sd"
 
-# --- Event-relative lags to plot
 EVENT_LAGS = [-2, -1, 0, 1, 2]
 
-# --- Figure settings
 FIG_WIDTH_IN = 16
 FIG_HEIGHT_IN = 12
 
@@ -64,38 +62,47 @@ MAP_HSPACE = 0.08
 tick_labelsize = 12
 axis_labelsize = 13
 title_fontsize = 14
+contour_labelsize = 9
 
-# --- Map projection and extent
 CENTRAL_LON = 10.0
 CENTRAL_LAT = 62.0
-#MAP_EXTENT = [4.75, 12.75, 58.0, 63.0]
 MAP_EXTENT = [-10, 25, 50, 70]
 
-# --- SWE change plotting
-# Negative values = melt; positive values = accumulation
-SNOW_CHANGE_CMAP = "RdBu_r"
+# --- Precipitation shading
+if ACCUMULATION_DAYS == 1:
+    PRECIP_LEVELS = np.arange(5, 65, 5)
+elif ACCUMULATION_DAYS == 2:
+    PRECIP_LEVELS = np.arange(0, 121, 10)
+else:
+    raise ValueError("ACCUMULATION_DAYS must be either 1 or 2.")
 
-SNOW_CHANGE_VMIN = -10.0
-SNOW_CHANGE_VMAX = 10.0
-SNOW_CHANGE_TICK_INTERVAL = 2.0
+PRECIP_CMAP = plt.get_cmap("GnBu").copy()
+PRECIP_CMAP.set_under("white")
+PRECIP_ZERO_THRESHOLD = 5.0
 
-SNOW_CHANGE_TICKS = np.arange(
-    SNOW_CHANGE_VMIN,
-    SNOW_CHANGE_VMAX + SNOW_CHANGE_TICK_INTERVAL,
-    SNOW_CHANGE_TICK_INTERVAL,
-)
+# --- MSLP contours
+MSL_CONTOUR_LEVELS = np.arange(960, 1045, 5)
+MSL_CONTOUR_COLOR = "0.7"
+MSL_CONTOUR_LINEWIDTH = 2
 
-# --- Catchment CRS if missing
+# --- Snowmelt dots
+SNOWMELT_THRESHOLD = 0.0
+SNOWMELT_DOT_COLOR = "orange"
+SNOWMELT_DOT_SIZE = 5
+SNOWMELT_DOT_ALPHA = 0.9
+SNOWMELT_DOT_MARKER = "o"
+SNOWMELT_ZORDER = 8
+
+# --- Catchment
 CATCHMENT_CRS_IF_MISSING = "EPSG:4326"
+CATCHMENT_EDGE_COLOR = "red"
+CATCHMENT_LINEWIDTH = 1.0
 
 
 # =============================================================================
 # Catchment metadata and event metadata
 # =============================================================================
 def get_catchment_metadata(catchment_name):
-    """
-    Return catchment-specific metadata.
-    """
     catchments = {
         "drammen": {
             "label": "Drammen",
@@ -117,9 +124,6 @@ def get_catchment_metadata(catchment_name):
 
 
 def get_top_events(catchment_name):
-    """
-    Return top-5 event metadata for selected catchment.
-    """
     events = {
         "drammen": [
             {
@@ -188,7 +192,6 @@ def get_top_events(catchment_name):
                     "tp24_0.5x0.5_2021-04-26.nc",
             },
         ],
-
         "glomma": [
             {
                 "rank": 1,
@@ -259,48 +262,35 @@ def get_top_events(catchment_name):
     }
 
     if catchment_name not in events:
-        raise ValueError(
-            f"No event metadata available for catchment: {catchment_name}"
-        )
+        raise ValueError(f"No event metadata available for {catchment_name}")
 
     return events[catchment_name]
 
 
 def get_selected_event(catchment_name, event_rank):
-    """
-    Return one selected event by catchment and rank.
-    """
     for event in get_top_events(catchment_name):
         if event["rank"] == event_rank:
             return event
 
-    raise ValueError(
-        f"Rank {event_rank} not found for catchment {catchment_name}."
-    )
+    raise ValueError(f"Rank {event_rank} not found for {catchment_name}.")
 
 
 # =============================================================================
 # File helpers
 # =============================================================================
 def get_early_lead_file(source_file):
-    """
-    Convert the 0.5x0.5 lead-day 16-46 file path to the matching
-    0.25x0.25 lead-day 1-15 file path.
-    """
     return source_file.replace("0.5x0.5", "0.25x0.25")
 
 
+def get_msl_file(precip_file):
+    return precip_file.replace("/tp24/", "/msl/").replace("tp24_", "msl_")
+
+
 def get_snow_file(precip_file):
-    """
-    Infer matching snow water equivalent file from precipitation file.
-    """
     return precip_file.replace("/tp24/", "/sd/").replace("tp24_", "sd_")
 
 
 def get_time_coord_name(da):
-    """
-    Identify time coordinate name.
-    """
     for name in ["time", "valid_time"]:
         if name in da.dims or name in da.coords:
             return name
@@ -309,9 +299,6 @@ def get_time_coord_name(da):
 
 
 def get_lon_lat(da):
-    """
-    Return longitude and latitude coordinates.
-    """
     lon = da["longitude"] if "longitude" in da.coords else da["lon"]
     lat = da["latitude"] if "latitude" in da.coords else da["lat"]
     return lon, lat
@@ -320,24 +307,27 @@ def get_lon_lat(da):
 # =============================================================================
 # Data loading and selection
 # =============================================================================
-def load_dataset(filename):
-    """
-    Open snow water equivalent dataset and convert from meters to mm.
-    """
+def load_dataset(filename, variable):
+    """Open dataset and convert units."""
     ds = xr.open_dataset(filename)
 
-    if SNOW_VAR in ds:
-        ds[SNOW_VAR] = ds[SNOW_VAR] * 1000.0
-        ds[SNOW_VAR].attrs["units"] = "mm"
+    if variable == PRECIP_VAR and variable in ds:
+        ds[variable] = ds[variable] * 1000.0
+        ds[variable].attrs["units"] = "mm"
+
+    if variable == MSL_VAR and variable in ds:
+        ds[variable] = ds[variable] / 100.0
+        ds[variable].attrs["units"] = "hPa"
+
+    if variable == SNOW_VAR and variable in ds:
+        ds[variable] = ds[variable] * 1000.0
+        ds[variable].attrs["units"] = "mm"
 
     return ds
 
 
-def select_event_member(ds, event):
-    """
-    Select hdate and ensemble member for one event.
-    """
-    da = ds[SNOW_VAR]
+def select_event_member(ds, event, variable):
+    da = ds[variable]
 
     hdate_dim_candidates = ["hdate", "hindcast_date"]
     member_dim_candidates = ["number", "member", "ensemble_member", "realization"]
@@ -357,34 +347,28 @@ def select_event_member(ds, event):
 
 
 def has_date(da, target_date):
-    """
-    Check whether target_date exists in the DataArray time coordinate.
-    """
     time_name = get_time_coord_name(da)
     target_date = np.datetime64(target_date, "ns")
     times = da[time_name].values.astype("datetime64[ns]")
-
     return target_date in times
 
 
 def select_date(da, target_date):
-    """
-    Select one valid date from DataArray.
-    """
     time_name = get_time_coord_name(da)
     target_date = np.datetime64(target_date, "ns")
-
     return da.sel({time_name: target_date})
 
 
-def load_single_day_snow(event, target_date):
-    """
-    Load snow water equivalent for one date.
-
-    Try the original 0.5x0.5 file first.
-    If target_date is missing, try the matching 0.25x0.25 file.
-    """
-    base_file = get_snow_file(event["source_file"])
+def load_single_day_variable(event, target_date, variable):
+    """Load one daily field for precipitation, MSLP, or SWE."""
+    if variable == PRECIP_VAR:
+        base_file = event["source_file"]
+    elif variable == MSL_VAR:
+        base_file = get_msl_file(event["source_file"])
+    elif variable == SNOW_VAR:
+        base_file = get_snow_file(event["source_file"])
+    else:
+        raise ValueError(f"Unknown variable: {variable}")
 
     files_to_try = [
         base_file,
@@ -396,10 +380,10 @@ def load_single_day_snow(event, target_date):
         if not os.path.exists(filename):
             continue
 
-        ds = load_dataset(filename)
+        ds = load_dataset(filename, variable=variable)
 
         try:
-            da = select_event_member(ds, event)
+            da = select_event_member(ds, event, variable=variable)
 
             if has_date(da, target_date):
                 da_day = select_date(da, target_date).load()
@@ -409,47 +393,85 @@ def load_single_day_snow(event, target_date):
             ds.close()
 
     raise ValueError(
-        f"Could not find date {target_date} for {SNOW_VAR} in either "
+        f"Could not find date {target_date} for {variable} in either "
         f"0.5x0.5 or 0.25x0.25 file."
     )
 
 
-def load_snow_change_for_lag(event, lag):
+def load_event_precip(event, target_date, accumulation_days=1):
+    """Load 1-day or 2-day accumulated precipitation."""
+    if accumulation_days not in [1, 2]:
+        raise ValueError("accumulation_days must be either 1 or 2.")
+
+    target_date = np.datetime64(target_date, "D")
+
+    if accumulation_days == 1:
+        dates_needed = [target_date]
+    else:
+        dates_needed = [
+            target_date - np.timedelta64(1, "D"),
+            target_date,
+        ]
+
+    daily_fields = []
+    source_files_used = []
+
+    for date_needed in dates_needed:
+        da_day, source_used = load_single_day_variable(
+            event,
+            target_date=date_needed,
+            variable=PRECIP_VAR,
+        )
+        daily_fields.append(da_day)
+        source_files_used.append(source_used)
+
+    if accumulation_days == 1:
+        da_out = daily_fields[0]
+    else:
+        da_out = daily_fields[0] + daily_fields[1]
+        da_out.attrs["units"] = "mm"
+
+    return da_out, source_files_used
+
+
+def load_event_msl(event, target_date):
+    """Load MSLP for the target day only."""
+    return load_single_day_variable(
+        event,
+        target_date=target_date,
+        variable=MSL_VAR,
+    )
+
+
+def load_event_snowmelt(event, lag):
     """
     Compute SWE change for one event-relative lag.
 
-    SWE change at lag L = sd(day L) - sd(day L - 1)
-
-    Negative values indicate snowpack loss / melt.
-    Positive values indicate snowpack gain / accumulation.
+    SWE change = sd(day L) - sd(day L - 1).
+    Negative values indicate snowmelt / snow loss.
     """
     date_of_max = np.datetime64(event["date_of_max"], "D")
 
     date_previous = date_of_max + np.timedelta64(lag - 1, "D")
     date_current = date_of_max + np.timedelta64(lag, "D")
 
-    da_previous, source_previous = load_single_day_snow(
+    da_previous, source_previous = load_single_day_variable(
         event,
         target_date=str(date_previous),
+        variable=SNOW_VAR,
     )
 
-    da_current, source_current = load_single_day_snow(
+    da_current, source_current = load_single_day_variable(
         event,
         target_date=str(date_current),
+        variable=SNOW_VAR,
     )
 
     da_change = da_current - da_previous
-
     da_change.attrs["units"] = "mm"
     da_change.attrs["long_name"] = "Snow water equivalent change"
 
-    return (
-        da_change,
-        source_previous,
-        source_current,
-        str(date_previous),
-        str(date_current),
-    )
+    return da_change, source_previous, source_current
 
 
 # =============================================================================
@@ -460,9 +482,7 @@ def load_catchment_outer_boundary(
     base_dir,
     crs_if_missing="EPSG:4326",
 ):
-    """
-    Load catchment polygon, dissolve it, and keep only the outer boundary.
-    """
+    """Load catchment polygon, dissolve it, and keep only outer boundary."""
     plot_crs = "EPSG:4326"
     metric_crs = "EPSG:32633"
 
@@ -495,9 +515,6 @@ def load_catchment_outer_boundary(
 # Plot setup helpers
 # =============================================================================
 def make_map_axes(central_lon=10.0, central_lat=62.0, extent=None):
-    """
-    Create 2 x 3 Lambert Conformal map layout.
-    """
     proj_map = ccrs.LambertConformal(
         central_longitude=central_lon,
         central_latitude=central_lat,
@@ -519,7 +536,6 @@ def make_map_axes(central_lon=10.0, central_lat=62.0, extent=None):
             continue
 
         ax.coastlines(resolution="10m", linewidth=0.5)
-        ax.add_feature(cfeature.BORDERS.with_scale("10m"), linewidth=0.4)
 
         if extent is not None:
             ax.set_extent(extent, crs=proj_data)
@@ -528,9 +544,6 @@ def make_map_axes(central_lon=10.0, central_lat=62.0, extent=None):
 
 
 def centers_to_edges(centers):
-    """
-    Convert 1D grid-cell centers to edges.
-    """
     centers = np.asarray(centers)
 
     if centers.ndim != 1:
@@ -549,36 +562,30 @@ def centers_to_edges(centers):
 # =============================================================================
 # Plotting helpers
 # =============================================================================
-def plot_snow_change(ax, da_change, proj_data):
-    """
-    Plot snow water equivalent change.
-
-    Negative values indicate snow melt / snowpack loss.
-    Positive values indicate snow accumulation / snowpack gain.
-    """
-    lon, lat = get_lon_lat(da_change)
-    change = da_change.values
+def plot_precipitation(ax, da_precip, proj_data):
+    lon, lat = get_lon_lat(da_precip)
+    precip = da_precip.values
 
     lon_edges = centers_to_edges(lon.values)
     lat_edges = centers_to_edges(lat.values)
 
     if lat_edges[0] > lat_edges[-1]:
         lat_edges = lat_edges[::-1]
-        change = change[::-1, :]
+        precip = precip[::-1, :]
 
     if lon_edges[0] > lon_edges[-1]:
         lon_edges = lon_edges[::-1]
-        change = change[:, ::-1]
+        precip = precip[:, ::-1]
 
     lon_e, lat_e = np.meshgrid(lon_edges, lat_edges)
 
     mesh = ax.pcolormesh(
         lon_e,
         lat_e,
-        change,
-        cmap=SNOW_CHANGE_CMAP,
-        vmin=SNOW_CHANGE_VMIN,
-        vmax=SNOW_CHANGE_VMAX,
+        precip,
+        cmap=PRECIP_CMAP,
+        vmin=PRECIP_ZERO_THRESHOLD,
+        vmax=PRECIP_LEVELS.max(),
         shading="auto",
         transform=proj_data,
     )
@@ -586,17 +593,63 @@ def plot_snow_change(ax, da_change, proj_data):
     return mesh
 
 
+def plot_msl_contours(ax, da_msl, proj_data):
+    """Plot labelled mean sea level pressure contours."""
+    lon, lat = get_lon_lat(da_msl)
+    msl = da_msl.values
+
+    contour = ax.contour(
+        lon.values,
+        lat.values,
+        msl,
+        levels=MSL_CONTOUR_LEVELS,
+        colors=MSL_CONTOUR_COLOR,
+        linewidths=MSL_CONTOUR_LINEWIDTH,
+        transform=proj_data,
+        zorder=6,
+    )
+
+    ax.clabel(
+        contour,
+        inline=True,
+        inline_spacing=4,
+        fontsize=contour_labelsize,
+        fmt="%d",
+        colors=MSL_CONTOUR_COLOR,
+    )
+
+    return contour
+
+
+def plot_snowmelt_dots(ax, da_snowmelt, proj_data):
+    """Plot orange dots where SWE change is below threshold."""
+    lon, lat = get_lon_lat(da_snowmelt)
+    snowmelt = da_snowmelt.values
+
+    lon2d, lat2d = np.meshgrid(lon.values, lat.values)
+    mask = np.isfinite(snowmelt) & (snowmelt < SNOWMELT_THRESHOLD)
+
+    ax.scatter(
+        lon2d[mask],
+        lat2d[mask],
+        s=SNOWMELT_DOT_SIZE,
+        c=SNOWMELT_DOT_COLOR,
+        marker=SNOWMELT_DOT_MARKER,
+        alpha=SNOWMELT_DOT_ALPHA,
+        transform=proj_data,
+        zorder=SNOWMELT_ZORDER,
+        linewidths=0,
+    )
+
+
 def plot_catchment_boundary(ax, geometry, proj_data):
-    """
-    Overlay selected catchment boundary.
-    """
     ax.add_geometries(
         [geometry],
         crs=proj_data,
         facecolor="none",
-        edgecolor="red",
-        linewidth=1.8,
-        zorder=7,
+        edgecolor=CATCHMENT_EDGE_COLOR,
+        linewidth=CATCHMENT_LINEWIDTH,
+        zorder=9,
     )
 
 
@@ -606,21 +659,15 @@ def finalize_figure(
     mesh,
     event,
     catchment_metadata,
-    lag_metadata,
+    event_days,
     savepath=None,
     write2file=False,
 ):
-    """
-    Add titles, shared colorbar, save, and show.
-    """
     plot_axes = [axes[0, 0], axes[0, 1], axes[0, 2], axes[1, 0], axes[1, 1]]
 
-    for ax, meta in zip(plot_axes, lag_metadata):
+    for ax, lag, date in zip(plot_axes, EVENT_LAGS, event_days):
         ax.set_title(
-            (
-                f"Day {meta['lag']:+d}: "
-                f"{meta['date_current']} − {meta['date_previous']}"
-            ),
+            f"Day {lag:+d}: {date}",
             fontsize=title_fontsize,
             pad=3,
         )
@@ -628,8 +675,8 @@ def finalize_figure(
     fig.suptitle(
         (
             f"{catchment_metadata['label']} | "
-            f"Rank {event['rank']} precipitation event | "
-            f"snowmelt"
+            f"Rank {event['rank']} event | "
+            f"TP shading, MSLP contours, snowmelt dots"
         ),
         fontsize=title_fontsize + 2,
         y=0.98,
@@ -650,11 +697,10 @@ def finalize_figure(
         mesh,
         cax=cax,
         orientation="horizontal",
-        ticks=SNOW_CHANGE_TICKS,
     )
 
     cbar.set_label(
-        "SWE change (mm): negative = melt, positive = accumulation",
+        f"{ACCUMULATION_DAYS}-day accumulated precipitation (mm)",
         fontsize=axis_labelsize,
     )
     cbar.ax.tick_params(labelsize=tick_labelsize)
@@ -672,6 +718,13 @@ if __name__ == "__main__":
 
     catchment_metadata = get_catchment_metadata(CATCHMENT_NAME)
     event = get_selected_event(CATCHMENT_NAME, EVENT_RANK)
+
+    date_of_max = np.datetime64(event["date_of_max"], "D")
+
+    event_days = [
+        str(date_of_max + np.timedelta64(lag, "D"))
+        for lag in EVENT_LAGS
+    ]
 
     catchment_boundary = load_catchment_outer_boundary(
         catchment_metadata["geojson"],
@@ -694,24 +747,40 @@ if __name__ == "__main__":
     ]
 
     mesh = None
-    lag_metadata = []
 
-    for ax, lag in zip(plot_axes, EVENT_LAGS):
+    for ax, lag, target_date in zip(plot_axes, EVENT_LAGS, event_days):
 
-        (
-            da_change,
-            source_previous,
-            source_current,
-            date_previous,
-            date_current,
-        ) = load_snow_change_for_lag(
+        da_precip, precip_files_used = load_event_precip(
+            event,
+            target_date=target_date,
+            accumulation_days=ACCUMULATION_DAYS,
+        )
+
+        da_msl, msl_file_used = load_event_msl(
+            event,
+            target_date=target_date,
+        )
+
+        da_snowmelt, snow_previous_file, snow_current_file = load_event_snowmelt(
             event,
             lag=lag,
         )
 
-        mesh = plot_snow_change(
+        mesh = plot_precipitation(
             ax,
-            da_change,
+            da_precip,
+            proj_data,
+        )
+
+        plot_msl_contours(
+            ax,
+            da_msl,
+            proj_data,
+        )
+
+        plot_snowmelt_dots(
+            ax,
+            da_snowmelt,
             proj_data,
         )
 
@@ -721,23 +790,13 @@ if __name__ == "__main__":
             proj_data,
         )
 
-        lag_metadata.append(
-            {
-                "lag": lag,
-                "date_previous": date_previous,
-                "date_current": date_current,
-                "source_previous": source_previous,
-                "source_current": source_current,
-            }
-        )
-
     finalize_figure(
         fig,
         axes,
         mesh,
         event,
         catchment_metadata,
-        lag_metadata,
+        event_days,
         savepath=filename_out,
         write2file=write2file,
     )
