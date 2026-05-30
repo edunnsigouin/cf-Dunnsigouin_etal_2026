@@ -1,640 +1,238 @@
+#!/usr/bin/env python3
 """
-Plot time evolution of snow water equivalent during one top S2S event.
+Compute ERA5 daily snowmelt climatologies from yearly snow water equivalent files.
 
-The script:
-1. Selects one catchment and one ranked event
-2. Uses date_of_max as event day 0
-3. Plots event-relative days -2, -1, 0, +1, +2
-4. Plots snow water equivalent, variable 'sd'
-5. Converts raw sd from meters to mm
-6. Uses the 0.5x0.5 file first, then falls back to the matching 0.25x0.25 file
-7. Overlays the selected catchment boundary in red
+Steps:
+1. Read yearly NetCDF files with xarray.open_mfdataset.
+2. Compute daily snowmelt as positive decreases in sd:
+      melt = sd(t-1) - sd(t)
+3. Convert melt from meters to millimeters.
+4. Calculate monthly climatological mean, median, or standard deviation.
+5. Plot 12 monthly panels on a Lambert Conformal map.
 """
 
-# =============================================================================
+# ============================================================
 # Imports
-# =============================================================================
-import os
+# ============================================================
+
+from pathlib import Path
+
 import numpy as np
 import xarray as xr
 import matplotlib.pyplot as plt
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
-import geopandas as gpd
-from shapely.geometry import Polygon, MultiPolygon
 
 from Dunnsigouin_etal_2026 import config
 
 
-# =============================================================================
+# ============================================================
 # User input parameters
-# =============================================================================
+# ============================================================
 
-path_in_catchment = config.dirs["nve"]
-path_out = config.dirs["fig"]
+START_YEAR = 1995
+END_YEAR = 2025
 
-CATCHMENT_NAME = "drammen"   # "drammen" or "glomma"
-EVENT_RANK = 1               # choose 1-5
+STATISTIC = "mean"  # Options: "mean", "median", "std"
 
-filename_out = (
-    f"{path_out}fig-event-evolution-sd-"
-    f"{CATCHMENT_NAME}-rank{EVENT_RANK}.png"
-)
-write2file = False
+VAR_NAME = "sd"
 
-# --- Variable name
-SNOW_VAR = "sd"
-
-# --- Event-relative days
-EVENT_LAGS = [-2, -1, 0, 1, 2]
-
-# --- Figure settings
-FIG_WIDTH_IN = 16
-FIG_HEIGHT_IN = 12
-
-MAP_WSPACE = 0.02
-MAP_HSPACE = 0.08
-
-tick_labelsize = 12
-axis_labelsize = 13
-title_fontsize = 14
-
-# --- Map projection and extent
 CENTRAL_LON = 10.0
 CENTRAL_LAT = 62.0
 MAP_EXTENT = [4.75, 12.75, 58.0, 63.0]
 
-# --- Snow water equivalent plotting
-SNOW_LEVELS = np.arange(0, 105, 5)
-SNOW_CMAP = "Purples"
+PATH_IN = Path(config.dirs["era5_continuous_daily_scandinavia"],VAR_NAME)
+FILE_TEMPLATE = "sd_0.25x0.25_{year}.nc"
 
-# --- Catchment CRS if missing
-CATCHMENT_CRS_IF_MISSING = "EPSG:4326"
+CMAP = "RdBu_r"
+CBAR_MIN = -10
+CBAR_MAX = 10
+CBAR_INTERVAL = 2
 
-
-# =============================================================================
-# Catchment metadata and event metadata
-# =============================================================================
-def get_catchment_metadata(catchment_name):
-    catchments = {
-        "drammen": {
-            "label": "Drammen",
-            "geojson": "catchment_nve_regine_drammen.geojson",
-        },
-        "glomma": {
-            "label": "Glomma",
-            "geojson": "catchment_nve_regine_glomma.geojson",
-        },
-    }
-
-    if catchment_name not in catchments:
-        raise ValueError(
-            f"Unknown catchment: {catchment_name}. "
-            f"Available catchments: {list(catchments.keys())}"
-        )
-
-    return catchments[catchment_name]
+write2file = False
+OUTPUT_FIG = f"xy_era5_monthly_snowmelt_climatology_{STATISTIC}_{START_YEAR}_{END_YEAR}.png"
 
 
-def get_top_events(catchment_name):
-    events = {
-        "drammen": [
-            {
-                "rank": 1,
-                "max_value": 100.26,
-                "model_type": "hindcast",
-                "forecast_date": "2021-04-26",
-                "date_of_max": "2021-06-06",
-                "hdate": 20150426.0,
-                "ensemble_member": 7,
-                "source_file":
-                    "/nird/datapeak/NS9873K/etdu/raw/s2s/mars/ecmwf/"
-                    "hindcast/sfc/daily/europe/tp24/"
-                    "tp24_0.5x0.5_2021-04-26.nc",
-            },
-            {
-                "rank": 2,
-                "max_value": 85.55,
-                "model_type": "hindcast",
-                "forecast_date": "2022-04-28",
-                "date_of_max": "2022-06-02",
-                "hdate": 20140428.0,
-                "ensemble_member": 2,
-                "source_file":
-                    "/nird/datapeak/NS9873K/etdu/raw/s2s/mars/ecmwf/"
-                    "hindcast/sfc/daily/europe/tp24/"
-                    "tp24_0.5x0.5_2022-04-28.nc",
-            },
-            {
-                "rank": 3,
-                "max_value": 84.83,
-                "model_type": "hindcast",
-                "forecast_date": "2021-04-29",
-                "date_of_max": "2021-05-28",
-                "hdate": 20190429.0,
-                "ensemble_member": 4,
-                "source_file":
-                    "/nird/datapeak/NS9873K/etdu/raw/s2s/mars/ecmwf/"
-                    "hindcast/sfc/daily/europe/tp24/"
-                    "tp24_0.5x0.5_2021-04-29.nc",
-            },
-            {
-                "rank": 4,
-                "max_value": 81.35,
-                "model_type": "hindcast",
-                "forecast_date": "2020-04-23",
-                "date_of_max": "2020-06-03",
-                "hdate": 20150423.0,
-                "ensemble_member": 51,
-                "source_file":
-                    "/nird/datapeak/NS9873K/etdu/raw/s2s/mars/ecmwf/"
-                    "hindcast/sfc/daily/europe/tp24/"
-                    "tp24_0.5x0.5_2020-04-23.nc",
-            },
-            {
-                "rank": 5,
-                "max_value": 77.56,
-                "model_type": "forecast",
-                "forecast_date": "2021-04-26",
-                "date_of_max": "2021-06-07",
-                "hdate": None,
-                "ensemble_member": 17,
-                "source_file":
-                    "/nird/datapeak/NS9873K/etdu/raw/s2s/mars/ecmwf/"
-                    "forecast/sfc/daily/europe/tp24/"
-                    "tp24_0.5x0.5_2021-04-26.nc",
-            },
-        ],
+# ============================================================
+# Functions
+# ============================================================
 
-        "glomma": [
-            {
-                "rank": 1,
-                "max_value": 101.00,
-                "model_type": "hindcast",
-                "forecast_date": "2022-04-28",
-                "date_of_max": "2022-06-02",
-                "hdate": 20140428.0,
-                "ensemble_member": 2,
-                "source_file":
-                    "/nird/datapeak/NS9873K/etdu/raw/s2s/mars/ecmwf/"
-                    "hindcast/sfc/daily/europe/tp24/"
-                    "tp24_0.5x0.5_2022-04-28.nc",
-            },
-            {
-                "rank": 2,
-                "max_value": 73.97,
-                "model_type": "hindcast",
-                "forecast_date": "2022-04-21",
-                "date_of_max": "2022-05-31",
-                "hdate": 20160421.0,
-                "ensemble_member": 2,
-                "source_file":
-                    "/nird/datapeak/NS9873K/etdu/raw/s2s/mars/ecmwf/"
-                    "hindcast/sfc/daily/europe/tp24/"
-                    "tp24_0.5x0.5_2022-04-21.nc",
-            },
-            {
-                "rank": 3,
-                "max_value": 63.55,
-                "model_type": "hindcast",
-                "forecast_date": "2022-04-11",
-                "date_of_max": "2022-05-10",
-                "hdate": 20150411.0,
-                "ensemble_member": 3,
-                "source_file":
-                    "/nird/datapeak/NS9873K/etdu/raw/s2s/mars/ecmwf/"
-                    "hindcast/sfc/daily/europe/tp24/"
-                    "tp24_0.5x0.5_2022-04-11.nc",
-            },
-            {
-                "rank": 4,
-                "max_value": 61.12,
-                "model_type": "hindcast",
-                "forecast_date": "2021-04-15",
-                "date_of_max": "2021-05-29",
-                "hdate": 20150415.0,
-                "ensemble_member": 8,
-                "source_file":
-                    "/nird/datapeak/NS9873K/etdu/raw/s2s/mars/ecmwf/"
-                    "hindcast/sfc/daily/europe/tp24/"
-                    "tp24_0.5x0.5_2021-04-15.nc",
-            },
-            {
-                "rank": 5,
-                "max_value": 57.02,
-                "model_type": "forecast",
-                "forecast_date": "2023-04-03",
-                "date_of_max": "2023-04-29",
-                "hdate": None,
-                "ensemble_member": 43,
-                "source_file":
-                    "/nird/datapeak/NS9873K/etdu/raw/s2s/mars/ecmwf/"
-                    "forecast/sfc/daily/europe/tp24/"
-                    "tp24_0.5x0.5_2023-04-03.nc",
-            },
-        ],
-    }
+def get_file_list(path_in, start_year, end_year, file_template):
+    """Return list of yearly NetCDF files within the selected year range."""
+    files = [
+        path_in / file_template.format(year=year)
+        for year in range(start_year, end_year + 1)
+    ]
 
-    if catchment_name not in events:
-        raise ValueError(
-            f"No event metadata available for catchment: {catchment_name}"
-        )
+    missing = [f for f in files if not f.exists()]
+    if missing:
+        raise FileNotFoundError(f"Missing files, e.g. {missing[:5]}")
 
-    return events[catchment_name]
+    return files
 
 
-def get_selected_event(catchment_name, event_rank):
-    for event in get_top_events(catchment_name):
-        if event["rank"] == event_rank:
-            return event
-
-    raise ValueError(
-        f"Rank {event_rank} not found for catchment {catchment_name}."
+def open_sd_dataset(files, var_name):
+    """Open yearly sd files as one xarray dataset."""
+    ds = xr.open_mfdataset(
+        files,
+        combine="by_coords",
+        chunks={"time": 365},
+        parallel=True,
     )
 
-
-# =============================================================================
-# File helpers
-# =============================================================================
-def get_early_lead_file(source_file):
-    return source_file.replace("0.5x0.5", "0.25x0.25")
-
-
-def get_snow_file(precip_file):
-    """
-    Infer matching snow water equivalent file from precipitation file.
-
-    Assumes same directory and filename convention, replacing tp24 with sd.
-    """
-    return precip_file.replace("/tp24/", "/sd/").replace("tp24_", "sd_")
-
-
-def get_time_coord_name(da):
-    for name in ["time", "valid_time"]:
-        if name in da.dims or name in da.coords:
-            return name
-
-    raise ValueError("Could not identify time coordinate.")
-
-
-def get_lon_lat(da):
-    lon = da["longitude"] if "longitude" in da.coords else da["lon"]
-    lat = da["latitude"] if "latitude" in da.coords else da["lat"]
-    return lon, lat
-
-
-# =============================================================================
-# Data loading and selection
-# =============================================================================
-def load_dataset(filename):
-    """
-    Open snow water equivalent dataset and convert from meters to mm.
-    """
-    ds = xr.open_dataset(filename)
-
-    if SNOW_VAR in ds:
-        ds[SNOW_VAR] = ds[SNOW_VAR] * 1000.0
-        ds[SNOW_VAR].attrs["units"] = "mm"
+    if var_name not in ds:
+        raise KeyError(f"Variable '{var_name}' not found in dataset.")
 
     return ds
 
 
-def select_event_member(ds, event):
-    da = ds[SNOW_VAR]
-
-    hdate_dim_candidates = ["hdate", "hindcast_date"]
-    member_dim_candidates = ["number", "member", "ensemble_member", "realization"]
-
-    if event["model_type"] == "hindcast":
-        for dim in hdate_dim_candidates:
-            if dim in da.dims or dim in da.coords:
-                da = da.sel({dim: event["hdate"]},method='nearest')
-                break
-
-    for dim in member_dim_candidates:
-        if dim in da.dims or dim in da.coords:
-            da = da.sel({dim: event["ensemble_member"]},method='nearest')
-            break
-
-    return da
-
-
-def has_date(da, target_date):
-    time_name = get_time_coord_name(da)
-    target_date = np.datetime64(target_date, "ns")
-    times = da[time_name].values.astype("datetime64[ns]")
-    return target_date in times
-
-
-def select_date(da, target_date):
-    time_name = get_time_coord_name(da)
-    target_date = np.datetime64(target_date, "ns")
-    return da.sel({time_name: target_date})
-
-
-def load_single_day_snow(event, target_date):
+def calculate_daily_snowmelt(ds, var_name):
     """
-    Load snow water equivalent for one event-relative target date.
+    Calculate daily change as sd(t-1) - sd(t).
 
-    Try the original 0.5x0.5 file first.
-    If target_date is missing, try the matching 0.25x0.25 file.
+    Positive values mean sd decreased.
+    Negative values mean sd increased.
+    Output is in mm water equivalent per day.
     """
-    base_file = get_snow_file(event["source_file"])
+    sd = ds[var_name]
 
-    files_to_try = [
-        base_file,
-        get_early_lead_file(base_file),
+    melt = sd.diff("time")   # equivalent to sd(t-1) - sd(t)
+    melt = melt * 1000.0      # m to mm
+
+    melt.name = "snowmelt"
+    melt.attrs["units"] = "mm day-1"
+    melt.attrs["long_name"] = "Daily sd(t-1) minus sd(t)"
+
+    return melt
+
+
+def monthly_climatology(melt, statistic):
+    """Calculate monthly climatological mean, median, or standard deviation."""
+    statistic = statistic.lower()
+
+    if statistic == "mean":
+        clim = melt.groupby("time.month").mean("time", skipna=True)
+    elif statistic == "median":
+        clim = melt.groupby("time.month").median("time", skipna=True)
+    elif statistic == "std":
+        clim = melt.groupby("time.month").std("time", skipna=True)
+    else:
+        raise ValueError("STATISTIC must be one of: 'mean', 'median', 'std'.")
+
+    clim.name = f"monthly_snowmelt_{statistic}"
+    return clim
+
+
+def plot_monthly_climatology(
+    clim,
+    statistic,
+    output_fig,
+    write2file,
+    cmap,
+    cbar_min,
+    cbar_max,
+    cbar_interval,
+):
+    """Plot 12 monthly climatology panels on a Lambert Conformal map."""
+    month_names = [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+        "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"
     ]
 
-    for filename in files_to_try:
-
-        if not os.path.exists(filename):
-            continue
-
-        ds = load_dataset(filename)
-
-        try:
-            da = select_event_member(ds, event)
-
-            if has_date(da, target_date):
-                da_day = select_date(da, target_date).load()
-                return da_day, filename
-
-        finally:
-            ds.close()
-
-    raise ValueError(
-        f"Could not find date {target_date} for {SNOW_VAR} in either "
-        f"0.5x0.5 or 0.25x0.25 file."
+    proj = ccrs.LambertConformal(
+        central_longitude=CENTRAL_LON,
+        central_latitude=CENTRAL_LAT,
     )
 
+    data_crs = ccrs.PlateCarree()
 
-# =============================================================================
-# Catchment geometry helper
-# =============================================================================
-def load_catchment_outer_boundary(
-    filename,
-    base_dir,
-    crs_if_missing="EPSG:4326",
-):
-    plot_crs = "EPSG:4326"
-    metric_crs = "EPSG:32633"
+    lon = clim["longitude"]
+    lat = clim["latitude"]
 
-    gdf = gpd.read_file(base_dir + filename)
-
-    if gdf.crs is None:
-        gdf = gdf.set_crs(crs_if_missing)
-
-    gdf_metric = gdf.to_crs(metric_crs)
-    union_geom = gdf_metric.geometry.union_all()
-
-    if isinstance(union_geom, Polygon):
-        outer_geom = Polygon(union_geom.exterior)
-    elif isinstance(union_geom, MultiPolygon):
-        outer_geom = MultiPolygon(
-            [Polygon(poly.exterior) for poly in union_geom.geoms]
-        )
-    else:
-        outer_geom = union_geom
-
-    outer_gdf = (
-        gpd.GeoDataFrame(geometry=[outer_geom], crs=metric_crs)
-        .to_crs(plot_crs)
-    )
-
-    return outer_gdf.geometry.iloc[0]
-
-
-# =============================================================================
-# Plot setup helpers
-# =============================================================================
-def make_map_axes(central_lon=10.0, central_lat=62.0, extent=None):
-    proj_map = ccrs.LambertConformal(
-        central_longitude=central_lon,
-        central_latitude=central_lat,
-    )
-    proj_data = ccrs.PlateCarree()
+    levels = np.arange(cbar_min, cbar_max + cbar_interval, cbar_interval)
 
     fig, axes = plt.subplots(
-        2,
-        3,
-        figsize=(FIG_WIDTH_IN, FIG_HEIGHT_IN),
-        subplot_kw={"projection": proj_map},
-        constrained_layout=False,
+        3, 4,
+        figsize=(14, 10),
+        subplot_kw={"projection": proj},
+        constrained_layout=True,
     )
 
-    for i, ax in enumerate(axes.flat):
+    axes = axes.ravel()
 
-        if i == 5:
-            ax.set_axis_off()
-            continue
+    for i, ax in enumerate(axes):
+        month = i + 1
+        field = clim.sel(month=month)
 
-        ax.coastlines(resolution="10m", linewidth=0.5)
-        ax.add_feature(cfeature.BORDERS.with_scale("10m"), linewidth=0.4)
-
-        if extent is not None:
-            ax.set_extent(extent, crs=proj_data)
-
-    return fig, axes, proj_data
-
-
-def centers_to_edges(centers):
-    centers = np.asarray(centers)
-
-    if centers.ndim != 1:
-        raise ValueError("centers must be 1D")
-    if centers.size < 2:
-        raise ValueError("Need at least two centers to infer edges")
-
-    edges = np.empty(centers.size + 1, dtype=float)
-    edges[1:-1] = 0.5 * (centers[:-1] + centers[1:])
-    edges[0] = centers[0] - 0.5 * (centers[1] - centers[0])
-    edges[-1] = centers[-1] + 0.5 * (centers[-1] - centers[-2])
-
-    return edges
-
-
-# =============================================================================
-# Plotting helpers
-# =============================================================================
-def plot_snow(ax, da_snow, proj_data):
-    lon, lat = get_lon_lat(da_snow)
-    snow = da_snow.values
-
-    lon_edges = centers_to_edges(lon.values)
-    lat_edges = centers_to_edges(lat.values)
-
-    if lat_edges[0] > lat_edges[-1]:
-        lat_edges = lat_edges[::-1]
-        snow = snow[::-1, :]
-
-    if lon_edges[0] > lon_edges[-1]:
-        lon_edges = lon_edges[::-1]
-        snow = snow[:, ::-1]
-
-    lon_e, lat_e = np.meshgrid(lon_edges, lat_edges)
-
-    mesh = ax.pcolormesh(
-        lon_e,
-        lat_e,
-        snow,
-        cmap=SNOW_CMAP,
-        vmin=SNOW_LEVELS.min(),
-        vmax=SNOW_LEVELS.max(),
-        shading="auto",
-        transform=proj_data,
-    )
-
-    return mesh
-
-
-def plot_catchment_boundary(ax, geometry, proj_data):
-    ax.add_geometries(
-        [geometry],
-        crs=proj_data,
-        facecolor="none",
-        edgecolor="red",
-        linewidth=1.8,
-        zorder=7,
-    )
-
-
-def finalize_figure(
-    fig,
-    axes,
-    mesh,
-    event,
-    catchment_metadata,
-    event_days,
-    source_files_used,
-    savepath=None,
-    write2file=False,
-):
-    plot_axes = [axes[0, 0], axes[0, 1], axes[0, 2], axes[1, 0], axes[1, 1]]
-
-    for ax, lag, date, source_file in zip(
-        plot_axes,
-        EVENT_LAGS,
-        event_days,
-        source_files_used,
-    ):
-        basename = os.path.basename(source_file)
-
-        if "0.25x0.25" in basename:
-            resolution_text = "0.25°"
-        elif "0.5x0.5" in basename:
-            resolution_text = "0.5°"
-        else:
-            resolution_text = "?"
-
-        ax.set_title(
-            f"Day {lag:+d}: {date} ({resolution_text})",
-            fontsize=title_fontsize,
-            pad=3,
+        im = ax.pcolormesh(
+            lon,
+            lat,
+            field,
+            transform=data_crs,
+            shading="auto",
+            cmap=cmap,
+            vmin=cbar_min,
+            vmax=cbar_max,
         )
 
-    fig.suptitle(
-        (
-            f"{catchment_metadata['label']} | "
-            f"Rank {event['rank']} precipitation event | "
-            f"max 2-day precipitation = {event['max_value']:.1f} mm"
-        ),
-        fontsize=title_fontsize + 2,
-        y=0.98,
-    )
-
-    fig.subplots_adjust(
-        left=0.03,
-        right=0.98,
-        bottom=0.06,
-        top=0.92,
-        wspace=MAP_WSPACE,
-        hspace=MAP_HSPACE,
-    )
-
-    cax = fig.add_axes([0.69, 0.27, 0.23, 0.025])
+        ax.set_extent(MAP_EXTENT, crs=data_crs)
+        ax.coastlines(resolution="10m", linewidth=0.7)
+        ax.add_feature(cfeature.BORDERS, linewidth=0.5)
+        ax.add_feature(cfeature.LAKES, linewidth=0.3, alpha=0.5)
+        ax.set_title(month_names[i])
 
     cbar = fig.colorbar(
-        mesh,
-        cax=cax,
+        im,
+        ax=axes,
         orientation="horizontal",
+        fraction=0.05,
+        pad=0.04,
+        ticks=levels,
+        extend="both",
     )
-    cbar.set_label("Snow water equivalent (mm)", fontsize=axis_labelsize)
-    cbar.ax.tick_params(labelsize=tick_labelsize)
+
+    cbar.set_label(f"Snowmelt {statistic} [mm day$^{{-1}}$]")
+
+    fig.suptitle(
+        f"Monthly climatological snowmelt {statistic}, "
+        f"{START_YEAR}–{END_YEAR}",
+        fontsize=15,
+    )
 
     if write2file:
-        fig.savefig(savepath, dpi=300)
+        fig.savefig(output_fig, dpi=300, bbox_inches="tight")
+        print(f"Saved figure to: {output_fig}")
+        plt.close(fig)
 
-    plt.show()
+    plt.show()        
 
-
-# =============================================================================
+# ============================================================
 # Main script
-# =============================================================================
+# ============================================================
+
 if __name__ == "__main__":
 
-    catchment_metadata = get_catchment_metadata(CATCHMENT_NAME)
-    event = get_selected_event(CATCHMENT_NAME, EVENT_RANK)
+    files = get_file_list(PATH_IN, START_YEAR, END_YEAR, FILE_TEMPLATE)
 
-    date_of_max = np.datetime64(event["date_of_max"], "D")
+    ds = open_sd_dataset(files, VAR_NAME)
 
-    event_days = [
-        str(date_of_max + np.timedelta64(lag, "D"))
-        for lag in EVENT_LAGS
-    ]
+    melt = calculate_daily_snowmelt(ds, VAR_NAME)
 
-    catchment_boundary = load_catchment_outer_boundary(
-        catchment_metadata["geojson"],
-        base_dir=path_in_catchment,
-        crs_if_missing=CATCHMENT_CRS_IF_MISSING,
+    clim = monthly_climatology(melt, STATISTIC)
+
+    plot_monthly_climatology(
+        clim,
+        STATISTIC,
+        OUTPUT_FIG,
+        write2file,
+        CMAP,
+        CBAR_MIN,
+        CBAR_MAX,
+        CBAR_INTERVAL,
     )
 
-    fig, axes, proj_data = make_map_axes(
-        central_lon=CENTRAL_LON,
-        central_lat=CENTRAL_LAT,
-        extent=MAP_EXTENT,
-    )
+    ds.close()
 
-    plot_axes = [
-        axes[0, 0],
-        axes[0, 1],
-        axes[0, 2],
-        axes[1, 0],
-        axes[1, 1],
-    ]
+    print(f"Saved figure to: {OUTPUT_FIG}")
 
-    mesh = None
-    source_files_used = []
 
-    for ax, lag, target_date in zip(plot_axes, EVENT_LAGS, event_days):
-
-        da_snow, source_used = load_single_day_snow(
-            event,
-            target_date=target_date,
-        )
-
-        source_files_used.append(source_used)
-
-        mesh = plot_snow(
-            ax,
-            da_snow,
-            proj_data,
-        )
-
-        plot_catchment_boundary(
-            ax,
-            catchment_boundary,
-            proj_data,
-        )
-
-    finalize_figure(
-        fig,
-        axes,
-        mesh,
-        event,
-        catchment_metadata,
-        event_days,
-        source_files_used,
-        savepath=filename_out,
-        write2file=write2file,
-    )

@@ -18,6 +18,8 @@ era5_continuous_daily = raw + 'era5/continuous-format/daily/europe/'
 era5_forecast_daily   = raw + 'era5/s2s-model-format/europe/forecast/daily/'
 era5_hindcast_daily   = raw + 'era5/s2s-model-format/europe/hindcast/daily/'
 
+era5_continuous_daily_scandinavia = raw + 'era5/continuous-format/daily/scandinavia/'
+
 senorge_continuous_daily = '/nird/datapeak/NS9873K/DATA/senorge/'
 
 nve                  = processed + 'nve/'
@@ -36,6 +38,7 @@ dirs = {"proj":proj,
         "era5_continuous_daily":era5_continuous_daily,
         "era5_forecast_daily":era5_forecast_daily,
         "era5_hindcast_daily":era5_hindcast_daily,
+        "era5_continuous_daily_scandinavia":era5_continuous_daily_scandinavia,
         "nve": nve,
         "obs": obs,
         "era5_processed":era5_processed,
