@@ -92,7 +92,7 @@ SNOWMELT_THRESHOLD = 0.0       # melt if SWE change < threshold
 
 # Hatching settings
 SNOWMELT_HATCH_PATTERN = "////"
-SNOWMELT_HATCH_COLOR = "darkorange"
+SNOWMELT_HATCH_COLOR = "orange"
 SNOWMELT_HATCH_LINEWIDTH = 0.6
 
 # Stippling settings
