@@ -38,7 +38,7 @@ from Dunnsigouin_etal_2026 import config
 path_in_catchment = config.dirs["nve"]
 path_out = config.dirs["fig"]
 
-CATCHMENT_NAME = "drammen"   # "drammen" or "glomma"
+CATCHMENT_NAME = "glomma"   # "drammen" or "glomma"
 EVENT_RANK = 1               # choose 1-5
 ACCUMULATION_DAYS = 1        # choose 1 or 2
 
