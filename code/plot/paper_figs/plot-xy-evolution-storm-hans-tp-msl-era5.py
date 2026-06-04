@@ -79,8 +79,8 @@ filename_out = (
 )
 write2file = True
 
-FIG_WIDTH_IN = 16
-FIG_HEIGHT_IN = 12
+FIG_WIDTH_IN = 12
+FIG_HEIGHT_IN = 8
 
 MAP_WSPACE = 0.02
 MAP_HSPACE = 0.08
