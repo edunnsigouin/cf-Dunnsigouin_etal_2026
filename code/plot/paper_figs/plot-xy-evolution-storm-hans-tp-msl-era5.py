@@ -86,9 +86,9 @@ MAP_WSPACE = 0.02
 MAP_HSPACE = 0.08
 
 tick_labelsize = 12
-axis_labelsize = 13
-title_fontsize = 14
-contour_labelsize = 9
+axis_labelsize = 11
+title_fontsize = 13
+contour_labelsize = 10
 
 CENTRAL_LON = 10.0
 CENTRAL_LAT = 62.0
@@ -386,7 +386,7 @@ def finalize_figure(
         hspace=MAP_HSPACE,
     )
 
-    cax = fig.add_axes([0.675, 0.38, 0.255, 0.025])
+    cax = fig.add_axes([0.675, 0.35, 0.255, 0.025])
 
     cbar = fig.colorbar(
         mesh,
@@ -421,12 +421,10 @@ def finalize_figure(
     legend_ax.legend(
         handles=legend_handles,
         loc="center",
-        bbox_to_anchor=(0.5, 1.0),
+        bbox_to_anchor=(0.56, 1.0),
         frameon=False,
         fontsize=axis_labelsize,
     )
-
-
     
     if write2file:
         fig.savefig(savepath, dpi=300)
