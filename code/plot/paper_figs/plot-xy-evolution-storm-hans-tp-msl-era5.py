@@ -414,14 +414,14 @@ def finalize_figure(
             [0], [0],
             color=MSL_CONTOUR_COLOR,
             linewidth=MSL_CONTOUR_LINEWIDTH,
-            label="Mean sea level pressure contours (hPa)",
+            label="Mean sea level pressure (hPa)",
         ),
     ]
 
     legend_ax.legend(
         handles=legend_handles,
         loc="center",
-        bbox_to_anchor=(0.56, 1.0),
+        bbox_to_anchor=(0.5, 1.0),
         frameon=False,
         fontsize=axis_labelsize,
     )
