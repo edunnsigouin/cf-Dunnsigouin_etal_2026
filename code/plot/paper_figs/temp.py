@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """
-Plot ERA5 daily precipitation and mean sea level pressure during Storm Hans.
+Plot one high-ranking S2S precipitation event.
 
-The script:
-1. Plots five fixed event-relative dates from 2023-08-06 to 2023-08-10.
-2. Shows daily ERA5 precipitation as shading.
-3. Shows ERA5 mean sea level pressure as labelled grey contours.
-4. Overlays a selected catchment boundary.
+The figure uses the same format as the ERA5 Storm Hans plot:
+1. Five event-relative panels: -2, -1, 0, +1, +2.
+2. Precipitation as shading.
+3. Mean sea level pressure as labelled grey contours.
+4. Snowmelt as hatching or stippling.
+5. Selected catchment boundary in red.
 """
 
 from pathlib import Path
@@ -17,6 +18,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import xarray as xr
 from matplotlib.lines import Line2D
+from matplotlib.patches import Patch
 from shapely.geometry import MultiPolygon, Polygon
 
 from Dunnsigouin_etal_2026 import config
@@ -26,40 +28,19 @@ from Dunnsigouin_etal_2026 import config
 # Settings
 # =============================================================================
 
-YEAR = 2023
+CATCHMENT_NAME = "drammen"  # options: "drammen", "glomma"
+EVENT_RANK = 1              # options: 1-5
 
 EVENT_LAGS = [-2, -1, 0, 1, 2]
-EVENT_DATES = [
-    "2023-08-06",
-    "2023-08-07",
-    "2023-08-08",
-    "2023-08-09",
-    "2023-08-10",
-]
-
-# Change this to switch catchment.
-CATCHMENT_NAME = "drammen"  # options: "drammen", "glomma"
-
-CATCHMENTS = {
-    "drammen": {
-        "filename": "catchment_nve_regine_drammen.geojson",
-        "label": "Drammen catchment",
-    },
-    "glomma": {
-        "filename": "catchment_nve_regine_glomma.geojson",
-        "label": "Glomma catchment",
-    },
-}
 
 PRECIP_VAR = "tp24"
 MSL_VAR = "msl"
+SNOW_VAR = "sd"
 
 PATH_OUT = config.dirs["fig"]
 PATH_CATCHMENT = config.dirs["nve"]
-PATH_ERA5 = Path(config.dirs["era5_continuous_daily"])
 
-PRECIP_FILE = PATH_ERA5 / PRECIP_VAR / f"{PRECIP_VAR}_0.5x0.5_{YEAR}.nc"
-MSL_FILE = PATH_ERA5 / MSL_VAR / f"{MSL_VAR}_0.5x0.5_{YEAR}.nc"
+S2S_BASE_DIR = Path("/nird/datapeak/NS9873K/etdu/raw/s2s/mars/ecmwf")
 
 CATCHMENT_CRS_IF_MISSING = "EPSG:4326"
 CATCHMENT_EDGE_COLOR = "red"
@@ -89,7 +70,125 @@ MSL_CONTOUR_LEVELS = np.arange(975, 1045, 5)
 MSL_CONTOUR_COLOR = "0.7"
 MSL_CONTOUR_LINEWIDTH = 1.5
 
-WRITE_TO_FILE =	True
+SNOWMELT_OVERLAY = "hatching"  # options: "hatching", "stippling"
+SNOWMELT_THRESHOLD = 0.0
+
+SNOWMELT_HATCH_PATTERN = "////"
+SNOWMELT_HATCH_COLOR = "orange"
+SNOWMELT_HATCH_LINEWIDTH = 1.0
+
+SNOWMELT_DOT_COLOR = "darkorange"
+SNOWMELT_DOT_SIZE = 4
+SNOWMELT_DOT_ALPHA = 0.7
+SNOWMELT_DOT_STRIDE = 1
+
+SNOWMELT_ZORDER = 8
+
+WRITE_TO_FILE = True
+
+
+# =============================================================================
+# Catchment and event metadata
+# =============================================================================
+
+CATCHMENTS = {
+    "drammen": {
+        "filename": "catchment_nve_regine_drammen.geojson",
+        "label": "Drammen catchment",
+    },
+    "glomma": {
+        "filename": "catchment_nve_regine_glomma.geojson",
+        "label": "Glomma catchment",
+    },
+}
+
+
+TOP_EVENTS = {
+    "drammen": [
+        {
+            "rank": 1,
+            "model_type": "hindcast",
+            "forecast_date": "2021-04-26",
+            "date_of_max": "2021-06-06",
+            "hdate": 20150426.0,
+            "ensemble_member": 7,
+        },
+        {
+            "rank": 2,
+            "model_type": "hindcast",
+            "forecast_date": "2022-04-28",
+            "date_of_max": "2022-06-02",
+            "hdate": 20140428.0,
+            "ensemble_member": 2,
+        },
+        {
+            "rank": 3,
+            "model_type": "hindcast",
+            "forecast_date": "2021-04-29",
+            "date_of_max": "2021-05-28",
+            "hdate": 20190429.0,
+            "ensemble_member": 4,
+        },
+        {
+            "rank": 4,
+            "model_type": "hindcast",
+            "forecast_date": "2020-04-23",
+            "date_of_max": "2020-06-03",
+            "hdate": 20150423.0,
+            "ensemble_member": 51,
+        },
+        {
+            "rank": 5,
+            "model_type": "forecast",
+            "forecast_date": "2021-04-26",
+            "date_of_max": "2021-06-07",
+            "hdate": None,
+            "ensemble_member": 17,
+        },
+    ],
+    "glomma": [
+        {
+            "rank": 1,
+            "model_type": "hindcast",
+            "forecast_date": "2022-04-28",
+            "date_of_max": "2022-06-02",
+            "hdate": 20140428.0,
+            "ensemble_member": 2,
+        },
+        {
+            "rank": 2,
+            "model_type": "hindcast",
+            "forecast_date": "2022-04-21",
+            "date_of_max": "2022-05-31",
+            "hdate": 20160421.0,
+            "ensemble_member": 2,
+        },
+        {
+            "rank": 3,
+            "model_type": "hindcast",
+            "forecast_date": "2022-04-11",
+            "date_of_max": "2022-05-10",
+            "hdate": 20150411.0,
+            "ensemble_member": 3,
+        },
+        {
+            "rank": 4,
+            "model_type": "hindcast",
+            "forecast_date": "2021-04-15",
+            "date_of_max": "2021-05-29",
+            "hdate": 20150415.0,
+            "ensemble_member": 8,
+        },
+        {
+            "rank": 5,
+            "model_type": "forecast",
+            "forecast_date": "2023-04-03",
+            "date_of_max": "2023-04-29",
+            "hdate": None,
+            "ensemble_member": 43,
+        },
+    ],
+}
 
 
 # =============================================================================
@@ -108,13 +207,46 @@ def get_catchment_settings(catchment_name):
     return CATCHMENTS[catchment_name]
 
 
-def make_output_filename(catchment_name):
-    """Create output filename for the selected catchment."""
+def get_selected_event(catchment_name, event_rank):
+    """Return metadata for the selected ranked event."""
+    if catchment_name not in TOP_EVENTS:
+        raise ValueError(f"No event metadata available for '{catchment_name}'.")
+
+    for event in TOP_EVENTS[catchment_name]:
+        if event["rank"] == event_rank:
+            return event
+
+    raise ValueError(f"Rank {event_rank} not found for '{catchment_name}'.")
+
+
+def make_s2s_file(event, variable, grid="0.5x0.5"):
+    """Create the expected S2S file path."""
     return (
-        f"{PATH_OUT}xy-hans-evolution-era5-tp-msl-"
-        f"{catchment_name}-"
-        f"{EVENT_DATES[0]}-{EVENT_DATES[-1]}.png"
+        S2S_BASE_DIR
+        / event["model_type"]
+        / "sfc"
+        / "daily"
+        / "europe"
+        / variable
+        / f"{variable}_{grid}_{event['forecast_date']}.nc"
     )
+
+
+def make_output_filename(catchment_name, event_rank):
+    """Create output filename."""
+    return (
+        f"{PATH_OUT}xy-top{event_rank}-{catchment_name}-event-evolution-tp-msl-snowmelt.png"
+    )
+
+
+def get_event_days(event):
+    """Return event-relative dates as strings."""
+    date_of_max = np.datetime64(event["date_of_max"], "D")
+
+    return [
+        str(date_of_max + np.timedelta64(lag, "D"))
+        for lag in EVENT_LAGS
+    ]
 
 
 # =============================================================================
@@ -157,8 +289,8 @@ def centers_to_edges(centers):
 # Data loading
 # =============================================================================
 
-def open_era5_variable(filename, variable):
-    """Open one ERA5 variable and convert to plotting units."""
+def open_s2s_variable(filename, variable):
+    """Open one S2S variable and convert to plotting units."""
     filename = Path(filename)
 
     if not filename.exists():
@@ -177,24 +309,100 @@ def open_era5_variable(filename, variable):
         ds[variable] = ds[variable] / 100.0
         ds[variable].attrs["units"] = "hPa"
 
+    elif variable == SNOW_VAR:
+        ds[variable] = ds[variable] * 1000.0
+        ds[variable].attrs["units"] = "mm"
+
     return ds
+
+
+def select_event_member(ds, event, variable):
+    """Select hindcast date and ensemble member, if present."""
+    da = ds[variable]
+
+    if event["model_type"] == "hindcast":
+        for name in ["hdate", "hindcast_date"]:
+            if name in da.dims or name in da.coords:
+                da = da.sel({name: event["hdate"]})
+                break
+
+    for name in ["number", "member", "ensemble_member", "realization"]:
+        if name in da.dims or name in da.coords:
+            da = da.sel({name: event["ensemble_member"]})
+            break
+
+    return da
+
+
+def has_date(da, target_date):
+    """Check whether a date exists in the DataArray."""
+    time_name = get_time_coord_name(da)
+    target_date = np.datetime64(target_date, "ns")
+    times = da[time_name].values.astype("datetime64[ns]")
+
+    return target_date in times
 
 
 def select_date(da, target_date):
     """Select one date from a DataArray."""
     time_name = get_time_coord_name(da)
     target_date = np.datetime64(target_date, "ns")
+
     return da.sel({time_name: target_date}).load()
 
 
-def load_precipitation(ds_tp, target_date):
-    """Load daily precipitation for one date."""
-    return select_date(ds_tp[PRECIP_VAR], target_date)
+def load_daily_variable(event, target_date, variable):
+    """Load one daily S2S field, trying 0.5° first and 0.25° second."""
+    files_to_try = [
+        make_s2s_file(event, variable, grid="0.5x0.5"),
+        make_s2s_file(event, variable, grid="0.25x0.25"),
+    ]
+
+    for filename in files_to_try:
+        if not filename.exists():
+            continue
+
+        ds = open_s2s_variable(filename, variable)
+
+        try:
+            da = select_event_member(ds, event, variable)
+
+            if has_date(da, target_date):
+                return select_date(da, target_date)
+
+        finally:
+            ds.close()
+
+    raise ValueError(
+        f"Could not find {variable} for {target_date} "
+        f"in either 0.5x0.5 or 0.25x0.25 files."
+    )
 
 
-def load_msl(ds_msl, target_date):
-    """Load mean sea level pressure for one date."""
-    return select_date(ds_msl[MSL_VAR], target_date)
+def load_precipitation(event, target_date):
+    """Load daily precipitation."""
+    return load_daily_variable(event, target_date, PRECIP_VAR)
+
+
+def load_msl(event, target_date):
+    """Load mean sea level pressure."""
+    return load_daily_variable(event, target_date, MSL_VAR)
+
+
+def load_snowmelt(event, lag):
+    """Compute SWE change from the previous day to the current lag day."""
+    date_of_max = np.datetime64(event["date_of_max"], "D")
+    date_previous = date_of_max + np.timedelta64(lag - 1, "D")
+    date_current = date_of_max + np.timedelta64(lag, "D")
+
+    da_previous = load_daily_variable(event, str(date_previous), SNOW_VAR)
+    da_current = load_daily_variable(event, str(date_current), SNOW_VAR)
+
+    da_change = da_current - da_previous
+    da_change.attrs["units"] = "mm"
+    da_change.attrs["long_name"] = "Snow water equivalent change"
+
+    return da_change
 
 
 def load_catchment_outer_boundary(filename, base_dir, crs_if_missing="EPSG:4326"):
@@ -212,10 +420,12 @@ def load_catchment_outer_boundary(filename, base_dir, crs_if_missing="EPSG:4326"
 
     if isinstance(union_geom, Polygon):
         outer_geom = Polygon(union_geom.exterior)
+
     elif isinstance(union_geom, MultiPolygon):
         outer_geom = MultiPolygon(
             [Polygon(poly.exterior) for poly in union_geom.geoms]
         )
+
     else:
         outer_geom = union_geom
 
@@ -328,6 +538,59 @@ def plot_msl_contours(ax, da_msl, proj_data):
     )
 
 
+def plot_snowmelt(ax, da_snowmelt, proj_data):
+    """Overlay areas where SWE decreases from the previous day."""
+    lon, lat = get_lon_lat(da_snowmelt)
+    snowmelt = da_snowmelt.values < SNOWMELT_THRESHOLD
+    snowmelt = np.isfinite(da_snowmelt.values) & snowmelt
+
+    if SNOWMELT_OVERLAY == "hatching":
+        old_hatch_color = plt.rcParams["hatch.color"]
+        old_hatch_linewidth = plt.rcParams["hatch.linewidth"]
+
+        try:
+            plt.rcParams["hatch.color"] = SNOWMELT_HATCH_COLOR
+            plt.rcParams["hatch.linewidth"] = SNOWMELT_HATCH_LINEWIDTH
+
+            ax.contourf(
+                lon.values,
+                lat.values,
+                snowmelt.astype(int),
+                levels=[0.5, 1.5],
+                colors="none",
+                hatches=[SNOWMELT_HATCH_PATTERN],
+                transform=proj_data,
+                zorder=SNOWMELT_ZORDER,
+            )
+
+        finally:
+            plt.rcParams["hatch.color"] = old_hatch_color
+            plt.rcParams["hatch.linewidth"] = old_hatch_linewidth
+
+    elif SNOWMELT_OVERLAY == "stippling":
+        iy, ix = np.where(snowmelt)
+
+        if SNOWMELT_DOT_STRIDE > 1:
+            iy = iy[::SNOWMELT_DOT_STRIDE]
+            ix = ix[::SNOWMELT_DOT_STRIDE]
+
+        ax.scatter(
+            lon.values[ix],
+            lat.values[iy],
+            s=SNOWMELT_DOT_SIZE,
+            c=SNOWMELT_DOT_COLOR,
+            alpha=SNOWMELT_DOT_ALPHA,
+            transform=proj_data,
+            zorder=SNOWMELT_ZORDER,
+            linewidths=0,
+        )
+
+    else:
+        raise ValueError(
+            "SNOWMELT_OVERLAY must be either 'hatching' or 'stippling'."
+        )
+
+
 def plot_catchment_boundary(ax, geometry, proj_data):
     """Overlay the selected catchment boundary."""
     ax.add_geometries(
@@ -340,13 +603,15 @@ def plot_catchment_boundary(ax, geometry, proj_data):
     )
 
 
-def plot_event_panel(ax, ds_tp, ds_msl, catchment_boundary, target_date, proj_data):
-    """Plot precipitation, pressure, and catchment boundary for one date."""
-    da_precip = load_precipitation(ds_tp, target_date)
-    da_msl = load_msl(ds_msl, target_date)
+def plot_event_panel(ax, event, lag, target_date, catchment_boundary, proj_data):
+    """Plot precipitation, pressure, snowmelt, and catchment for one panel."""
+    da_precip = load_precipitation(event, target_date)
+    da_msl = load_msl(event, target_date)
+    da_snowmelt = load_snowmelt(event, lag)
 
     mesh = plot_precipitation(ax, da_precip, proj_data)
     plot_msl_contours(ax, da_msl, proj_data)
+    plot_snowmelt(ax, da_snowmelt, proj_data)
     plot_catchment_boundary(ax, catchment_boundary, proj_data)
 
     return mesh
@@ -357,7 +622,7 @@ def plot_event_panel(ax, ds_tp, ds_msl, catchment_boundary, target_date, proj_da
 # =============================================================================
 
 def add_panel_titles(axes, event_lags, event_dates):
-    """Add panel labels and date titles."""
+    """Add panel labels and event-relative dates."""
     panel_labels = ["a)", "b)", "c)", "d)", "e)"]
 
     for ax, label, lag, date in zip(axes, panel_labels, event_lags, event_dates):
@@ -385,6 +650,27 @@ def add_colorbar(fig, mesh):
     cbar.ax.tick_params(labelsize=TICK_LABELSIZE)
 
 
+def get_snowmelt_legend_handle():
+    """Return the legend handle for the selected snowmelt overlay."""
+    if SNOWMELT_OVERLAY == "hatching":
+        return Patch(
+            facecolor="white",
+            edgecolor=SNOWMELT_HATCH_COLOR,
+            hatch=SNOWMELT_HATCH_PATTERN,
+            label="Snowmelt (mm/day < 0)",
+        )
+
+    return Line2D(
+        [0],
+        [0],
+        marker="o",
+        color="none",
+        markerfacecolor=SNOWMELT_DOT_COLOR,
+        markersize=5,
+        label="Snowmelt (mm/day < 0)",
+    )
+
+
 def add_legend(axes, catchment_label):
     """Add legend in the empty lower-right panel."""
     legend_ax = axes[1, 2]
@@ -405,6 +691,7 @@ def add_legend(axes, catchment_label):
             linewidth=MSL_CONTOUR_LINEWIDTH,
             label="Mean sea level pressure (hPa)",
         ),
+        get_snowmelt_legend_handle(),
     ]
 
     legend_ax.legend(
@@ -420,6 +707,7 @@ def finalize_figure(
     fig,
     axes,
     mesh,
+    event_dates,
     catchment_label,
     savepath,
     write_to_file,
@@ -427,7 +715,7 @@ def finalize_figure(
     """Add final figure elements, save, and show."""
     plot_axes = get_plot_axes(axes)
 
-    add_panel_titles(plot_axes, EVENT_LAGS, EVENT_DATES)
+    add_panel_titles(plot_axes, EVENT_LAGS, event_dates)
 
     fig.subplots_adjust(
         left=0.05,
@@ -454,48 +742,43 @@ def finalize_figure(
 def main():
     """Run the full plotting workflow."""
     catchment = get_catchment_settings(CATCHMENT_NAME)
-    savepath = make_output_filename(CATCHMENT_NAME)
+    event = get_selected_event(CATCHMENT_NAME, EVENT_RANK)
+    event_dates = get_event_days(event)
+    savepath = make_output_filename(CATCHMENT_NAME, EVENT_RANK)
 
-    ds_tp = open_era5_variable(PRECIP_FILE, PRECIP_VAR)
-    ds_msl = open_era5_variable(MSL_FILE, MSL_VAR)
+    catchment_boundary = load_catchment_outer_boundary(
+        filename=catchment["filename"],
+        base_dir=PATH_CATCHMENT,
+        crs_if_missing=CATCHMENT_CRS_IF_MISSING,
+    )
 
-    try:
-        catchment_boundary = load_catchment_outer_boundary(
-            filename=catchment["filename"],
-            base_dir=PATH_CATCHMENT,
-            crs_if_missing=CATCHMENT_CRS_IF_MISSING,
+    fig, axes, proj_data = make_map_axes(
+        central_lon=CENTRAL_LON,
+        central_lat=CENTRAL_LAT,
+        extent=MAP_EXTENT,
+    )
+
+    mesh = None
+
+    for ax, lag, target_date in zip(get_plot_axes(axes), EVENT_LAGS, event_dates):
+        mesh = plot_event_panel(
+            ax=ax,
+            event=event,
+            lag=lag,
+            target_date=target_date,
+            catchment_boundary=catchment_boundary,
+            proj_data=proj_data,
         )
 
-        fig, axes, proj_data = make_map_axes(
-            central_lon=CENTRAL_LON,
-            central_lat=CENTRAL_LAT,
-            extent=MAP_EXTENT,
-        )
-
-        mesh = None
-
-        for ax, target_date in zip(get_plot_axes(axes), EVENT_DATES):
-            mesh = plot_event_panel(
-                ax=ax,
-                ds_tp=ds_tp,
-                ds_msl=ds_msl,
-                catchment_boundary=catchment_boundary,
-                target_date=target_date,
-                proj_data=proj_data,
-            )
-
-        finalize_figure(
-            fig=fig,
-            axes=axes,
-            mesh=mesh,
-            catchment_label=catchment["label"],
-            savepath=savepath,
-            write_to_file=WRITE_TO_FILE,
-        )
-
-    finally:
-        ds_tp.close()
-        ds_msl.close()
+    finalize_figure(
+        fig=fig,
+        axes=axes,
+        mesh=mesh,
+        event_dates=event_dates,
+        catchment_label=catchment["label"],
+        savepath=savepath,
+        write_to_file=WRITE_TO_FILE,
+    )
 
 
 if __name__ == "__main__":

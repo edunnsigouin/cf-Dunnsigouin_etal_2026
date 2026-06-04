@@ -38,7 +38,7 @@ from Dunnsigouin_etal_2026 import config
 path_in_catchment = config.dirs["nve"]
 path_out = config.dirs["fig"]
 
-CATCHMENT_NAME = "glomma"   # "drammen" or "glomma"
+CATCHMENT_NAME = "drammen"   # "drammen" or "glomma"
 EVENT_RANK = 1               # choose 1-5
 ACCUMULATION_DAYS = 1        # choose 1 or 2
 
@@ -46,7 +46,7 @@ filename_out = (
     f"{path_out}xy-tp-msl-snowmelt-event-evolution-"
     f"{CATCHMENT_NAME}-rank{EVENT_RANK}-{ACCUMULATION_DAYS}day.png"
 )
-write2file = True
+write2file = False
 
 PRECIP_VAR = "tp24"
 MSL_VAR = "msl"
