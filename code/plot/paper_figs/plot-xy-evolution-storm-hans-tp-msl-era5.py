@@ -82,7 +82,7 @@ write2file = True
 FIG_WIDTH_IN = 16
 FIG_HEIGHT_IN = 12
 
-MAP_WSPACE = 0.0
+MAP_WSPACE = 0.02
 MAP_HSPACE = 0.08
 
 tick_labelsize = 12
