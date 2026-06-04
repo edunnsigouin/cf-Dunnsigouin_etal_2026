@@ -25,6 +25,7 @@ from pathlib import Path
 import numpy as np
 import xarray as xr
 import matplotlib.pyplot as plt
+from matplotlib.lines import Line2D
 import cartopy.crs as ccrs
 import geopandas as gpd
 from shapely.geometry import Polygon, MultiPolygon
@@ -62,7 +63,7 @@ PRECIP_FILE = (
 )
 
 MSL_FILE = (
-    Path(config.dirs["era5_continuous_daily_scandinavia"])
+    Path(config.dirs["era5_continuous_daily"])
     / MSL_VAR
     / f"{MSL_VAR}_0.5x0.5_{YEAR}.nc"
 )
@@ -73,15 +74,15 @@ CATCHMENT_EDGE_COLOR = "red"
 CATCHMENT_LINEWIDTH = 1.0
 
 filename_out = (
-    f"{path_out}xy-era5-tp-msl-evolution-drammen-"
-    f"{EVENT_DATES[0]}-{EVENT_DATES[-1]}-{ACCUMULATION_DAYS}day.png"
+    f"{path_out}xy-hans-evolution-era5-tp-msl-"
+    f"{EVENT_DATES[0]}-{EVENT_DATES[-1]}.png"
 )
-write2file = False
+write2file = True
 
 FIG_WIDTH_IN = 16
 FIG_HEIGHT_IN = 12
 
-MAP_WSPACE = 0.02
+MAP_WSPACE = 0.0
 MAP_HSPACE = 0.08
 
 tick_labelsize = 12
@@ -95,7 +96,7 @@ MAP_EXTENT = [-10, 25, 50, 70]
 
 # --- Precipitation shading
 if ACCUMULATION_DAYS == 1:
-    PRECIP_LEVELS = np.arange(5, 65, 5)
+    PRECIP_LEVELS = np.arange(5, 55, 5)
 elif ACCUMULATION_DAYS == 2:
     PRECIP_LEVELS = np.arange(0, 121, 10)
 else:
@@ -361,29 +362,31 @@ def finalize_figure(
     """Add titles, colorbar, save, and show."""
     plot_axes = [axes[0, 0], axes[0, 1], axes[0, 2], axes[1, 0], axes[1, 1]]
 
-    for ax, lag, date in zip(plot_axes, event_lags, event_dates):
+    panel_labels = ["a)", "b)", "c)", "d)", "e)"]
+
+    for ax, label, lag, date in zip(
+            plot_axes,
+            panel_labels,
+            event_lags,
+            event_dates,
+    ):
+        
         ax.set_title(
-            f"Day {lag:+d}: {date}",
+            f"{label} Day {lag:+d}: {date}",
             fontsize=title_fontsize,
             pad=3,
         )
 
-    fig.suptitle(
-        "ERA5 reanalysis | TP shading, MSLP contours, Drammen catchment",
-        fontsize=title_fontsize + 2,
-        y=0.98,
-    )
-
     fig.subplots_adjust(
-        left=0.03,
-        right=0.98,
-        bottom=0.06,
-        top=0.92,
+        left=0.05,
+        right=0.95,
+        bottom=0.05,
+        top=0.95,
         wspace=MAP_WSPACE,
         hspace=MAP_HSPACE,
     )
 
-    cax = fig.add_axes([0.69, 0.27, 0.23, 0.025])
+    cax = fig.add_axes([0.675, 0.38, 0.255, 0.025])
 
     cbar = fig.colorbar(
         mesh,
@@ -392,11 +395,39 @@ def finalize_figure(
     )
 
     cbar.set_label(
-        f"{ACCUMULATION_DAYS}-day accumulated precipitation (mm)",
+        f"accumulated total precipitation (mm/day)",
         fontsize=axis_labelsize,
     )
     cbar.ax.tick_params(labelsize=tick_labelsize)
 
+    legend_ax = axes[1, 2]
+    legend_ax.set_axis_off()
+
+    legend_handles = [
+        Line2D(
+            [0], [0],
+            color=CATCHMENT_EDGE_COLOR,
+            linewidth=2,
+            label="Drammen catchment",
+        ),
+        Line2D(
+            [0], [0],
+            color=MSL_CONTOUR_COLOR,
+            linewidth=MSL_CONTOUR_LINEWIDTH,
+            label="Mean sea level pressure contours (hPa)",
+        ),
+    ]
+
+    legend_ax.legend(
+        handles=legend_handles,
+        loc="center",
+        bbox_to_anchor=(0.5, 1.0),
+        frameon=False,
+        fontsize=axis_labelsize,
+    )
+
+
+    
     if write2file:
         fig.savefig(savepath, dpi=300)
 
