@@ -28,7 +28,7 @@ from Dunnsigouin_etal_2026 import config
 # Settings
 # =============================================================================
 
-CATCHMENT_NAME = "drammen"  # options: "drammen", "glomma"
+CATCHMENT_NAME = "glomma"  # options: "drammen", "glomma"
 EVENT_RANK = 1              # options: 1-5
 
 EVENT_LAGS = [-2, -1, 0, 1, 2]
