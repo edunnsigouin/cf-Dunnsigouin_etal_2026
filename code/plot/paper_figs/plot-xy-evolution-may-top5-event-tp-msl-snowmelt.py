@@ -656,7 +656,7 @@ def get_snowmelt_legend_handle():
             facecolor="white",
             edgecolor=SNOWMELT_HATCH_COLOR,
             hatch=SNOWMELT_HATCH_PATTERN,
-            label="Snowmelt (mm/day < 0)",
+            label=r"Snowmelt ($\Delta$SWE < 0)",
         )
 
     return Line2D(
@@ -666,7 +666,7 @@ def get_snowmelt_legend_handle():
         color="none",
         markerfacecolor=SNOWMELT_DOT_COLOR,
         markersize=5,
-        label="Snowmelt (mm/day < 0)",
+        label=r"Snowmelt ($\Delta$SWE < 0)",
     )
 
 
