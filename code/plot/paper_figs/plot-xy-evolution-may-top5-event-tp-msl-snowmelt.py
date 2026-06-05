@@ -234,7 +234,7 @@ def make_s2s_file(event, variable, grid="0.5x0.5"):
 def make_output_filename(catchment_name, event_rank):
     """Create output filename."""
     return (
-        f"{PATH_OUT}xy-top{event_rank}-{catchment_name}-event-evolution-tp-msl-snowmelt.png"
+        f"{PATH_OUT}xy-top{event_rank}-may-{catchment_name}-event-evolution-tp-msl-snowmelt.png"
     )
 
 
