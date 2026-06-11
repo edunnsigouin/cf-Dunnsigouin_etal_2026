@@ -360,11 +360,11 @@ def plot_stations(ax, stations, proj_data, fontsize=8):
         )
 
         if station["name"] == "Bergheim":
-            dx, dy = 0.05, 0.05
+            dx, dy = 0.05, 0.075
             ha = "left"
         elif station["name"] == "Ål III":
-            dx, dy = -0.65, 0.05
-            ha = "left"
+            dx, dy = -0.075, 0.1
+            ha = "right"
         else:
             dx, dy = 0.05, 0.05
             ha = "left"
@@ -417,23 +417,6 @@ def add_zoom_inset(parent_ax, proj_map, proj_data, catchment_boundary, stations)
 
     inset_ax.set_extent(ZOOM_MAP_EXTENT, crs=proj_data)
 
-    """
-    # Ocean
-    inset_ax.add_feature(
-        cfeature.OCEAN,
-        facecolor=cfeature.COLORS["water"],
-        edgecolor="none",
-        zorder=0,
-    )
-
-    # Land
-    inset_ax.add_feature(
-        cfeature.LAND,
-        facecolor=cfeature.COLORS["land"], 
-        edgecolor="none",
-        zorder=1,
-    )
-    """
     # Coastline
     inset_ax.coastlines(
         resolution="10m",
@@ -441,8 +424,6 @@ def add_zoom_inset(parent_ax, proj_map, proj_data, catchment_boundary, stations)
         color="black",
         zorder=2,
     )
-
-    #inset_ax.coastlines(resolution="10m", linewidth=0.4, zorder=21)
 
     plot_catchment_boundary(
         inset_ax,
@@ -538,7 +519,7 @@ def add_legend(fig, catchment_label):
     fig.legend(
         handles=legend_handles,
         loc="lower center",
-        bbox_to_anchor=(0.7, 0.045),
+        bbox_to_anchor=(0.725, 0.06),
         frameon=False,
         fontsize=AXIS_LABELSIZE,
         ncol=1,
