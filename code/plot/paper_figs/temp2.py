@@ -519,7 +519,7 @@ def add_legend(fig, catchment_label):
     fig.legend(
         handles=legend_handles,
         loc="lower center",
-        bbox_to_anchor=(0.725, 0.06),
+        bbox_to_anchor=(0.725, 0.055),
         frameon=False,
         fontsize=AXIS_LABELSIZE,
         ncol=1,
