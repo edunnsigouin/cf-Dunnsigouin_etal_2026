@@ -22,7 +22,7 @@ x_days              = 2
 catchment           = "regine_drammen"
 forecast_date_range = ["2020-01-02", "2023-06-26"]
 
-reference_dataset = "era5"
+reference_dataset = "senorge"
 grid              = "0.5x0.5"
 reference_years   = ["1957", "2023"]
 

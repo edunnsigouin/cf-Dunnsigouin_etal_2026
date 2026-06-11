@@ -3,10 +3,12 @@
 Plot ERA5 daily precipitation and mean sea level pressure during Storm Hans.
 
 The script:
-1. Plots five fixed event-relative dates from 2023-08-06 to 2023-08-10.
+1. Plots four fixed event-relative dates from 2023-08-06 to 2023-08-09.
 2. Shows daily ERA5 precipitation as shading.
 3. Shows ERA5 mean sea level pressure as labelled grey contours.
 4. Overlays a selected catchment boundary.
+5. Adds a zoomed inset map in the bottom-right panel showing the catchment
+   boundary and two station locations with labels.
 """
 
 from pathlib import Path
@@ -14,10 +16,12 @@ from pathlib import Path
 import cartopy.crs as ccrs
 import geopandas as gpd
 import matplotlib.pyplot as plt
+import matplotlib.patheffects as pe
 import numpy as np
 import xarray as xr
 from matplotlib.lines import Line2D
 from shapely.geometry import MultiPolygon, Polygon
+import cartopy.feature as cfeature
 
 from Dunnsigouin_etal_2026 import config
 
@@ -28,16 +32,14 @@ from Dunnsigouin_etal_2026 import config
 
 YEAR = 2023
 
-EVENT_LAGS = [-2, -1, 0, 1, 2]
+EVENT_LAGS = [-2, -1, 0, 1]
 EVENT_DATES = [
     "2023-08-06",
     "2023-08-07",
     "2023-08-08",
     "2023-08-09",
-    "2023-08-10",
 ]
 
-# Change this to switch catchment.
 CATCHMENT_NAME = "drammen"  # options: "drammen", "glomma"
 
 CATCHMENTS = {
@@ -50,6 +52,11 @@ CATCHMENTS = {
         "label": "Glomma catchment",
     },
 }
+
+STATIONS = [
+    {"name": "Bergheim", "lon": 9.2483, "lat": 60.4761},
+    {"name": "Ål III", "lon": 8.5609, "lat": 60.6391},
+]
 
 PRECIP_VAR = "tp24"
 MSL_VAR = "msl"
@@ -65,12 +72,13 @@ CATCHMENT_CRS_IF_MISSING = "EPSG:4326"
 CATCHMENT_EDGE_COLOR = "red"
 CATCHMENT_LINEWIDTH = 1.0
 
-FIG_WIDTH_IN = 12
-FIG_HEIGHT_IN = 8
+FIG_WIDTH_IN = 9
+FIG_HEIGHT_IN = 10
 
-MAP_WSPACE = 0.02
+MAP_WSPACE = 0.0
 MAP_HSPACE = 0.08
 MAP_EXTENT = [-10, 25, 50, 70]
+ZOOM_MAP_EXTENT = [6, 12, 59, 62]
 
 CENTRAL_LON = 10.0
 CENTRAL_LAT = 62.0
@@ -80,7 +88,7 @@ AXIS_LABELSIZE = 11
 TITLE_FONTSIZE = 13
 CONTOUR_LABELSIZE = 9
 
-PRECIP_LEVELS = np.arange(5, 60, 5)
+PRECIP_LEVELS = np.arange(5, 55, 5)
 PRECIP_ZERO_THRESHOLD = 5.0
 PRECIP_CMAP = plt.get_cmap("GnBu").copy()
 PRECIP_CMAP.set_under("white")
@@ -89,7 +97,12 @@ MSL_CONTOUR_LEVELS = np.arange(975, 1045, 5)
 MSL_CONTOUR_COLOR = "0.7"
 MSL_CONTOUR_LINEWIDTH = 1.5
 
-WRITE_TO_FILE =	False
+STATION_MARKER_SIZE = 5
+STATION_MARKER_FACE_COLOR = "yellow"
+STATION_MARKER_EDGE_COLOR = "black"
+STATION_MARKER_EDGE_WIDTH = 0.6
+
+WRITE_TO_FILE = True
 
 
 # =============================================================================
@@ -113,7 +126,7 @@ def make_output_filename(catchment_name):
     return (
         f"{PATH_OUT}xy-hans-evolution-era5-tp-msl-"
         f"{catchment_name}-"
-        f"{EVENT_DATES[0]}-{EVENT_DATES[-1]}.png"
+        f"{EVENT_DATES[0]}-{EVENT_DATES[-1]}-2x2-inset.png"
     )
 
 
@@ -232,7 +245,7 @@ def load_catchment_outer_boundary(filename, base_dir, crs_if_missing="EPSG:4326"
 # =============================================================================
 
 def make_map_axes(central_lon, central_lat, extent):
-    """Create the 2 x 3 Lambert Conformal map layout."""
+    """Create the 2 x 2 Lambert Conformal map layout."""
     proj_map = ccrs.LambertConformal(
         central_longitude=central_lon,
         central_latitude=central_lat,
@@ -241,32 +254,22 @@ def make_map_axes(central_lon, central_lat, extent):
 
     fig, axes = plt.subplots(
         2,
-        3,
+        2,
         figsize=(FIG_WIDTH_IN, FIG_HEIGHT_IN),
         subplot_kw={"projection": proj_map},
         constrained_layout=False,
     )
 
-    for i, ax in enumerate(axes.flat):
-        if i == 5:
-            ax.set_axis_off()
-            continue
-
+    for ax in axes.flat:
         ax.coastlines(resolution="10m", linewidth=0.5)
         ax.set_extent(extent, crs=proj_data)
 
-    return fig, axes, proj_data
+    return fig, axes, proj_map, proj_data
 
 
-def get_plot_axes(axes):
-    """Return the five map panels used for the event dates."""
-    return [
-        axes[0, 0],
-        axes[0, 1],
-        axes[0, 2],
-        axes[1, 0],
-        axes[1, 1],
-    ]
+def get_event_axes(axes):
+    """Return the four map panels used for the event dates."""
+    return list(axes.flat)
 
 
 # =============================================================================
@@ -274,7 +277,7 @@ def get_plot_axes(axes):
 # =============================================================================
 
 def plot_precipitation(ax, da_precip, proj_data):
-    """Plot daily precipitation as shading."""
+    """Plot precipitation as shading."""
     lon, lat = get_lon_lat(da_precip)
     precip = da_precip.values
 
@@ -328,16 +331,64 @@ def plot_msl_contours(ax, da_msl, proj_data):
     )
 
 
-def plot_catchment_boundary(ax, geometry, proj_data):
+def plot_catchment_boundary(ax, geometry, proj_data, linewidth=CATCHMENT_LINEWIDTH):
     """Overlay the selected catchment boundary."""
     ax.add_geometries(
         [geometry],
         crs=proj_data,
         facecolor="none",
         edgecolor=CATCHMENT_EDGE_COLOR,
-        linewidth=CATCHMENT_LINEWIDTH,
+        linewidth=linewidth,
         zorder=9,
     )
+
+
+def plot_stations(ax, stations, proj_data, fontsize=8):
+    """Overlay station locations and names."""
+    for station in stations:
+        ax.plot(
+            station["lon"],
+            station["lat"],
+            marker="o",
+            markersize=STATION_MARKER_SIZE,
+            markeredgecolor=STATION_MARKER_EDGE_COLOR,
+            markeredgewidth=STATION_MARKER_EDGE_WIDTH,
+            markerfacecolor=STATION_MARKER_FACE_COLOR,
+            linestyle="none",
+            transform=proj_data,
+            zorder=12,
+        )
+
+        if station["name"] == "Bergheim":
+            dx, dy = 0.05, 0.05
+            ha = "left"
+        elif station["name"] == "Ål III":
+            dx, dy = -0.65, 0.05
+            ha = "left"
+        else:
+            dx, dy = 0.05, 0.05
+            ha = "left"
+
+        txt = ax.text(
+            station["lon"] + dx,
+            station["lat"] + dy,
+            station["name"],
+            fontsize=fontsize,
+            color="yellow",
+            fontweight="bold",
+            ha=ha,
+            va="bottom",
+            transform=proj_data,
+            zorder=13,
+        )
+
+        txt.set_path_effects(
+            [
+                pe.Stroke(linewidth=1.5, foreground="black"),
+                pe.Normal(),
+            ]
+        )
+
 
 
 def plot_event_panel(ax, ds_tp, ds_msl, catchment_boundary, target_date, proj_data):
@@ -352,15 +403,85 @@ def plot_event_panel(ax, ds_tp, ds_msl, catchment_boundary, target_date, proj_da
     return mesh
 
 
+def add_zoom_inset(parent_ax, proj_map, proj_data, catchment_boundary, stations):
+    """Add zoomed inset map to the lower-right corner of a parent axis."""
+    inset_ax = parent_ax.inset_axes(
+        [0.025, 0.025, 0.35, 0.35],
+        projection=proj_map,
+        zorder=20,
+    )
+
+    inset_ax.set_facecolor("white")
+    inset_ax.patch.set_alpha(1.0)
+    inset_ax.patch.set_zorder(20)
+
+    inset_ax.set_extent(ZOOM_MAP_EXTENT, crs=proj_data)
+
+    """
+    # Ocean
+    inset_ax.add_feature(
+        cfeature.OCEAN,
+        facecolor=cfeature.COLORS["water"],
+        edgecolor="none",
+        zorder=0,
+    )
+
+    # Land
+    inset_ax.add_feature(
+        cfeature.LAND,
+        facecolor=cfeature.COLORS["land"], 
+        edgecolor="none",
+        zorder=1,
+    )
+    """
+    # Coastline
+    inset_ax.coastlines(
+        resolution="10m",
+        linewidth=0.4,
+        color="black",
+        zorder=2,
+    )
+
+    #inset_ax.coastlines(resolution="10m", linewidth=0.4, zorder=21)
+
+    plot_catchment_boundary(
+        inset_ax,
+        catchment_boundary,
+        proj_data,
+        linewidth=1.0,
+    )
+    plot_stations(
+        inset_ax,
+        stations,
+        proj_data,
+        fontsize=6,
+    )
+
+    inset_ax.set_xticks([])
+    inset_ax.set_yticks([])
+
+    for spine in inset_ax.spines.values():
+        spine.set_linewidth(0.8)
+        spine.set_edgecolor("black")
+        spine.set_zorder(30)
+
+    return inset_ax
+
+
 # =============================================================================
 # Figure finishing
 # =============================================================================
 
-def add_panel_titles(axes, event_lags, event_dates):
+def add_panel_titles(axes):
     """Add panel labels and date titles."""
-    panel_labels = ["a)", "b)", "c)", "d)", "e)"]
+    panel_labels = ["a)", "b)", "c)", "d)"]
 
-    for ax, label, lag, date in zip(axes, panel_labels, event_lags, event_dates):
+    for ax, label, lag, date in zip(
+        get_event_axes(axes),
+        panel_labels,
+        EVENT_LAGS,
+        EVENT_DATES,
+    ):
         ax.set_title(
             f"{label} Day {lag:+d}: {date}",
             fontsize=TITLE_FONTSIZE,
@@ -369,8 +490,8 @@ def add_panel_titles(axes, event_lags, event_dates):
 
 
 def add_colorbar(fig, mesh):
-    """Add horizontal precipitation colorbar."""
-    cax = fig.add_axes([0.675, 0.35, 0.255, 0.025])
+    """Add horizontal precipitation colorbar below the panels."""
+    cax = fig.add_axes([0.072, 0.1, 0.41, 0.025])
 
     cbar = fig.colorbar(
         mesh,
@@ -385,11 +506,8 @@ def add_colorbar(fig, mesh):
     cbar.ax.tick_params(labelsize=TICK_LABELSIZE)
 
 
-def add_legend(axes, catchment_label):
-    """Add legend in the empty lower-right panel."""
-    legend_ax = axes[1, 2]
-    legend_ax.set_axis_off()
-
+def add_legend(fig, catchment_label):
+    """Add legend below the right-hand panels."""
     legend_handles = [
         Line2D(
             [0],
@@ -405,14 +523,25 @@ def add_legend(axes, catchment_label):
             linewidth=MSL_CONTOUR_LINEWIDTH,
             label="Mean sea level pressure (hPa)",
         ),
+        Line2D(
+            [0],
+            [0],
+            marker="o",
+            linestyle="none",
+            markerfacecolor=STATION_MARKER_FACE_COLOR,
+            markeredgecolor=STATION_MARKER_EDGE_COLOR,
+            markersize=7,
+            label="Stations",
+        ),
     ]
 
-    legend_ax.legend(
+    fig.legend(
         handles=legend_handles,
-        loc="center",
-        bbox_to_anchor=(0.5, 1.0),
+        loc="lower center",
+        bbox_to_anchor=(0.7, 0.045),
         frameon=False,
         fontsize=AXIS_LABELSIZE,
+        ncol=1,
     )
 
 
@@ -425,24 +554,22 @@ def finalize_figure(
     write_to_file,
 ):
     """Add final figure elements, save, and show."""
-    plot_axes = get_plot_axes(axes)
-
-    add_panel_titles(plot_axes, EVENT_LAGS, EVENT_DATES)
+    add_panel_titles(axes)
 
     fig.subplots_adjust(
         left=0.05,
         right=0.95,
-        bottom=0.05,
+        bottom=0.15,
         top=0.95,
         wspace=MAP_WSPACE,
         hspace=MAP_HSPACE,
     )
 
     add_colorbar(fig, mesh)
-    add_legend(axes, catchment_label)
+    add_legend(fig, catchment_label)
 
     if write_to_file:
-        fig.savefig(savepath, dpi=300)
+        fig.savefig(savepath, dpi=300, bbox_inches="tight")
 
     plt.show()
 
@@ -466,7 +593,7 @@ def main():
             crs_if_missing=CATCHMENT_CRS_IF_MISSING,
         )
 
-        fig, axes, proj_data = make_map_axes(
+        fig, axes, proj_map, proj_data = make_map_axes(
             central_lon=CENTRAL_LON,
             central_lat=CENTRAL_LAT,
             extent=MAP_EXTENT,
@@ -474,7 +601,7 @@ def main():
 
         mesh = None
 
-        for ax, target_date in zip(get_plot_axes(axes), EVENT_DATES):
+        for ax, target_date in zip(get_event_axes(axes), EVENT_DATES):
             mesh = plot_event_panel(
                 ax=ax,
                 ds_tp=ds_tp,
@@ -483,6 +610,14 @@ def main():
                 target_date=target_date,
                 proj_data=proj_data,
             )
+
+        add_zoom_inset(
+            parent_ax=axes[1, 1],
+            proj_map=proj_map,
+            proj_data=proj_data,
+            catchment_boundary=catchment_boundary,
+            stations=STATIONS,
+        )
 
         finalize_figure(
             fig=fig,

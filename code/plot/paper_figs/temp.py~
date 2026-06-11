@@ -7,6 +7,8 @@ The script:
 2. Shows daily ERA5 precipitation as shading.
 3. Shows ERA5 mean sea level pressure as labelled grey contours.
 4. Overlays a selected catchment boundary.
+5. Adds a sixth zoomed panel showing 2-day accumulated precipitation
+   for days -1 and 0, with station markers.
 """
 
 from pathlib import Path
@@ -37,7 +39,8 @@ EVENT_DATES = [
     "2023-08-10",
 ]
 
-# Change this to switch catchment.
+ZOOM_EVENT_DATES = ["2023-08-08"]
+
 CATCHMENT_NAME = "drammen"  # options: "drammen", "glomma"
 
 CATCHMENTS = {
@@ -50,6 +53,11 @@ CATCHMENTS = {
         "label": "Glomma catchment",
     },
 }
+
+STATIONS = [
+    {"name": "Bergheim", "lon": 9.2483, "lat": 60.4761},
+    {"name": "Ål III", "lon": 8.5609, "lat": 60.6391},
+]
 
 PRECIP_VAR = "tp24"
 MSL_VAR = "msl"
@@ -71,6 +79,7 @@ FIG_HEIGHT_IN = 8
 MAP_WSPACE = 0.02
 MAP_HSPACE = 0.08
 MAP_EXTENT = [-10, 25, 50, 70]
+ZOOM_MAP_EXTENT = [4.1, 14, 57.9, 63.0]#[4.75, 12.75, 58.0, 63.0]
 
 CENTRAL_LON = 10.0
 CENTRAL_LAT = 62.0
@@ -89,7 +98,12 @@ MSL_CONTOUR_LEVELS = np.arange(975, 1045, 5)
 MSL_CONTOUR_COLOR = "0.7"
 MSL_CONTOUR_LINEWIDTH = 1.5
 
-WRITE_TO_FILE =	False
+STATION_MARKER_SIZE = 6
+STATION_MARKER_FACE_COLOR = "yellow"
+STATION_MARKER_EDGE_COLOR = "black"
+STATION_MARKER_EDGE_WIDTH = 0.6
+
+WRITE_TO_FILE = False
 
 
 # =============================================================================
@@ -113,7 +127,7 @@ def make_output_filename(catchment_name):
     return (
         f"{PATH_OUT}xy-hans-evolution-era5-tp-msl-"
         f"{catchment_name}-"
-        f"{EVENT_DATES[0]}-{EVENT_DATES[-1]}.png"
+        f"{EVENT_DATES[0]}-{EVENT_DATES[-1]}-with-zoom.png"
     )
 
 
@@ -192,6 +206,7 @@ def load_precipitation(ds_tp, target_date):
     return select_date(ds_tp[PRECIP_VAR], target_date)
 
 
+
 def load_msl(ds_msl, target_date):
     """Load mean sea level pressure for one date."""
     return select_date(ds_msl[MSL_VAR], target_date)
@@ -231,7 +246,7 @@ def load_catchment_outer_boundary(filename, base_dir, crs_if_missing="EPSG:4326"
 # Figure setup
 # =============================================================================
 
-def make_map_axes(central_lon, central_lat, extent):
+def make_map_axes(central_lon, central_lat, extent, zoom_extent):
     """Create the 2 x 3 Lambert Conformal map layout."""
     proj_map = ccrs.LambertConformal(
         central_longitude=central_lon,
@@ -247,18 +262,16 @@ def make_map_axes(central_lon, central_lat, extent):
         constrained_layout=False,
     )
 
-    for i, ax in enumerate(axes.flat):
-        if i == 5:
-            ax.set_axis_off()
-            continue
-
+    for ax in axes.flat:
         ax.coastlines(resolution="10m", linewidth=0.5)
         ax.set_extent(extent, crs=proj_data)
+
+    axes[1, 2].set_extent(zoom_extent, crs=proj_data)
 
     return fig, axes, proj_data
 
 
-def get_plot_axes(axes):
+def get_event_axes(axes):
     """Return the five map panels used for the event dates."""
     return [
         axes[0, 0],
@@ -269,12 +282,17 @@ def get_plot_axes(axes):
     ]
 
 
+def get_zoom_axis(axes):
+    """Return the lower-right zoom panel axis."""
+    return axes[1, 2]
+
+
 # =============================================================================
 # Plotting
 # =============================================================================
 
 def plot_precipitation(ax, da_precip, proj_data):
-    """Plot daily precipitation as shading."""
+    """Plot precipitation as shading."""
     lon, lat = get_lon_lat(da_precip)
     precip = da_precip.values
 
@@ -340,6 +358,23 @@ def plot_catchment_boundary(ax, geometry, proj_data):
     )
 
 
+def plot_stations(ax, stations, proj_data):
+    """Overlay station locations."""
+    for station in stations:
+        ax.plot(
+            station["lon"],
+            station["lat"],
+            marker="o",
+            markersize=STATION_MARKER_SIZE,
+            markerfacecolor=STATION_MARKER_FACE_COLOR,
+            markeredgecolor=STATION_MARKER_EDGE_COLOR,
+            markeredgewidth=STATION_MARKER_EDGE_WIDTH,
+            linestyle="none",
+            transform=proj_data,
+            zorder=12,
+        )
+
+
 def plot_event_panel(ax, ds_tp, ds_msl, catchment_boundary, target_date, proj_data):
     """Plot precipitation, pressure, and catchment boundary for one date."""
     da_precip = load_precipitation(ds_tp, target_date)
@@ -352,25 +387,47 @@ def plot_event_panel(ax, ds_tp, ds_msl, catchment_boundary, target_date, proj_da
     return mesh
 
 
+def plot_zoom_panel(ax, ds_tp, catchment_boundary, target_date, stations, proj_data):
+    """Plot zoomed precipitation for day 0."""
+    da_precip = load_precipitation(ds_tp, target_date)
+
+    mesh = plot_precipitation(ax, da_precip, proj_data)
+    plot_catchment_boundary(ax, catchment_boundary, proj_data)
+    plot_stations(ax, stations, proj_data)
+
+    return mesh
+
+
 # =============================================================================
 # Figure finishing
 # =============================================================================
 
-def add_panel_titles(axes, event_lags, event_dates):
+def add_panel_titles(axes):
     """Add panel labels and date titles."""
     panel_labels = ["a)", "b)", "c)", "d)", "e)"]
 
-    for ax, label, lag, date in zip(axes, panel_labels, event_lags, event_dates):
+    for ax, label, lag, date in zip(
+        get_event_axes(axes),
+        panel_labels,
+        EVENT_LAGS,
+        EVENT_DATES,
+    ):
         ax.set_title(
             f"{label} Day {lag:+d}: {date}",
             fontsize=TITLE_FONTSIZE,
             pad=3,
         )
 
+        get_zoom_axis(axes).set_title(
+            "f) Day +0: 2023-08-08",
+            fontsize=TITLE_FONTSIZE,
+            pad=3,
+        )
+
 
 def add_colorbar(fig, mesh):
-    """Add horizontal precipitation colorbar."""
-    cax = fig.add_axes([0.675, 0.35, 0.255, 0.025])
+    """Add horizontal precipitation colorbar below the left and middle panels."""
+    cax = fig.add_axes([0.05, 0.055, 0.59, 0.025])
 
     cbar = fig.colorbar(
         mesh,
@@ -385,11 +442,8 @@ def add_colorbar(fig, mesh):
     cbar.ax.tick_params(labelsize=TICK_LABELSIZE)
 
 
-def add_legend(axes, catchment_label):
-    """Add legend in the empty lower-right panel."""
-    legend_ax = axes[1, 2]
-    legend_ax.set_axis_off()
-
+def add_legend(fig, catchment_label):
+    """Add legend below the right-hand panels."""
     legend_handles = [
         Line2D(
             [0],
@@ -405,16 +459,27 @@ def add_legend(axes, catchment_label):
             linewidth=MSL_CONTOUR_LINEWIDTH,
             label="Mean sea level pressure (hPa)",
         ),
+        Line2D(
+            [0],
+            [0],
+            marker="o",
+            linestyle="none",
+            markerfacecolor=STATION_MARKER_FACE_COLOR,
+            markeredgecolor=STATION_MARKER_EDGE_COLOR,
+            markersize=7,
+            label="Stations",
+        ),
     ]
 
-    legend_ax.legend(
+    fig.legend(
         handles=legend_handles,
-        loc="center",
-        bbox_to_anchor=(0.5, 1.0),
+        loc="lower center",
+        bbox_to_anchor=(0.81, 0.045),
         frameon=False,
         fontsize=AXIS_LABELSIZE,
+        ncol=1,
     )
-
+    
 
 def finalize_figure(
     fig,
@@ -425,24 +490,22 @@ def finalize_figure(
     write_to_file,
 ):
     """Add final figure elements, save, and show."""
-    plot_axes = get_plot_axes(axes)
-
-    add_panel_titles(plot_axes, EVENT_LAGS, EVENT_DATES)
+    add_panel_titles(axes)
 
     fig.subplots_adjust(
         left=0.05,
         right=0.95,
-        bottom=0.05,
+        bottom=0.15,
         top=0.95,
         wspace=MAP_WSPACE,
         hspace=MAP_HSPACE,
     )
 
     add_colorbar(fig, mesh)
-    add_legend(axes, catchment_label)
+    add_legend(fig, catchment_label)
 
     if write_to_file:
-        fig.savefig(savepath, dpi=300)
+        fig.savefig(savepath, dpi=300, bbox_inches="tight")
 
     plt.show()
 
@@ -470,11 +533,12 @@ def main():
             central_lon=CENTRAL_LON,
             central_lat=CENTRAL_LAT,
             extent=MAP_EXTENT,
+            zoom_extent=ZOOM_MAP_EXTENT,
         )
 
         mesh = None
 
-        for ax, target_date in zip(get_plot_axes(axes), EVENT_DATES):
+        for ax, target_date in zip(get_event_axes(axes), EVENT_DATES):
             mesh = plot_event_panel(
                 ax=ax,
                 ds_tp=ds_tp,
@@ -483,6 +547,15 @@ def main():
                 target_date=target_date,
                 proj_data=proj_data,
             )
+
+        mesh = plot_zoom_panel(
+            ax=get_zoom_axis(axes),
+            ds_tp=ds_tp,
+            catchment_boundary=catchment_boundary,
+            target_date="2023-08-08",
+            stations=STATIONS,
+            proj_data=proj_data,
+        )    
 
         finalize_figure(
             fig=fig,

@@ -18,7 +18,7 @@ from Dunnsigouin_etal_2026 import config
 variable        = "tp24"
 years           = np.arange(1957, 2024, 1)
 grid            = "0.5x0.5"
-catchment       = "regine_002_glommavassdraget"
+catchment       = "regine_002_drammenvassdraget"
 x_days          = 2  # accumulation used when creating the saved time series
 
 # File containing your already-created spatially averaged time series
