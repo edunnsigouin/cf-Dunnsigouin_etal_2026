@@ -23,7 +23,7 @@ era5_continuous_daily_scandinavia = raw + 'era5/continuous-format/daily/scandina
 senorge_continuous_daily = '/nird/datapeak/NS9873K/DATA/senorge/'
 
 nve                  = processed + 'nve/'
-obs                  = processed + 'obs/'
+station              = processed + 'station/'
 era5_processed       = processed + 'era5/'
 senorge_processed    = processed + 'senorge/'
 
@@ -40,7 +40,7 @@ dirs = {"proj":proj,
         "era5_hindcast_daily":era5_hindcast_daily,
         "era5_continuous_daily_scandinavia":era5_continuous_daily_scandinavia,
         "nve": nve,
-        "obs": obs,
+        "station": station,
         "era5_processed":era5_processed,
         "senorge_continuous_daily":senorge_continuous_daily,
         "senorge_processed":senorge_processed,

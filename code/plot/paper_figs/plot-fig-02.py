@@ -31,11 +31,11 @@ from Dunnsigouin_etal_2026 import config
 # -----------------------------------------------------------------------------
 # Input
 # -----------------------------------------------------------------------------
-path_in_obs               = config.dirs["obs"]
+path_in_station           = config.dirs["station"]
 path_out                  = config.dirs["fig"]
-filename_in_streamflow    = f"{path_in_obs}streamflow.Bergheim.nc"
-filename_in_precipitation = f"{path_in_obs}precipitation.ål.III.nc"
-filename_in_snowdepth     = f"{path_in_obs}snowdepth.ål.III.nc"
+filename_in_streamflow    = f"{path_in_station}streamflow.Bergheim.nc"
+filename_in_precipitation = f"{path_in_station}precipitation.ål.III.nc"
+filename_in_snowdepth     = f"{path_in_station}snowdepth.ål.III.nc"
 filename_out              = f"{path_out}fig-02.png"
 write2file                = True
 
@@ -43,14 +43,14 @@ write2file                = True
 # -----------------------------------------------------------------------------
 # Data loading
 # -----------------------------------------------------------------------------
-def load_obs_data(filename_streamflow, filename_precipitation, filename_snowdepth):
+def load_station_data(filename_streamflow, filename_precipitation, filename_snowdepth):
     """
-    Load the three observational datasets.
+    Load the three station datasets.
 
     Returns
     -------
     ds_streamflow, ds_precipitation, ds_snowdepth : xr.Dataset
-        Observational datasets for streamflow, precipitation, and snow depth.
+        Station datasets for streamflow, precipitation, and snow depth.
     """
     ds_streamflow = xr.open_dataset(filename_streamflow)
     ds_precipitation = xr.open_dataset(filename_precipitation)
@@ -170,7 +170,7 @@ def plot_panel_streamflow(
     ax.plot(x, med, linewidth=1.4, color="tab:red", label="Median over all years")
     ax.plot(x, y, linewidth=1.2, label=f"{year}")
 
-    ax.set_title("c) Bergheim station streamflow", fontsize=title_fontsize)
+    ax.set_title("c) Bergheim station, streamflow 1921-2025", fontsize=title_fontsize)
     ax.set_ylabel("m³/s", fontsize=axis_labelsize)
 
 
@@ -197,7 +197,7 @@ def plot_panel_precipitation(
     ax.plot(x, y, linewidth=1.2, label=f"{year}")
 
     ax.set_title(
-        "b) Ål III station 2-day accumulated precipitation",
+        "b) Ål III station, 2-day accumulated precipitation 1957-2025",
         fontsize=title_fontsize,
     )
     ax.set_ylabel("mm / 2 days", fontsize=axis_labelsize)
@@ -221,7 +221,7 @@ def plot_panel_snowdepth(
     ax.plot(x, med, linewidth=1.4, color="tab:red", label="Median over all years")
     ax.plot(x, y, linewidth=1.2, label=f"{year}")
 
-    ax.set_title("a) Ål III station snow depth", fontsize=title_fontsize)
+    ax.set_title("a) Ål III station, snow depth 1957-2025", fontsize=title_fontsize)
     ax.set_ylabel("cm", fontsize=axis_labelsize)
 
 
@@ -235,7 +235,7 @@ def plot_all_panels(
     year=2023,
     outfile=None,
     write2file=False,
-    figsize=(20, 5),
+    figsize=(5, 12),
     tick_labelsize=11,
     axis_labelsize=11,
     title_fontsize=12,
@@ -266,7 +266,7 @@ def plot_all_panels(
     legend_fontsize : int or float
         Font size for legend text.
     """
-    fig, axes = plt.subplots(1, 3, figsize=figsize, sharex=True)
+    fig, axes = plt.subplots(3, 1, figsize=figsize)
 
     # Panel order: snow depth, precipitation, streamflow
     ax_snowdepth, ax_precipitation, ax_streamflow = axes
@@ -329,7 +329,7 @@ def plot_all_panels(
 # Main script
 # -----------------------------------------------------------------------------
 if __name__ == "__main__":
-    ds_streamflow, ds_precipitation, ds_snowdepth = load_obs_data(
+    ds_streamflow, ds_precipitation, ds_snowdepth = load_station_data(
         filename_in_streamflow,
         filename_in_precipitation,
         filename_in_snowdepth,
@@ -342,7 +342,7 @@ if __name__ == "__main__":
         year=2023,
         outfile=filename_out,
         write2file=write2file,
-        figsize=(20, 5),        
+        figsize=(9, 10),        
         tick_labelsize=12,      
         axis_labelsize=12,      
         title_fontsize=12,      
