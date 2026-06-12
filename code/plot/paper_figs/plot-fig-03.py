@@ -34,7 +34,7 @@ filename_in_model = (
     f"{path_in_model}"
     f"distribution_monthly_extremes_{variable}_{x_days}dayacc_"
     f"nve_catchment_{catchment}_forecast_hindcast_"
-    f"{forecast_date_range[0]}_{forecast_date_range[1]}.nc"
+    f"{forecast_date_range[0]}_{forecast_date_range[1]}-old.nc"
 )
 
 if reference_dataset == 'era5':
