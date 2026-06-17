@@ -863,7 +863,7 @@ def finalize_figure(
     fig.subplots_adjust(
         left=0.08,
         right=0.90,
-        bottom=0.08,
+        bottom=0.05,
         top=0.95,
     )
 
