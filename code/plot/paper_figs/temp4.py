@@ -68,7 +68,7 @@ FIG_WIDTH_IN = 10
 FIG_HEIGHT_IN = 13
 
 MAP_EXTENT = [6, 12, 59, 62]
-MAP_WSPACE = 0.0
+MAP_WSPACE = 0.05
 MAP_HSPACE = 0.08
 
 CENTRAL_LON = 10.0
@@ -771,7 +771,7 @@ def plot_runoff_timeseries(ts_ax, event, event_dates):
         ha="right",
     )
 
-    ts_ax.grid(True, linewidth=0.5, alpha=0.4)
+    #ts_ax.grid(True, linewidth=0.5, alpha=0.4)
     ts_ax.legend(frameon=False, fontsize=AXIS_LABELSIZE)
 
 
