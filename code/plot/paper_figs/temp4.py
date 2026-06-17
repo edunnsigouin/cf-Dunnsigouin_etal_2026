@@ -65,7 +65,7 @@ S2S_BASE_DIR = Path("/nird/datapeak/NS9873K/etdu/raw/s2s/mars/ecmwf")
 # =============================================================================
 
 FIG_WIDTH_IN = 10
-FIG_HEIGHT_IN = 13
+FIG_HEIGHT_IN = 13.5
 
 MAP_EXTENT = [6, 12, 59, 62]
 MAP_WSPACE = 0.05
