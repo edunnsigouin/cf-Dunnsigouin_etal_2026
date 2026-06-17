@@ -861,9 +861,9 @@ def finalize_figure(
     plot_runoff_timeseries(ts_ax, event, event_dates)
 
     fig.subplots_adjust(
-        left=0.05,
+        left=0.08,
         right=0.90,
-        bottom=0.05,
+        bottom=0.08,
         top=0.95,
     )
 
