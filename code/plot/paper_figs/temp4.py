@@ -64,8 +64,8 @@ S2S_BASE_DIR = Path("/nird/datapeak/NS9873K/etdu/raw/s2s/mars/ecmwf")
 # Figure settings
 # =============================================================================
 
-FIG_WIDTH_IN = 9
-FIG_HEIGHT_IN = 12
+FIG_WIDTH_IN = 10
+FIG_HEIGHT_IN = 13
 
 MAP_EXTENT = [6, 12, 59, 62]
 MAP_WSPACE = 0.0
@@ -730,13 +730,13 @@ def plot_runoff_timeseries(ts_ax, event, event_dates):
     )
 
     for date in event_dates:
-        ts_ax.axvline(
-            np.datetime64(date),
-            color="0.4",
-            linewidth=EVENT_DATE_LINEWIDTH,
-            alpha=EVENT_DATE_ALPHA,
-            linestyle="--",
-        )
+        #ts_ax.axvline(
+        #    np.datetime64(date),
+        #    color="0.4",
+        #    linewidth=EVENT_DATE_LINEWIDTH,
+        #    alpha=EVENT_DATE_ALPHA,
+        #    linestyle="--",
+        #)
 
         value = da_event.sel({time_name: np.datetime64(date)}, method="nearest")
 
@@ -861,9 +861,9 @@ def finalize_figure(
     plot_runoff_timeseries(ts_ax, event, event_dates)
 
     fig.subplots_adjust(
-        left=0.08,
+        left=0.05,
         right=0.90,
-        bottom=0.08,
+        bottom=0.05,
         top=0.95,
     )
 
