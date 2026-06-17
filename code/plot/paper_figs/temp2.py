@@ -53,7 +53,7 @@ DRAMMEN_LON = 10.2045
 DRAMMEN_LAT = 59.7440
 DRAMMEN_LABEL = "Drammen"
 
-ZOOM_MAP_EXTENT = [6, 12, 59, 62]
+ZOOM_MAP_EXTENT = [6.5, 11.5, 59, 61.5]
 
 DRAMMEN_MARKER_SIZE = 5
 DRAMMEN_MARKER_FACE_COLOR = "yellow"
@@ -86,7 +86,7 @@ CENTRAL_LON = 10.0
 CENTRAL_LAT = 62.0
 
 TICK_LABELSIZE = 12
-AXIS_LABELSIZE = 11
+AXIS_LABELSIZE = 10
 TITLE_FONTSIZE = 13
 CONTOUR_LABELSIZE = 9
 
@@ -832,7 +832,7 @@ def plot_event_panel(ax, event, lag, target_date, catchment_boundary, proj_data)
 def add_zoom_inset(parent_ax, proj_map, proj_data, catchment_boundary):
     """Add zoomed inset map to panel d showing Drammen catchment and city."""
     inset_ax = parent_ax.inset_axes(
-        [0.03, 0.03, 0.38, 0.38],
+        [0.01, 0.01, 0.3, 0.3],
         projection=proj_map,
         zorder=20,
     )
@@ -869,13 +869,13 @@ def add_zoom_inset(parent_ax, proj_map, proj_data, catchment_boundary):
     )
 
     txt = inset_ax.text(
-        DRAMMEN_LON + 0.08,
+        DRAMMEN_LON ,
         DRAMMEN_LAT + 0.06,
         "Drammen",
         fontsize=7,
         color="yellow",
         fontweight="bold",
-        ha="left",
+        ha="right",
         va="bottom",
         transform=proj_data,
         zorder=13,
@@ -913,17 +913,8 @@ def plot_runoff_timeseries(ts_ax, event, event_dates):
         alpha=RUNOFF_RANGE_FILL_ALPHA,
         linewidth=0,
         label=(
-            "Full range, excluding selected event "
-            f"(n={da_min.attrs['n_samples_used']})"
+            "full hindcast range excluding event"
         ),
-    )
-
-    ts_ax.plot(
-        da_median[time_name].values,
-        da_median.values,
-        color=RUNOFF_MEDIAN_LINE_COLOR,
-        linewidth=RUNOFF_MEDIAN_LINEWIDTH,
-        label="Median of hindcast members",
     )
 
     ts_ax.plot(
@@ -931,7 +922,7 @@ def plot_runoff_timeseries(ts_ax, event, event_dates):
         da_event.values,
         color=RUNOFF_EVENT_LINE_COLOR,
         linewidth=RUNOFF_EVENT_LINEWIDTH,
-        label="Selected event",
+        label="event",
     )
 
     for date in event_dates:
@@ -951,8 +942,7 @@ def plot_runoff_timeseries(ts_ax, event, event_dates):
 
     ts_ax.set_title(
         (
-            f"e) Runoff at grid point nearest {DRAMMEN_LABEL} "
-            f"({selected_lat:.2f}°N, {selected_lon:.2f}°E; {selected_grid})"
+            f"e) Runoff at grid point nearest city of {DRAMMEN_LABEL}"
         ),
         fontsize=TITLE_FONTSIZE,
         pad=5,
@@ -976,6 +966,25 @@ def plot_runoff_timeseries(ts_ax, event, event_dates):
 
     ts_ax.legend(frameon=False, fontsize=AXIS_LABELSIZE)
 
+    import matplotlib.dates as mdates
+
+    # Tick every N days
+    tick_interval_days = 2
+
+    start_date = da_event[time_name].values[0]
+    end_date = da_event[time_name].values[-1]
+
+    tick_dates = np.arange(
+        start_date,
+        end_date + np.timedelta64(1, "D"),
+        np.timedelta64(tick_interval_days, "D"),
+    )
+
+    ts_ax.set_xticks(tick_dates)
+
+    ts_ax.xaxis.set_major_formatter(
+        mdates.DateFormatter("%d %b")
+    )
 
 # =============================================================================
 # Figure finishing
@@ -991,11 +1000,29 @@ def add_panel_titles(axes, event_dates):
         EVENT_LAGS,
         event_dates,
     ):
+        formatted_date = np.datetime_as_string(
+            np.datetime64(date),
+            unit="D",
+        )
+
+        formatted_date = (
+            np.datetime64(date)
+            .astype("datetime64[D]")
+            .astype(object)
+            .strftime("%B %-d")
+        )
+
         ax.set_title(
-            f"{panel_label} Day {lag:+d}: {date}",
+            f"{panel_label} Day {lag:+d}: {formatted_date}",
             fontsize=TITLE_FONTSIZE,
             pad=3,
         )
+        
+        #ax.set_title(
+        #    f"{panel_label} Day {lag:+d}: {date}",
+        #    fontsize=TITLE_FONTSIZE,
+        #    pad=3,
+        #)
 
 
 def add_colorbar(fig, mesh, cbar_ax):
@@ -1054,12 +1081,19 @@ def add_legend(axes, catchment_label):
         get_snowmelt_legend_handle(),
     ]
 
-    axes[0, 0].legend(
-        handles=legend_handles,
-        loc="upper left",
-        frameon=True,
-        fontsize=AXIS_LABELSIZE,
+    legend = axes[0, 0].legend(
+    handles=legend_handles,
+    loc="upper left",
+    frameon=True,
+    fontsize=AXIS_LABELSIZE,
     )
+
+    legend.get_frame().set_facecolor("white")
+    legend.get_frame().set_edgecolor("black")
+    legend.get_frame().set_linewidth(0.8)
+    legend.get_frame().set_alpha(1.0)
+    legend.set_zorder(100)
+
 
 
 def finalize_figure(
