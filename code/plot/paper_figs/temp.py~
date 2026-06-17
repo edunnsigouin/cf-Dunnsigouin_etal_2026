@@ -1,13 +1,11 @@
 #!/usr/bin/env python3
 """
-Plot one high-ranking S2S precipitation event.
+Plot one high-ranking S2S runoff event.
 
 The figure follows the same layout as the ERA5 Storm Hans plot:
 1. Four event-relative panels: -2, -1, 0, +1.
-2. Daily precipitation as shading.
-3. Mean sea level pressure as labelled grey contours.
-4. Snowmelt, defined as daily change in SWE < 0, as stippling or hatching.
-5. Selected catchment boundary in red.
+2. Daily runoff as shading.
+3. Selected catchment boundary in red.
 """
 
 from pathlib import Path
@@ -18,7 +16,6 @@ import matplotlib.pyplot as plt
 import numpy as np
 import xarray as xr
 from matplotlib.lines import Line2D
-from matplotlib.patches import Patch
 from shapely.geometry import MultiPolygon, Polygon
 
 from Dunnsigouin_etal_2026 import config
@@ -33,9 +30,7 @@ EVENT_RANK = 1              # options: 1-5
 
 EVENT_LAGS = [-2, -1, 0, 1]
 
-PRECIP_VAR = "tp24"
-MSL_VAR = "msl"
-SNOW_VAR = "sd"
+RUNOFF_VAR = "ro24"
 
 WRITE_TO_FILE = False
 
@@ -67,39 +62,20 @@ CENTRAL_LAT = 62.0
 TICK_LABELSIZE = 12
 AXIS_LABELSIZE = 11
 TITLE_FONTSIZE = 13
-CONTOUR_LABELSIZE = 9
 
 
 # =============================================================================
 # Plot styling
 # =============================================================================
 
-PRECIP_LEVELS = np.arange(5, 55, 5)
-PRECIP_ZERO_THRESHOLD = 5.0
-PRECIP_CMAP = plt.get_cmap("GnBu").copy()
-PRECIP_CMAP.set_under("white")
-
-MSL_CONTOUR_LEVELS = np.arange(975, 1045, 5)
-MSL_CONTOUR_COLOR = "0.7"
-MSL_CONTOUR_LINEWIDTH = 1.5
+RUNOFF_LEVELS = np.arange(5, 55, 5)
+RUNOFF_ZERO_THRESHOLD = 5.0
+RUNOFF_CMAP = plt.get_cmap("GnBu").copy()
+RUNOFF_CMAP.set_under("white")
 
 CATCHMENT_EDGE_COLOR = "red"
 CATCHMENT_LINEWIDTH = 1.0
 CATCHMENT_CRS_IF_MISSING = "EPSG:4326"
-
-SNOWMELT_OVERLAY = "stippling"  # options: "stippling", "hatching"
-SNOWMELT_THRESHOLD = 0.0
-
-SNOWMELT_DOT_COLOR = "orange"
-SNOWMELT_DOT_SIZE = 4
-SNOWMELT_DOT_ALPHA = 1.0
-SNOWMELT_DOT_STRIDE = 1
-
-SNOWMELT_HATCH_PATTERN = "////"
-SNOWMELT_HATCH_COLOR = "orange"
-SNOWMELT_HATCH_LINEWIDTH = 1.0
-
-SNOWMELT_ZORDER = 8
 
 
 # =============================================================================
@@ -259,8 +235,7 @@ def make_s2s_file(event, variable, grid):
 
 def make_output_filename(catchment_name, event_rank):
     """Create output filename."""
-    return f"{PATH_OUT}fig-0X1.png"
-    
+    return f"{PATH_OUT}fig-0X1-runoff.png"
 
 
 # =============================================================================
@@ -313,21 +288,15 @@ def open_s2s_variable(filename, variable):
         raise FileNotFoundError(f"File not found: {filename}")
 
     ds = xr.open_dataset(filename)
+
+    print(ds)
     
     if variable not in ds:
         raise KeyError(f"Variable '{variable}' not found in {filename}")
 
-    if variable == PRECIP_VAR:
+    if variable == RUNOFF_VAR:
         ds[variable] = ds[variable] * 1000.0
-        ds[variable].attrs["units"] = "mm"
-
-    elif variable == MSL_VAR:
-        ds[variable] = ds[variable] / 100.0
-        ds[variable].attrs["units"] = "hPa"
-
-    elif variable == SNOW_VAR:
-        ds[variable] = ds[variable] * 1000.0
-        ds[variable].attrs["units"] = "mm"
+        ds[variable].attrs["units"] = "mm/day"
 
     return ds
 
@@ -399,35 +368,9 @@ def load_daily_variable(event, target_date, variable):
     )
 
 
-def load_precipitation(event, target_date):
-    """Load daily precipitation in mm/day."""
-    return load_daily_variable(event, target_date, PRECIP_VAR)
-
-
-def load_msl(event, target_date):
-    """Load mean sea level pressure in hPa."""
-    return load_daily_variable(event, target_date, MSL_VAR)
-
-
-def load_snowmelt(event, lag):
-    """
-    Compute daily SWE change.
-
-    Snowmelt is later plotted where:
-        SWE(current day) - SWE(previous day) < 0
-    """
-    date_of_max = np.datetime64(event["date_of_max"], "D")
-    previous_date = date_of_max + np.timedelta64(lag - 1, "D")
-    current_date = date_of_max + np.timedelta64(lag, "D")
-
-    da_previous = load_daily_variable(event, str(previous_date), SNOW_VAR)
-    da_current = load_daily_variable(event, str(current_date), SNOW_VAR)
-
-    da_change = da_current - da_previous
-    da_change.attrs["units"] = "mm"
-    da_change.attrs["long_name"] = "Daily change in snow water equivalent"
-
-    return da_change
+def load_runoff(event, target_date):
+    """Load daily runoff in mm/day."""
+    return load_daily_variable(event, target_date, RUNOFF_VAR)
 
 
 def load_catchment_outer_boundary(filename, base_dir, crs_if_missing="EPSG:4326"):
@@ -498,123 +441,34 @@ def get_plot_axes(axes):
 # Plotting functions
 # =============================================================================
 
-def plot_precipitation(ax, da_precip, proj_data):
-    """Plot daily precipitation as shaded grid cells."""
-    lon, lat = get_lon_lat(da_precip)
-    precip = da_precip.values
+def plot_runoff(ax, da_runoff, proj_data):
+    """Plot daily runoff as shaded grid cells."""
+    lon, lat = get_lon_lat(da_runoff)
+    runoff = da_runoff.values
 
     lon_edges = centers_to_edges(lon.values)
     lat_edges = centers_to_edges(lat.values)
 
     if lat_edges[0] > lat_edges[-1]:
         lat_edges = lat_edges[::-1]
-        precip = precip[::-1, :]
+        runoff = runoff[::-1, :]
 
     if lon_edges[0] > lon_edges[-1]:
         lon_edges = lon_edges[::-1]
-        precip = precip[:, ::-1]
+        runoff = runoff[:, ::-1]
 
     lon_edges_2d, lat_edges_2d = np.meshgrid(lon_edges, lat_edges)
 
     return ax.pcolormesh(
         lon_edges_2d,
         lat_edges_2d,
-        precip,
-        cmap=PRECIP_CMAP,
-        vmin=PRECIP_ZERO_THRESHOLD,
-        vmax=PRECIP_LEVELS.max(),
+        runoff,
+        cmap=RUNOFF_CMAP,
+        vmin=RUNOFF_ZERO_THRESHOLD,
+        vmax=RUNOFF_LEVELS.max(),
         shading="auto",
         transform=proj_data,
     )
-
-
-def plot_msl_contours(ax, da_msl, proj_data):
-    """Plot labelled mean sea level pressure contours."""
-    lon, lat = get_lon_lat(da_msl)
-
-    contour = ax.contour(
-        lon.values,
-        lat.values,
-        da_msl.values,
-        levels=MSL_CONTOUR_LEVELS,
-        colors=MSL_CONTOUR_COLOR,
-        linewidths=MSL_CONTOUR_LINEWIDTH,
-        transform=proj_data,
-        zorder=6,
-    )
-
-    ax.clabel(
-        contour,
-        inline=True,
-        inline_spacing=4,
-        fontsize=CONTOUR_LABELSIZE,
-        fmt="%d",
-        colors=MSL_CONTOUR_COLOR,
-    )
-
-
-def plot_snowmelt(ax, da_snowmelt, proj_data):
-    """Overlay locations where daily SWE change is negative."""
-    lon, lat = get_lon_lat(da_snowmelt)
-
-    snowmelt = np.isfinite(da_snowmelt.values)
-    snowmelt &= da_snowmelt.values < SNOWMELT_THRESHOLD
-
-    if SNOWMELT_OVERLAY == "stippling":
-        plot_snowmelt_stippling(ax, lon, lat, snowmelt, proj_data)
-
-    elif SNOWMELT_OVERLAY == "hatching":
-        plot_snowmelt_hatching(ax, lon, lat, snowmelt, proj_data)
-
-    else:
-        raise ValueError(
-            "SNOWMELT_OVERLAY must be either 'stippling' or 'hatching'."
-        )
-
-
-def plot_snowmelt_stippling(ax, lon, lat, snowmelt, proj_data):
-    """Plot snowmelt as orange stippling."""
-    iy, ix = np.where(snowmelt)
-
-    if SNOWMELT_DOT_STRIDE > 1:
-        iy = iy[::SNOWMELT_DOT_STRIDE]
-        ix = ix[::SNOWMELT_DOT_STRIDE]
-
-    ax.scatter(
-        lon.values[ix],
-        lat.values[iy],
-        s=SNOWMELT_DOT_SIZE,
-        c=SNOWMELT_DOT_COLOR,
-        alpha=SNOWMELT_DOT_ALPHA,
-        transform=proj_data,
-        zorder=SNOWMELT_ZORDER,
-        linewidths=0,
-    )
-
-
-def plot_snowmelt_hatching(ax, lon, lat, snowmelt, proj_data):
-    """Plot snowmelt as orange hatching."""
-    old_hatch_color = plt.rcParams["hatch.color"]
-    old_hatch_linewidth = plt.rcParams["hatch.linewidth"]
-
-    try:
-        plt.rcParams["hatch.color"] = SNOWMELT_HATCH_COLOR
-        plt.rcParams["hatch.linewidth"] = SNOWMELT_HATCH_LINEWIDTH
-
-        ax.contourf(
-            lon.values,
-            lat.values,
-            snowmelt.astype(int),
-            levels=[0.5, 1.5],
-            colors="none",
-            hatches=[SNOWMELT_HATCH_PATTERN],
-            transform=proj_data,
-            zorder=SNOWMELT_ZORDER,
-        )
-
-    finally:
-        plt.rcParams["hatch.color"] = old_hatch_color
-        plt.rcParams["hatch.linewidth"] = old_hatch_linewidth
 
 
 def plot_catchment_boundary(ax, geometry, proj_data):
@@ -630,14 +484,10 @@ def plot_catchment_boundary(ax, geometry, proj_data):
 
 
 def plot_event_panel(ax, event, lag, target_date, catchment_boundary, proj_data):
-    """Plot one event-relative panel."""
-    da_precip = load_precipitation(event, target_date)
-    da_msl = load_msl(event, target_date)
-    da_snowmelt = load_snowmelt(event, lag)
+    """Plot one event-relative runoff panel."""
+    da_runoff = load_runoff(event, target_date)
 
-    mesh = plot_precipitation(ax, da_precip, proj_data)
-    plot_msl_contours(ax, da_msl, proj_data)
-    plot_snowmelt(ax, da_snowmelt, proj_data)
+    mesh = plot_runoff(ax, da_runoff, proj_data)
     plot_catchment_boundary(ax, catchment_boundary, proj_data)
 
     return mesh
@@ -665,7 +515,7 @@ def add_panel_titles(axes, event_dates):
 
 
 def add_colorbar(fig, mesh):
-    """Add horizontal precipitation colorbar below the panels."""
+    """Add horizontal runoff colorbar below the panels."""
     cax = fig.add_axes([0.072, 0.1, 0.41, 0.025])
 
     cbar = fig.colorbar(
@@ -675,31 +525,10 @@ def add_colorbar(fig, mesh):
     )
 
     cbar.set_label(
-        "accumulated total precipitation (mm/day)",
+        "accumulated total runoff (mm/day)",
         fontsize=AXIS_LABELSIZE,
     )
     cbar.ax.tick_params(labelsize=TICK_LABELSIZE)
-
-
-def get_snowmelt_legend_handle():
-    """Return legend handle for the selected snowmelt overlay."""
-    if SNOWMELT_OVERLAY == "hatching":
-        return Patch(
-            facecolor="white",
-            edgecolor=SNOWMELT_HATCH_COLOR,
-            hatch=SNOWMELT_HATCH_PATTERN,
-            label=r"Snowmelt ($\Delta$SWE < 0)",
-        )
-
-    return Line2D(
-        [0],
-        [0],
-        marker="o",
-        color="none",
-        markerfacecolor=SNOWMELT_DOT_COLOR,
-        markersize=5,
-        label=r"Snowmelt ($\Delta$SWE < 0)",
-    )
 
 
 def add_legend(fig, catchment_label):
@@ -712,14 +541,6 @@ def add_legend(fig, catchment_label):
             linewidth=2,
             label=catchment_label,
         ),
-        Line2D(
-            [0],
-            [0],
-            color=MSL_CONTOUR_COLOR,
-            linewidth=MSL_CONTOUR_LINEWIDTH,
-            label="Mean sea level pressure (hPa)",
-        ),
-        get_snowmelt_legend_handle(),
     ]
 
     fig.legend(
