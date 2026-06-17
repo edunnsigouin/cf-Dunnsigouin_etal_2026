@@ -86,7 +86,7 @@ CENTRAL_LON = 10.0
 CENTRAL_LAT = 62.0
 
 TICK_LABELSIZE = 12
-AXIS_LABELSIZE = 10
+AXIS_LABELSIZE = 11
 TITLE_FONTSIZE = 13
 CONTOUR_LABELSIZE = 9
 
@@ -913,7 +913,7 @@ def plot_runoff_timeseries(ts_ax, event, event_dates):
         alpha=RUNOFF_RANGE_FILL_ALPHA,
         linewidth=0,
         label=(
-            "full hindcast range excluding event"
+            "full hindcast range excluding event (N=219)"
         ),
     )
 
@@ -942,7 +942,7 @@ def plot_runoff_timeseries(ts_ax, event, event_dates):
 
     ts_ax.set_title(
         (
-            f"e) Runoff at grid point nearest city of {DRAMMEN_LABEL}"
+            f"e) Runoff in the city of {DRAMMEN_LABEL}"
         ),
         fontsize=TITLE_FONTSIZE,
         pad=5,
@@ -1085,7 +1085,7 @@ def add_legend(axes, catchment_label):
     handles=legend_handles,
     loc="upper left",
     frameon=True,
-    fontsize=AXIS_LABELSIZE,
+    fontsize=10,
     )
 
     legend.get_frame().set_facecolor("white")
@@ -1094,7 +1094,22 @@ def add_legend(axes, catchment_label):
     legend.get_frame().set_alpha(1.0)
     legend.set_zorder(100)
 
+def align_timeseries_axis_to_map_panels(fig, axes, ts_ax):
+    """Align panel e with the combined left/right borders of panels a-d."""
+    fig.canvas.draw()
 
+    left = min(axes[0, 0].get_position().x0, axes[1, 0].get_position().x0)
+    right = max(axes[0, 1].get_position().x1, axes[1, 1].get_position().x1)
+
+    pos = ts_ax.get_position()
+
+    ts_ax.set_position([
+        left,
+        pos.y0,
+        right - left,
+        pos.height,
+    ])
+    
 
 def finalize_figure(
     fig,
@@ -1133,6 +1148,8 @@ def finalize_figure(
         top=0.96,
     )
 
+    align_timeseries_axis_to_map_panels(fig, axes, ts_ax)
+    
     if WRITE_TO_FILE:
         fig.savefig(savepath, dpi=300, bbox_inches="tight")
 
