@@ -36,8 +36,8 @@ path_out                  = config.dirs["fig"]
 filename_in_streamflow    = f"{path_in_station}streamflow.Bergheim.nc"
 filename_in_precipitation = f"{path_in_station}precipitation.ål.III.nc"
 filename_in_snowdepth     = f"{path_in_station}snowdepth.ål.III.nc"
-filename_out              = f"{path_out}fig-02.png"
-write2file                = False
+filename_out              = f"{path_out}t-storm-hans-station-data.png"
+write2file                = True
 
 
 # -----------------------------------------------------------------------------

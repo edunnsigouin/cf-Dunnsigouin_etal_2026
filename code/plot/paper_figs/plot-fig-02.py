@@ -22,7 +22,7 @@ x_days              = 2
 catchment           = "regine_drammen"
 forecast_date_range = ["2020-01-02", "2023-06-26"]
 
-reference_dataset = "senorge"
+reference_dataset = "era5"
 grid              = "0.5x0.5"
 reference_years   = ["1957", "2023"]
 
@@ -34,7 +34,7 @@ filename_in_model = (
     f"{path_in_model}"
     f"distribution_monthly_extremes_{variable}_{x_days}dayacc_"
     f"nve_catchment_{catchment}_forecast_hindcast_"
-    f"{forecast_date_range[0]}_{forecast_date_range[1]}-old.nc"
+    f"{forecast_date_range[0]}_{forecast_date_range[1]}.nc"
 )
 
 if reference_dataset == 'era5':
@@ -52,7 +52,7 @@ else:
         f"{reference_years[0]}-{reference_years[1]}.nc"
     )
 
-filename_out = f"{path_out}fig-03.png"
+filename_out = f"{path_out}fig-02.png"
 write2file   = False
 # -------------------------------------------------------
 
