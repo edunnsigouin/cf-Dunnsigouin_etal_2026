@@ -1,34 +1,40 @@
 """
-Plots fig. 3 in the paper: monthly distributions of precipitation extremes.
+Plots fig. 2/3 in the paper: monthly S2S distributions of precipitation extremes.
 
-The figure has two panels:
-1. Reference data, e.g. ERA5 or SeNorge
-2. Model data, i.e. S2S forecast/hindcast extremes
-
-Each panel shows one box-and-whisker distribution per month of year.
-Outliers are shown as empty circles.
+Single publication-quality panel:
+- Box-and-whisker distributions show S2S forecast/hindcast monthly extremes.
+- Blue dots show SeNorge monthly records before Storm Hans.
+- Red dots show ERA5 monthly records before Storm Hans.
+- Blue triangle shows SeNorge Storm Hans.
+- Red triangle shows ERA5 Storm Hans.
+- Green dot shows the highest May S2S event, labelled counterfactual event.
 """
 
 import numpy as np
 import xarray as xr
 import matplotlib.pyplot as plt
+from matplotlib.lines import Line2D
 
 from Dunnsigouin_etal_2026 import config
 
 
-# Input -------------------------------------------------
-variable            = "tp"
-x_days              = 2
-catchment           = "regine_drammen"
+# =============================================================================
+# Input
+# =============================================================================
+
+variable = "tp"
+x_days = 2
+catchment = "regine_drammen"
 forecast_date_range = ["2020-01-02", "2023-06-26"]
 
-reference_dataset = "era5"
-grid              = "0.5x0.5"
-reference_years   = ["1957", "2023"]
+grid = "0.5x0.5"
+reference_years = ["1957", "2023"]
 
 path_in_model = config.dirs["s2s_processed"]
-path_in_ref   = config.dirs[f"{reference_dataset}_processed"]
-path_out      = config.dirs["fig"]
+path_out = config.dirs["fig"]
+
+path_in_era5 = config.dirs["era5_processed"]
+path_in_senorge = config.dirs["senorge_processed"]
 
 filename_in_model = (
     f"{path_in_model}"
@@ -37,51 +43,63 @@ filename_in_model = (
     f"{forecast_date_range[0]}_{forecast_date_range[1]}.nc"
 )
 
-if reference_dataset == 'era5':
-    filename_in_ref = (
-        f"{path_in_ref}"
-        f"distribution_monthly_extremes_{variable}_{x_days}dayacc_"
-        f"nve_catchment_{catchment}_{reference_dataset}_{grid}_"
-        f"{reference_years[0]}-{reference_years[1]}.nc"
-    )
-else:
-    filename_in_ref = (
-        f"{path_in_ref}"
-        f"distribution_monthly_extremes_{variable}_{x_days}dayacc_"
-        f"nve_catchment_{catchment}_{reference_dataset}_"
-        f"{reference_years[0]}-{reference_years[1]}.nc"
-    )
+filename_in_era5 = (
+    f"{path_in_era5}"
+    f"distribution_monthly_extremes_{variable}_{x_days}dayacc_"
+    f"nve_catchment_{catchment}_era5_{grid}_"
+    f"{reference_years[0]}-{reference_years[1]}.nc"
+)
+
+filename_in_senorge = (
+    f"{path_in_senorge}"
+    f"distribution_monthly_extremes_{variable}_{x_days}dayacc_"
+    f"nve_catchment_{catchment}_senorge_"
+    f"{reference_years[0]}-{reference_years[1]}.nc"
+)
 
 filename_out = f"{path_out}fig-02.png"
-write2file   = False
-# -------------------------------------------------------
+write2file = True
 
 
-def load_data(filename_in_model, filename_in_ref):
-    """Load model and reference datasets."""
+# =============================================================================
+# Plot settings
+# =============================================================================
 
+FIG_WIDTH_IN = 7.2
+FIG_HEIGHT_IN = 4.4
+
+TITLE_FONTSIZE = 11
+AXIS_LABELSIZE = 11
+TICK_LABELSIZE = 11
+LEGEND_FONTSIZE = 7
+
+YMIN = 0
+YMAX = 135
+
+BOX_WIDTH = 0.58
+
+SENORGE_COLOR = "tab:blue"
+ERA5_COLOR = "tab:red"
+COUNTERFACTUAL_COLOR = "tab:green"
+
+MONTHS = np.arange(1, 13)
+MONTH_LABELS = [
+    "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+    "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+]
+
+
+# =============================================================================
+# Data loading
+# =============================================================================
+
+def load_data(filename_in_model, filename_in_era5, filename_in_senorge):
+    """Load model, ERA5, and SeNorge datasets."""
     model_ds = xr.open_dataset(filename_in_model)
-    ref_ds   = xr.open_dataset(filename_in_ref)
+    era5_ds = xr.open_dataset(filename_in_era5)
+    senorge_ds = xr.open_dataset(filename_in_senorge)
 
-    return model_ds, ref_ds
-
-
-def get_reference_monthly_values(ref_ds, variable="tp"):
-    """
-    Convert reference data to a list of arrays, one per month.
-
-    Expected input:
-        ref_ds[variable](year, month)
-    """
-
-    values_by_month = []
-
-    for month in range(1, 13):
-        vals = ref_ds[variable].sel(month=month).values
-        vals = vals[np.isfinite(vals)]
-        values_by_month.append(vals)
-
-    return values_by_month
+    return model_ds, era5_ds, senorge_ds
 
 
 def get_model_monthly_values(model_ds, variable="max_value"):
@@ -91,10 +109,9 @@ def get_model_monthly_values(model_ds, variable="max_value"):
     Expected input:
         model_ds[variable](month_of_year, index)
     """
-
     values_by_month = []
 
-    for month in range(1, 13):
+    for month in MONTHS:
         vals = model_ds[variable].sel(month_of_year=month).values
         vals = vals[np.isfinite(vals)]
         values_by_month.append(vals)
@@ -102,88 +119,283 @@ def get_model_monthly_values(model_ds, variable="max_value"):
     return values_by_month
 
 
-def plot_monthly_boxplots(ref_values, model_values, ref_ds, filename_out=None, write2file=False):
-    """Plot monthly boxplots and overlay reference maxima."""
+def get_reference_monthly_records(ref_ds, variable="tp"):
+    """
+    Get monthly records before Storm Hans.
 
-    months = np.arange(1, 13)
-    month_labels = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
-                    "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+    Uses 1957-2022, so the 2023 Storm Hans event is not included
+    in the monthly record markers.
+    """
+    ref_before_hans = ref_ds[variable].sel(year=slice(1957, 2022))
+    return ref_before_hans.max(dim="year")
 
-    # Blue dots:
-    # largest reference value in each month, using only 1957–2022
-    ref_1957_2022 = ref_ds[variable].sel(year=slice(1957, 2022))
-    ref_monthly_max_1957_2022 = ref_1957_2022.max(dim="year")
 
-    # Red dot:
-    # single largest reference value over all months and years, using 1957–2023
-    ref_1957_2023 = ref_ds[variable].sel(year=slice(1957, 2023))
+def get_reference_storm_hans_event(ref_ds, variable="tp"):
+    """
+    Get the 2023 Storm Hans event.
 
-    ref_flat = ref_1957_2023.stack(z=("year", "month"))
+    This assumes the largest 2023 reference value is Storm Hans.
+    """
+    ref_2023 = ref_ds[variable].sel(year=2023)
+
+    ref_flat = ref_2023.stack(z=("month",))
     ref_abs_idx = ref_flat.argmax("z")
 
     ref_abs_max = ref_flat.isel(z=ref_abs_idx)
     ref_abs_month = ref_flat["month"].isel(z=ref_abs_idx)
 
-    fig, axes = plt.subplots(
-        nrows=2,
+    return int(ref_abs_month.values), float(ref_abs_max.values)
+
+
+def get_highest_may_model_event(model_ds, variable="max_value"):
+    """Get the highest May model event."""
+    may_values = model_ds[variable].sel(month_of_year=5)
+    may_max = may_values.max()
+
+    return 5, float(may_max.values)
+
+
+# =============================================================================
+# Plotting
+# =============================================================================
+
+def plot_monthly_boxplots(
+    model_values,
+    era5_ds,
+    senorge_ds,
+    model_ds,
+    filename_out=None,
+    write2file=False,
+):
+    """Plot publication-quality monthly S2S boxplots with reference markers."""
+
+    senorge_records = get_reference_monthly_records(
+        senorge_ds,
+        variable=variable,
+    )
+
+    era5_records = get_reference_monthly_records(
+        era5_ds,
+        variable=variable,
+    )
+
+    senorge_hans_month, senorge_hans_value = get_reference_storm_hans_event(
+        senorge_ds,
+        variable=variable,
+    )
+
+    era5_hans_month, era5_hans_value = get_reference_storm_hans_event(
+        era5_ds,
+        variable=variable,
+    )
+
+    counterfactual_month, counterfactual_value = get_highest_may_model_event(
+        model_ds,
+        variable="max_value",
+    )
+
+    fig, ax = plt.subplots(
+        nrows=1,
         ncols=1,
-        figsize=(11, 7),
-        sharex=True,
+        figsize=(FIG_WIDTH_IN, FIG_HEIGHT_IN),
     )
 
     flierprops = dict(
         marker="o",
         markerfacecolor="none",
-        markeredgecolor="black",
+        markeredgecolor="0.25",
         markersize=4,
         linestyle="none",
+        markeredgewidth=0.8,
     )
 
-    boxplot_kwargs = dict(
-        positions=months,
-        widths=0.6,
+    boxprops = dict(
+        color="0.25",
+        linewidth=1.0,
+    )
+
+    whiskerprops = dict(
+        color="0.25",
+        linewidth=1.0,
+    )
+
+    capprops = dict(
+        color="0.25",
+        linewidth=1.0,
+    )
+
+    medianprops = dict(
+        color="black",
+        linewidth=1.4,
+    )
+
+    ax.boxplot(
+        model_values,
+        positions=MONTHS,
+        widths=BOX_WIDTH,
         patch_artist=False,
         showfliers=True,
         flierprops=flierprops,
+        boxprops=boxprops,
+        whiskerprops=whiskerprops,
+        capprops=capprops,
+        medianprops=medianprops,
     )
 
-    # Reference panel
-    axes[0].boxplot(ref_values, **boxplot_kwargs)
-    axes[0].set_title("Reference data")
-    axes[0].set_ylabel(f"{x_days}-day precipitation extremes (mm)")
-    axes[0].grid(axis="y", alpha=0.3)
-    axes[0].set_ylim(0, 125)
-
-    # Model panel
-    axes[1].boxplot(model_values, **boxplot_kwargs)
-
-    axes[1].scatter(
-        months,
-        ref_monthly_max_1957_2022.values,
-        color="blue",
+    ax.scatter(
+        MONTHS,
+        senorge_records.values,
+        facecolors="w",
+        edgecolors=SENORGE_COLOR,
+        linewidths=1.5,
         s=35,
         zorder=4,
-        label="record for 1957–2022",
+        label="SeNorge record",
     )
 
-    axes[1].scatter(
-        int(ref_abs_month.values),
-        float(ref_abs_max.values),
-        color="red",
-        s=45,
+    ax.scatter(
+        MONTHS,
+        era5_records.values,
+        facecolors="w",
+        edgecolors=ERA5_COLOR,
+        linewidths=1.5,
+        s=35,
+        zorder=4,
+        label="ERA5 record",
+    )
+
+    ax.scatter(
+        senorge_hans_month,
+        senorge_hans_value,
+        facecolors="w",
+        edgecolors=SENORGE_COLOR,
+        linewidths=1.5,
+        marker="^",
+        s=35,
         zorder=5,
-        label="Storm Hans",
+        label="SeNorge Storm Hans",
     )
 
-    axes[1].set_title("Model data")
-    axes[1].set_ylabel(f"{x_days}-day precipitation extremes (mm)")
-    axes[1].set_xlabel("Month of year")
-    axes[1].grid(axis="y", alpha=0.3)
-    axes[1].set_ylim(0, 125)
+    ax.scatter(
+        era5_hans_month,
+        era5_hans_value,
+        facecolors="w",
+        edgecolors=ERA5_COLOR,
+        linewidths=1.5,
+        marker="^",
+        s=35,
+        zorder=5,
+        label="ERA5 Storm Hans",
+    )
 
-    axes[1].set_xticks(months)
-    axes[1].set_xticklabels(month_labels)
-    axes[1].legend(loc='best',frameon=False)
+    ax.scatter(
+        counterfactual_month,
+        counterfactual_value,
+        facecolors="w",
+        marker="^",
+        edgecolors=COUNTERFACTUAL_COLOR,
+        linewidths=1.5,
+        s=35,
+        zorder=6,
+        label="Counterfactual event",
+    )
+
+    ax.set_title(
+        "Monthly 2-day accumulated precipitation extremes averaged\n over drammen catchment",
+        fontsize=TITLE_FONTSIZE,
+        pad=8,
+    )
+
+    ax.set_ylabel("mm/2-days", fontsize=AXIS_LABELSIZE)
+    ax.set_xlabel("Month", fontsize=AXIS_LABELSIZE)
+
+    ax.set_xlim(0.4, 12.6)
+    ax.set_ylim(YMIN, YMAX)
+
+    ax.set_xticks(MONTHS)
+    ax.set_xticklabels(MONTH_LABELS)
+
+    ax.tick_params(axis="both", labelsize=TICK_LABELSIZE)
+
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+
+    legend_handles = [
+
+         Line2D(
+            [0], [0],
+            marker="o",
+            linestyle="none",
+            markerfacecolor="white",
+            markeredgecolor=SENORGE_COLOR,
+            markeredgewidth=1.5,
+            markersize=6,
+            label="SeNorge record 1957–2022",
+        ),
+        
+        Line2D(
+            [0], [0],
+            marker="o",
+            linestyle="none",
+            markerfacecolor="white",
+            markeredgecolor=ERA5_COLOR,
+            markeredgewidth=1.5,
+            markersize=6,
+            label="ERA5 record 1957–2022",
+        ),
+        
+        Line2D(
+            [0], [0],
+            marker="^",
+            linestyle="none",
+            markerfacecolor="white",
+            markeredgecolor=SENORGE_COLOR,
+            markeredgewidth=1.5,
+            markersize=6,
+            label="SeNorge Storm Hans 2023",
+        ),
+
+        Line2D(
+            [0], [0],
+            marker="^",
+            linestyle="none",
+            markerfacecolor="white",
+            markeredgecolor=ERA5_COLOR,
+            markeredgewidth=1.5,
+            markersize=6,
+            label="ERA5 Storm Hans 2023",
+        ),
+
+        Line2D(
+            [0], [0],
+            marker="o",
+            linestyle="none",
+            markerfacecolor="white",
+            markeredgecolor="black",
+            markeredgewidth=0.8,
+            markersize=5,
+            label="Model extremes",
+        ),
+
+        Line2D(
+            [0], [0],
+            marker="^",
+            linestyle="none",
+            markerfacecolor="white",
+            markeredgecolor=COUNTERFACTUAL_COLOR,
+            markeredgewidth=1.5,
+            markersize=6,
+            label="Model counterfactual Storm Hans",
+        ),
+    ]
+
+    ax.legend(
+        handles=legend_handles,
+        loc="upper left",
+        frameon=False,
+        fontsize=LEGEND_FONTSIZE,
+        ncol=1,
+    )
 
     fig.tight_layout()
 
@@ -194,25 +406,34 @@ def plot_monthly_boxplots(ref_values, model_values, ref_ds, filename_out=None, w
     plt.show()
 
 
-    
+# =============================================================================
+# Main
+# =============================================================================
+
 if __name__ == "__main__":
 
-    model_ds, ref_ds = load_data(filename_in_model, filename_in_ref)
-
-    ref_values = get_reference_monthly_values(
-        ref_ds,
-        variable=variable,
+    model_ds, era5_ds, senorge_ds = load_data(
+        filename_in_model=filename_in_model,
+        filename_in_era5=filename_in_era5,
+        filename_in_senorge=filename_in_senorge,
     )
 
-    model_values = get_model_monthly_values(
-        model_ds,
-        variable="max_value",
-    )
+    try:
+        model_values = get_model_monthly_values(
+            model_ds,
+            variable="max_value",
+        )
 
-    plot_monthly_boxplots(
-        ref_values=ref_values,
-        model_values=model_values,
-        ref_ds=ref_ds,
-        filename_out=filename_out,
-        write2file=write2file,
-    )
+        plot_monthly_boxplots(
+            model_values=model_values,
+            era5_ds=era5_ds,
+            senorge_ds=senorge_ds,
+            model_ds=model_ds,
+            filename_out=filename_out,
+            write2file=write2file,
+        )
+
+    finally:
+        model_ds.close()
+        era5_ds.close()
+        senorge_ds.close()

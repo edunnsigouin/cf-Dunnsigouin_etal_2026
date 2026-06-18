@@ -25,13 +25,13 @@ from Dunnsigouin_etal_2026 import config
 
 
 # input ------------------------------------------------------------------
-resolution            = "0.5x0.5"
-path_in_catchment     = config.dirs["nve_catchment"]
-dlon                  = 0.5  # degrees
-dlat                  = 0.5
+resolution            = "0.25x0.25"
+path_in_catchment     = config.dirs["nve"]
+dlon                  = 0.25  # degrees
+dlat                  = 0.25
 dst_epsg              = "EPSG:25833"
 
-catchment             = "nevina_losna"
+catchment             = "regine_drammen"
 filename_in_catchment = f"{path_in_catchment}catchment_nve_{catchment}.geojson"
 out_xy                = f"{path_in_catchment}weights_catchment_{catchment}_era5_{resolution}.nc"
 write2file            = True
@@ -68,6 +68,9 @@ def make_model_grid(resolution: str):
     if resolution == "0.5x0.5":
         model_latitude = np.arange(73.5, 32.5, -0.5)
         model_longitude = np.arange(-27.0, 45.5, 0.5)
+    elif resolution == "0.25x0.25":
+        model_latitude = np.arange(73.5, 32.25, -0.5)
+        model_longitude = np.arange(-27.0, 45.25, 0.5)
     else:
         raise ValueError(f"Unsupported resolution: {resolution}")
 
