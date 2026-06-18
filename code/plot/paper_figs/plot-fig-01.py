@@ -1,33 +1,34 @@
 #!/usr/bin/env python3
 """
-Plot ERA5 daily precipitation and mean sea level pressure during Storm Hans.
+Figure 1: ERA5 Storm Hans maps plus Bergheim streamflow time series.
 
-The script:
-1. Plots four fixed event-relative dates from 2023-08-06 to 2023-08-09.
-2. Shows daily ERA5 precipitation as shading.
-3. Shows ERA5 mean sea level pressure as labelled grey contours.
-4. Overlays a selected catchment boundary.
-5. Adds a zoomed inset map in the bottom-right panel showing the catchment
-   boundary and two station locations with labels.
+The figure contains:
+1. Four map panels for 2023-08-06 to 2023-08-09.
+2. ERA5 daily precipitation as shading.
+3. ERA5 mean sea level pressure as labelled grey contours.
+4. Selected catchment boundary in red.
+5. Station locations as yellow dots.
+6. A bottom streamflow time-series panel for Bergheim station.
 """
 
 from pathlib import Path
 
 import cartopy.crs as ccrs
 import geopandas as gpd
+import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
-import matplotlib.patheffects as pe
 import numpy as np
+import pandas as pd
 import xarray as xr
+from matplotlib.gridspec import GridSpec
 from matplotlib.lines import Line2D
 from shapely.geometry import MultiPolygon, Polygon
-import cartopy.feature as cfeature
 
 from Dunnsigouin_etal_2026 import config
 
 
 # =============================================================================
-# Settings
+# User settings
 # =============================================================================
 
 YEAR = 2023
@@ -42,6 +43,80 @@ EVENT_DATES = [
 
 CATCHMENT_NAME = "drammen"  # options: "drammen", "glomma"
 
+PRECIP_VAR = "tp24"
+MSL_VAR = "msl"
+STREAMFLOW_VAR = "vannforing"
+
+WRITE_TO_FILE = True
+
+
+# =============================================================================
+# Paths
+# =============================================================================
+
+PATH_OUT = config.dirs["fig"]
+PATH_CATCHMENT = config.dirs["nve"]
+PATH_ERA5 = Path(config.dirs["era5_continuous_daily"])
+PATH_STATION = config.dirs["station"]
+
+PRECIP_FILE = PATH_ERA5 / PRECIP_VAR / f"{PRECIP_VAR}_0.5x0.5_{YEAR}.nc"
+MSL_FILE = PATH_ERA5 / MSL_VAR / f"{MSL_VAR}_0.5x0.5_{YEAR}.nc"
+STREAMFLOW_FILE = f"{PATH_STATION}streamflow.Bergheim.nc"
+
+
+# =============================================================================
+# Figure settings
+# =============================================================================
+
+FIG_WIDTH_IN = 9.4
+FIG_HEIGHT_IN = 11.2
+
+MAP_EXTENT = [-10, 25, 50, 70]
+MAP_WSPACE = 0.02
+MAP_HSPACE = 0.10
+
+CENTRAL_LON = 10.0
+CENTRAL_LAT = 62.0
+
+TICK_LABELSIZE = 12
+AXIS_LABELSIZE = 11
+TITLE_FONTSIZE = 13
+CONTOUR_LABELSIZE = 9
+LEGEND_FONTSIZE = 9
+
+
+# =============================================================================
+# Plot styling
+# =============================================================================
+
+PRECIP_LEVELS = np.arange(5, 55, 5)
+PRECIP_ZERO_THRESHOLD = 5.0
+PRECIP_CMAP = plt.get_cmap("GnBu").copy()
+PRECIP_CMAP.set_under("white")
+
+MSL_CONTOUR_LEVELS = np.arange(975, 1045, 5)
+MSL_CONTOUR_COLOR = "0.7"
+MSL_CONTOUR_LINEWIDTH = 1.5
+
+CATCHMENT_EDGE_COLOR = "red"
+CATCHMENT_LINEWIDTH = 1.0
+CATCHMENT_CRS_IF_MISSING = "EPSG:4326"
+
+STATION_MARKER_SIZE = 5
+STATION_MARKER_FACE_COLOR = "yellow"
+STATION_MARKER_EDGE_COLOR = "black"
+STATION_MARKER_EDGE_WIDTH = 0.6
+
+STREAMFLOW_RANGE_FILL_ALPHA = 0.25
+STREAMFLOW_MEDIAN_LINE_COLOR = "tab:red"
+STREAMFLOW_MEDIAN_LINEWIDTH = 1.4
+STREAMFLOW_YEAR_LINEWIDTH = 1.2
+
+
+# =============================================================================
+# Catchment and station metadata
+# =============================================================================
+
 CATCHMENTS = {
     "drammen": {
         "filename": "catchment_nve_regine_drammen.geojson",
@@ -53,56 +128,10 @@ CATCHMENTS = {
     },
 }
 
+
 STATIONS = [
     {"name": "Bergheim", "lon": 9.2483, "lat": 60.4761},
-    {"name": "Ål III", "lon": 8.5609, "lat": 60.6391},
 ]
-
-PRECIP_VAR = "tp24"
-MSL_VAR = "msl"
-
-PATH_OUT = config.dirs["fig"]
-PATH_CATCHMENT = config.dirs["nve"]
-PATH_ERA5 = Path(config.dirs["era5_continuous_daily"])
-
-PRECIP_FILE = PATH_ERA5 / PRECIP_VAR / f"{PRECIP_VAR}_0.5x0.5_{YEAR}.nc"
-MSL_FILE = PATH_ERA5 / MSL_VAR / f"{MSL_VAR}_0.5x0.5_{YEAR}.nc"
-
-CATCHMENT_CRS_IF_MISSING = "EPSG:4326"
-CATCHMENT_EDGE_COLOR = "red"
-CATCHMENT_LINEWIDTH = 1.0
-
-FIG_WIDTH_IN = 9
-FIG_HEIGHT_IN = 10
-
-MAP_WSPACE = 0.0
-MAP_HSPACE = 0.08
-MAP_EXTENT = [-10, 25, 50, 70]
-ZOOM_MAP_EXTENT = [6, 12, 59, 62]
-
-CENTRAL_LON = 10.0
-CENTRAL_LAT = 62.0
-
-TICK_LABELSIZE = 12
-AXIS_LABELSIZE = 11
-TITLE_FONTSIZE = 13
-CONTOUR_LABELSIZE = 9
-
-PRECIP_LEVELS = np.arange(5, 55, 5)
-PRECIP_ZERO_THRESHOLD = 5.0
-PRECIP_CMAP = plt.get_cmap("GnBu").copy()
-PRECIP_CMAP.set_under("white")
-
-MSL_CONTOUR_LEVELS = np.arange(975, 1045, 5)
-MSL_CONTOUR_COLOR = "0.7"
-MSL_CONTOUR_LINEWIDTH = 1.5
-
-STATION_MARKER_SIZE = 5
-STATION_MARKER_FACE_COLOR = "yellow"
-STATION_MARKER_EDGE_COLOR = "black"
-STATION_MARKER_EDGE_WIDTH = 0.6
-
-WRITE_TO_FILE = True
 
 
 # =============================================================================
@@ -122,9 +151,8 @@ def get_catchment_settings(catchment_name):
 
 
 def make_output_filename(catchment_name):
-    """Create output filename for the selected catchment."""
+    """Create output filename."""
     return f"{PATH_OUT}fig-01.png"
-    
 
 
 # =============================================================================
@@ -136,6 +164,7 @@ def get_time_coord_name(da):
     for name in ["time", "valid_time"]:
         if name in da.dims or name in da.coords:
             return name
+
     raise ValueError("Could not identify time coordinate.")
 
 
@@ -143,6 +172,7 @@ def get_lon_lat(da):
     """Return longitude and latitude coordinates."""
     lon = da["longitude"] if "longitude" in da.coords else da["lon"]
     lat = da["latitude"] if "latitude" in da.coords else da["lat"]
+
     return lon, lat
 
 
@@ -181,12 +211,19 @@ def open_era5_variable(filename, variable):
 
     if variable == PRECIP_VAR:
         ds[variable] = ds[variable] * 1000.0
-        ds[variable].attrs["units"] = "mm"
+        ds[variable].attrs["units"] = "mm/day"
 
     elif variable == MSL_VAR:
         ds[variable] = ds[variable] / 100.0
         ds[variable].attrs["units"] = "hPa"
 
+    return ds
+
+
+def load_streamflow(filename):
+    """Load Bergheim streamflow data."""
+    ds = xr.open_dataset(filename)
+    ds = ds.sel(time=slice("1921-01-01", "2025-12-31"))
     return ds
 
 
@@ -222,10 +259,12 @@ def load_catchment_outer_boundary(filename, base_dir, crs_if_missing="EPSG:4326"
 
     if isinstance(union_geom, Polygon):
         outer_geom = Polygon(union_geom.exterior)
+
     elif isinstance(union_geom, MultiPolygon):
         outer_geom = MultiPolygon(
             [Polygon(poly.exterior) for poly in union_geom.geoms]
         )
+
     else:
         outer_geom = union_geom
 
@@ -238,43 +277,93 @@ def load_catchment_outer_boundary(filename, base_dir, crs_if_missing="EPSG:4326"
 
 
 # =============================================================================
+# Streamflow climatology helpers
+# =============================================================================
+
+def year_series_and_climatology_by_doy(da, year):
+    """
+    Extract one full year's daily series and compute day-of-year climatology.
+
+    Returns selected-year values plus 2.5%, 50%, and 97.5% day-of-year
+    statistics over all available years.
+    """
+    da = da.dropna("time")
+
+    start = f"{year}-01-01"
+    end = f"{year}-12-31"
+    x_dates = pd.date_range(start, end, freq="D")
+
+    da_year = da.sel(time=slice(start, end))
+
+    if da_year.sizes.get("time", 0) != len(x_dates):
+        da_year = da_year.resample(time="1D").mean().sel(time=slice(start, end))
+
+    y_year = da_year.values
+
+    q = da.groupby("time.dayofyear").quantile(
+        [0.025, 0.5, 0.975],
+        dim="time",
+    )
+
+    doy = np.arange(1, 366)
+    q_low = q.sel(quantile=0.025).sel(dayofyear=doy, drop=True).values
+    q_median = q.sel(quantile=0.5).sel(dayofyear=doy, drop=True).values
+    q_high = q.sel(quantile=0.975).sel(dayofyear=doy, drop=True).values
+
+    return x_dates, y_year, q_low, q_high, q_median
+
+
+# =============================================================================
 # Figure setup
 # =============================================================================
 
-def make_map_axes(central_lon, central_lat, extent):
-    """Create the 2 x 2 Lambert Conformal map layout."""
+def make_figure_axes():
+    """Create four map panels, a right colorbar, and a bottom time-series panel."""
     proj_map = ccrs.LambertConformal(
-        central_longitude=central_lon,
-        central_latitude=central_lat,
+        central_longitude=CENTRAL_LON,
+        central_latitude=CENTRAL_LAT,
     )
     proj_data = ccrs.PlateCarree()
 
-    fig, axes = plt.subplots(
-        2,
-        2,
-        figsize=(FIG_WIDTH_IN, FIG_HEIGHT_IN),
-        subplot_kw={"projection": proj_map},
-        constrained_layout=False,
+    fig = plt.figure(figsize=(FIG_WIDTH_IN, FIG_HEIGHT_IN))
+
+    gs = GridSpec(
+        3,
+        3,
+        figure=fig,
+        width_ratios=[1.0, 1.0, 0.045],
+        height_ratios=[1.0, 1.0, 0.45],
+        wspace=MAP_WSPACE,
+        hspace=MAP_HSPACE,
     )
+
+    axes = np.empty((2, 2), dtype=object)
+    axes[0, 0] = fig.add_subplot(gs[0, 0], projection=proj_map)
+    axes[0, 1] = fig.add_subplot(gs[0, 1], projection=proj_map)
+    axes[1, 0] = fig.add_subplot(gs[1, 0], projection=proj_map)
+    axes[1, 1] = fig.add_subplot(gs[1, 1], projection=proj_map)
+
+    cbar_ax = fig.add_subplot(gs[0:2, 2])
+    ts_ax = fig.add_subplot(gs[2, 0:2])
 
     for ax in axes.flat:
         ax.coastlines(resolution="10m", linewidth=0.5)
-        ax.set_extent(extent, crs=proj_data)
+        ax.set_extent(MAP_EXTENT, crs=proj_data)
 
-    return fig, axes, proj_map, proj_data
+    return fig, axes, ts_ax, cbar_ax, proj_map, proj_data
 
 
-def get_event_axes(axes):
-    """Return the four map panels used for the event dates."""
+def get_plot_axes(axes):
+    """Return the four map panels."""
     return list(axes.flat)
 
 
 # =============================================================================
-# Plotting
+# Map plotting functions
 # =============================================================================
 
 def plot_precipitation(ax, da_precip, proj_data):
-    """Plot precipitation as shading."""
+    """Plot precipitation as shaded grid cells."""
     lon, lat = get_lon_lat(da_precip)
     precip = da_precip.values
 
@@ -340,8 +429,8 @@ def plot_catchment_boundary(ax, geometry, proj_data, linewidth=CATCHMENT_LINEWID
     )
 
 
-def plot_stations(ax, stations, proj_data, fontsize=8):
-    """Overlay station locations and names."""
+def plot_stations(ax, stations, proj_data):
+    """Overlay station locations."""
     for station in stations:
         ax.plot(
             station["lon"],
@@ -356,94 +445,76 @@ def plot_stations(ax, stations, proj_data, fontsize=8):
             zorder=12,
         )
 
-        if station["name"] == "Bergheim":
-            dx, dy = 0.05, 0.1
-            ha = "left"
-        elif station["name"] == "Ål III":
-            dx, dy = -0.075, 0.1
-            ha = "right"
-        else:
-            dx, dy = 0.05, 0.05
-            ha = "left"
-
-        txt = ax.text(
-            station["lon"] + dx,
-            station["lat"] + dy,
-            station["name"],
-            fontsize=fontsize,
-            color="yellow",
-            fontweight="bold",
-            ha=ha,
-            va="bottom",
-            transform=proj_data,
-            zorder=13,
-        )
-
-        txt.set_path_effects(
-            [
-                pe.Stroke(linewidth=1.5, foreground="black"),
-                pe.Normal(),
-            ]
-        )
-
-
 
 def plot_event_panel(ax, ds_tp, ds_msl, catchment_boundary, target_date, proj_data):
-    """Plot precipitation, pressure, and catchment boundary for one date."""
+    """Plot precipitation, pressure, catchment, and stations for one date."""
     da_precip = load_precipitation(ds_tp, target_date)
     da_msl = load_msl(ds_msl, target_date)
 
     mesh = plot_precipitation(ax, da_precip, proj_data)
     plot_msl_contours(ax, da_msl, proj_data)
     plot_catchment_boundary(ax, catchment_boundary, proj_data)
+    plot_stations(ax, STATIONS, proj_data)
 
     return mesh
 
 
-def add_zoom_inset(parent_ax, proj_map, proj_data, catchment_boundary, stations):
-    """Add zoomed inset map to the lower-right corner of a parent axis."""
-    inset_ax = parent_ax.inset_axes(
-        [0.025, 0.025, 0.35, 0.35],
-        projection=proj_map,
-        zorder=20,
+# =============================================================================
+# Time-series plotting
+# =============================================================================
+
+def plot_streamflow_timeseries(ts_ax, ds_streamflow, year):
+    """Plot Bergheim streamflow for the selected year and climatology."""
+    da = ds_streamflow[STREAMFLOW_VAR]
+
+    x, y, lo, hi, med = year_series_and_climatology_by_doy(da, year)
+
+    ts_ax.fill_between(
+        x,
+        lo,
+        hi,
+        alpha=STREAMFLOW_RANGE_FILL_ALPHA,
+        linewidth=0,
+        label="95% interval over all years",
     )
 
-    inset_ax.set_facecolor("white")
-    inset_ax.patch.set_alpha(1.0)
-    inset_ax.patch.set_zorder(20)
-
-    inset_ax.set_extent(ZOOM_MAP_EXTENT, crs=proj_data)
-
-    # Coastline
-    inset_ax.coastlines(
-        resolution="10m",
-        linewidth=0.4,
-        color="black",
-        zorder=2,
+    ts_ax.plot(
+        x,
+        med,
+        linewidth=STREAMFLOW_MEDIAN_LINEWIDTH,
+        color=STREAMFLOW_MEDIAN_LINE_COLOR,
+        label="Median over all years",
     )
 
-    plot_catchment_boundary(
-        inset_ax,
-        catchment_boundary,
-        proj_data,
-        linewidth=1.0,
-    )
-    plot_stations(
-        inset_ax,
-        stations,
-        proj_data,
-        fontsize=7,
+    ts_ax.plot(
+        x,
+        y,
+        linewidth=STREAMFLOW_YEAR_LINEWIDTH,
+        label=f"{year}",
     )
 
-    inset_ax.set_xticks([])
-    inset_ax.set_yticks([])
+    ts_ax.set_title(
+        "e) Bergheim station 1921-2025",
+        fontsize=TITLE_FONTSIZE,
+        pad=5,
+    )
 
-    for spine in inset_ax.spines.values():
-        spine.set_linewidth(0.8)
-        spine.set_edgecolor("black")
-        spine.set_zorder(30)
+    ts_ax.set_ylabel("Streamflow (m³/s)", fontsize=AXIS_LABELSIZE)
+    ts_ax.set_xlabel("Month", fontsize=AXIS_LABELSIZE)
 
-    return inset_ax
+    ts_ax.tick_params(axis="both", labelsize=TICK_LABELSIZE)
+
+    start = pd.Timestamp(f"{year}-01-01")
+    end = pd.Timestamp(f"{year}-12-31")
+
+    ts_ax.set_xlim(start, end)
+    ts_ax.margins(x=0)
+
+    ts_ax.xaxis.set_major_locator(mdates.MonthLocator())
+    ts_ax.xaxis.set_major_formatter(mdates.DateFormatter("%b"))
+    ts_ax.xaxis.set_minor_locator(mdates.MonthLocator())
+
+    ts_ax.legend(frameon=False, fontsize=LEGEND_FONTSIZE,loc='upper left')
 
 
 # =============================================================================
@@ -455,37 +526,43 @@ def add_panel_titles(axes):
     panel_labels = ["a)", "b)", "c)", "d)"]
 
     for ax, label, lag, date in zip(
-        get_event_axes(axes),
+        get_plot_axes(axes),
         panel_labels,
         EVENT_LAGS,
         EVENT_DATES,
     ):
+        formatted_date = (
+            np.datetime64(date)
+            .astype("datetime64[D]")
+            .astype(object)
+            .strftime("%B %-d")
+        )
+
         ax.set_title(
-            f"{label} Day {lag:+d}: {date}",
+            f"{label} Day {lag:+d}: {formatted_date} 2023",
             fontsize=TITLE_FONTSIZE,
             pad=3,
         )
 
 
-def add_colorbar(fig, mesh):
-    """Add horizontal precipitation colorbar below the panels."""
-    cax = fig.add_axes([0.072, 0.1, 0.41, 0.025])
-
+def add_colorbar(fig, mesh, cbar_ax):
+    """Add vertical precipitation colorbar beside the map panels."""
     cbar = fig.colorbar(
         mesh,
-        cax=cax,
-        orientation="horizontal",
+        cax=cbar_ax,
+        orientation="vertical",
     )
 
     cbar.set_label(
-        "accumulated total precipitation (mm/day)",
+        "Daily accumulated precipitation (mm/day)",
         fontsize=AXIS_LABELSIZE,
     )
+
     cbar.ax.tick_params(labelsize=TICK_LABELSIZE)
 
 
-def add_legend(fig, catchment_label):
-    """Add legend below the right-hand panels."""
+def add_legend(axes, catchment_label):
+    """Add map legend inside panel a."""
     legend_handles = [
         Line2D(
             [0],
@@ -505,55 +582,89 @@ def add_legend(fig, catchment_label):
             [0],
             [0],
             marker="o",
-            linestyle="none",
+            color="none",
             markerfacecolor=STATION_MARKER_FACE_COLOR,
             markeredgecolor=STATION_MARKER_EDGE_COLOR,
-            markersize=7,
-            label="Stations",
+            markeredgewidth=STATION_MARKER_EDGE_WIDTH,
+            markersize=6,
+            label="Bergheim station",
         ),
     ]
 
-    fig.legend(
+    legend = axes[0, 0].legend(
         handles=legend_handles,
-        loc="lower center",
-        bbox_to_anchor=(0.725, 0.05),
-        frameon=False,
-        fontsize=AXIS_LABELSIZE,
-        ncol=1,
+        loc="upper left",
+        frameon=True,
+        fontsize=LEGEND_FONTSIZE,
+    )
+
+    legend.get_frame().set_facecolor("white")
+    legend.get_frame().set_edgecolor("black")
+    legend.get_frame().set_linewidth(0.8)
+    legend.get_frame().set_alpha(1.0)
+    legend.set_zorder(100)
+
+
+def align_timeseries_axis_to_map_panels(fig, axes, ts_ax):
+    """Align panel e with the combined left/right borders of panels a-d."""
+    fig.canvas.draw()
+
+    left = min(
+        axes[0, 0].get_position().x0,
+        axes[1, 0].get_position().x0,
+    )
+
+    right = max(
+        axes[0, 1].get_position().x1,
+        axes[1, 1].get_position().x1,
+    )
+
+    pos = ts_ax.get_position()
+
+    ts_ax.set_position(
+        [
+            left,
+            pos.y0,
+            right - left,
+            pos.height,
+        ]
     )
 
 
 def finalize_figure(
     fig,
     axes,
+    ts_ax,
+    cbar_ax,
     mesh,
+    ds_streamflow,
     catchment_label,
     savepath,
-    write_to_file,
 ):
-    """Add final figure elements, save, and show."""
+    """Add titles, colorbar, legend, streamflow panel, save, and show."""
     add_panel_titles(axes)
+    plot_streamflow_timeseries(ts_ax, ds_streamflow, YEAR)
+
+    add_colorbar(fig, mesh, cbar_ax)
+    add_legend(axes, catchment_label)
 
     fig.subplots_adjust(
-        left=0.05,
-        right=0.95,
-        bottom=0.15,
-        top=0.95,
-        wspace=MAP_WSPACE,
-        hspace=MAP_HSPACE,
+        left=0.065,
+        right=0.96,
+        bottom=0.075,
+        top=0.96,
     )
 
-    add_colorbar(fig, mesh)
-    add_legend(fig, catchment_label)
+    align_timeseries_axis_to_map_panels(fig, axes, ts_ax)
 
-    if write_to_file:
+    if WRITE_TO_FILE:
         fig.savefig(savepath, dpi=300, bbox_inches="tight")
 
     plt.show()
 
 
 # =============================================================================
-# Main
+# Main workflow
 # =============================================================================
 
 def main():
@@ -563,6 +674,7 @@ def main():
 
     ds_tp = open_era5_variable(PRECIP_FILE, PRECIP_VAR)
     ds_msl = open_era5_variable(MSL_FILE, MSL_VAR)
+    ds_streamflow = load_streamflow(STREAMFLOW_FILE)
 
     try:
         catchment_boundary = load_catchment_outer_boundary(
@@ -571,15 +683,11 @@ def main():
             crs_if_missing=CATCHMENT_CRS_IF_MISSING,
         )
 
-        fig, axes, proj_map, proj_data = make_map_axes(
-            central_lon=CENTRAL_LON,
-            central_lat=CENTRAL_LAT,
-            extent=MAP_EXTENT,
-        )
+        fig, axes, ts_ax, cbar_ax, proj_map, proj_data = make_figure_axes()
 
         mesh = None
 
-        for ax, target_date in zip(get_event_axes(axes), EVENT_DATES):
+        for ax, target_date in zip(get_plot_axes(axes), EVENT_DATES):
             mesh = plot_event_panel(
                 ax=ax,
                 ds_tp=ds_tp,
@@ -589,26 +697,21 @@ def main():
                 proj_data=proj_data,
             )
 
-        add_zoom_inset(
-            parent_ax=axes[1, 1],
-            proj_map=proj_map,
-            proj_data=proj_data,
-            catchment_boundary=catchment_boundary,
-            stations=STATIONS,
-        )
-
         finalize_figure(
             fig=fig,
             axes=axes,
+            ts_ax=ts_ax,
+            cbar_ax=cbar_ax,
             mesh=mesh,
+            ds_streamflow=ds_streamflow,
             catchment_label=catchment["label"],
             savepath=savepath,
-            write_to_file=WRITE_TO_FILE,
         )
 
     finally:
         ds_tp.close()
         ds_msl.close()
+        ds_streamflow.close()
 
 
 if __name__ == "__main__":
