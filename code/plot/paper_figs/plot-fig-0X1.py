@@ -42,7 +42,7 @@ MSL_VAR = "msl"
 SNOW_VAR = "sd"
 RUNOFF_VAR = "ro24"
 
-WRITE_TO_FILE = False
+WRITE_TO_FILE = True
 
 
 # =============================================================================
@@ -684,6 +684,21 @@ def get_plot_axes(axes):
 # Plotting functions
 # =============================================================================
 
+def plot_drammen_city(ax, proj_data):
+    """Mark the city of Drammen."""
+    ax.plot(
+        DRAMMEN_LON,
+        DRAMMEN_LAT,
+        marker="o",
+        markersize=DRAMMEN_MARKER_SIZE,
+        markeredgecolor=DRAMMEN_MARKER_EDGE_COLOR,
+        markeredgewidth=DRAMMEN_MARKER_EDGE_WIDTH,
+        markerfacecolor=DRAMMEN_MARKER_FACE_COLOR,
+        linestyle="none",
+        transform=proj_data,
+        zorder=12,
+    )
+    
 def plot_precipitation(ax, da_precip, proj_data):
     """Plot daily precipitation as shaded grid cells."""
     lon, lat = get_lon_lat(da_precip)
@@ -825,7 +840,8 @@ def plot_event_panel(ax, event, lag, target_date, catchment_boundary, proj_data)
     plot_msl_contours(ax, da_msl, proj_data)
     plot_snowmelt(ax, da_snowmelt, proj_data)
     plot_catchment_boundary(ax, catchment_boundary, proj_data)
-
+    plot_drammen_city(ax, proj_data)
+    
     return mesh
 
 
@@ -913,7 +929,7 @@ def plot_runoff_timeseries(ts_ax, event, event_dates):
         alpha=RUNOFF_RANGE_FILL_ALPHA,
         linewidth=0,
         label=(
-            "full hindcast range excluding event (N=219)"
+            "2021-04-26 hindcast range excluding counterfactual event (N=219)"
         ),
     )
 
@@ -922,7 +938,7 @@ def plot_runoff_timeseries(ts_ax, event, event_dates):
         da_event.values,
         color=RUNOFF_EVENT_LINE_COLOR,
         linewidth=RUNOFF_EVENT_LINEWIDTH,
-        label="event",
+        label="counterfactual event",
     )
 
     for date in event_dates:
@@ -964,7 +980,7 @@ def plot_runoff_timeseries(ts_ax, event, event_dates):
         ha="right",
     )
 
-    ts_ax.legend(frameon=False, fontsize=AXIS_LABELSIZE)
+    ts_ax.legend(frameon=False, fontsize=9)
 
     import matplotlib.dates as mdates
 
@@ -1079,13 +1095,24 @@ def add_legend(axes, catchment_label):
             label="Mean sea level pressure (hPa)",
         ),
         get_snowmelt_legend_handle(),
+        Line2D(
+            [0],
+            [0],
+            marker="o",
+            color="none",
+            markerfacecolor=DRAMMEN_MARKER_FACE_COLOR,
+            markeredgecolor=DRAMMEN_MARKER_EDGE_COLOR,
+            markeredgewidth=DRAMMEN_MARKER_EDGE_WIDTH,
+            markersize=6,
+            label="City of Drammen",
+        ),
     ]
 
     legend = axes[0, 0].legend(
     handles=legend_handles,
     loc="upper left",
     frameon=True,
-    fontsize=10,
+    fontsize=9,
     )
 
     legend.get_frame().set_facecolor("white")
@@ -1130,13 +1157,6 @@ def finalize_figure(
 
     add_panel_titles(plot_axes, event_dates)
     plot_runoff_timeseries(ts_ax, event, event_dates)
-
-    add_zoom_inset(
-        parent_ax=axes[1, 1],
-        proj_map=proj_map,
-        proj_data=proj_data,
-        catchment_boundary=catchment_boundary,
-    )
 
     add_colorbar(fig, mesh, cbar_ax)
     add_legend(axes, catchment_label)
