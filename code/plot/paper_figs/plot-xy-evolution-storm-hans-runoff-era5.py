@@ -1,25 +1,20 @@
 #!/usr/bin/env python3
 """
-Plot daily precipitation and mean sea level pressure for one S2S ensemble member.
+Plot ERA5 runoff maps and runoff time series near Drammen.
 
-The figure contains four event-relative map panels:
-    Day -2 : 2023-08-06
-    Day -1 : 2023-08-07
-    Day  0 : 2023-08-08
-    Day +1 : 2023-08-09
-
-Each panel shows:
-1. Daily precipitation as shading.
-2. Mean sea level pressure as labelled grey contours.
+The figure contains:
+1. Four ERA5 runoff map panels for 2023-08-06 to 2023-08-09.
+2. ERA5 daily runoff as shading.
 3. Drammen catchment boundary in red.
-4. Drammen city marker.
-5. A zoomed inset in panel d.
+4. Drammen city as a yellow marker.
+5. A bottom runoff time-series panel at the ERA5 grid point nearest Drammen.
 """
 
 from pathlib import Path
 
 import cartopy.crs as ccrs
 import geopandas as gpd
+import matplotlib.dates as mdates
 import matplotlib.patheffects as pe
 import matplotlib.pyplot as plt
 import numpy as np
@@ -35,52 +30,66 @@ from Dunnsigouin_etal_2026 import config
 # 1. User-defined input parameters
 # =============================================================================
 
+YEAR = 2023
 CATCHMENT_NAME = "drammen"
 
-FORECAST_DATE = "2023-08-05"
-ENSEMBLE_MEMBER = 48
-MODEL_TYPE = "forecast"
-GRID = "0.25x0.25"
-
-DAY_ZERO_DATE = "2023-08-08"
+EVENT_LAGS = [-2, -1, 0, 1]
 EVENT_DATES = [
     "2023-08-06",
     "2023-08-07",
     "2023-08-08",
     "2023-08-09",
 ]
-EVENT_LAGS = [-2, -1, 0, 1]
 
-PRECIP_VAR = "tp24"
-MSL_VAR = "msl"
+RUNOFF_VAR = "ro"
+GRID = "0.25x0.25"
+
+TIMESERIES_START = "2023-08-01"
+TIMESERIES_END = "2023-08-15"
 
 WRITE_TO_FILE = False
 
 
 # =============================================================================
-# 2. Paths
+# 2. Drammen city and inset settings
+# =============================================================================
+
+DRAMMEN_LON = 10.2045
+DRAMMEN_LAT = 59.7440
+DRAMMEN_LABEL = "Drammen"
+
+ZOOM_MAP_EXTENT = [6, 12, 59, 62] #[6.5, 11.5, 59, 61.5]
+
+DRAMMEN_MARKER_SIZE = 5
+DRAMMEN_MARKER_FACE_COLOR = "yellow"
+DRAMMEN_MARKER_EDGE_COLOR = "black"
+DRAMMEN_MARKER_EDGE_WIDTH = 0.6
+
+
+# =============================================================================
+# 3. Paths
 # =============================================================================
 
 PATH_OUT = config.dirs["fig"]
 PATH_CATCHMENT = config.dirs["nve"]
+PATH_ERA5 = Path(config.dirs["era5_continuous_daily_scandinavia"])
 
-S2S_BASE_DIR = Path("/nird/datapeak/NS9873K/etdu/raw/s2s/mars/ecmwf")
+RUNOFF_FILE = PATH_ERA5 / RUNOFF_VAR / f"{RUNOFF_VAR}_{GRID}_{YEAR}.nc"
 
 OUTPUT_FILENAME = (
     f"{PATH_OUT}"
-    f"drammen_s2s_member{ENSEMBLE_MEMBER}_"
-    f"{FORECAST_DATE}_precip_msl.png"
+    f"era5_runoff_drammen_{GRID}_{EVENT_DATES[0]}_{EVENT_DATES[-1]}.png"
 )
 
 
 # =============================================================================
-# 3. Figure and map settings
+# 4. Figure settings
 # =============================================================================
 
 FIG_WIDTH_IN = 9.4
-FIG_HEIGHT_IN = 9.2
+FIG_HEIGHT_IN = 11.2
 
-MAP_EXTENT = [-10, 25, 50, 70]
+MAP_EXTENT = [4.75, 12.75, 58.0, 63.0] #[-10, 25, 50, 70]
 MAP_WSPACE = 0.02
 MAP_HSPACE = 0.10
 
@@ -90,40 +99,29 @@ CENTRAL_LAT = 62.0
 TICK_LABELSIZE = 12
 AXIS_LABELSIZE = 11
 TITLE_FONTSIZE = 13
-CONTOUR_LABELSIZE = 9
-
-DRAMMEN_LON = 10.2045
-DRAMMEN_LAT = 59.7440
-DRAMMEN_LABEL = "Drammen"
-
-ZOOM_MAP_EXTENT = [6.5, 11.5, 59, 61.5]
-
-DRAMMEN_MARKER_SIZE = 5
-DRAMMEN_MARKER_FACE_COLOR = "yellow"
-DRAMMEN_MARKER_EDGE_COLOR = "black"
-DRAMMEN_MARKER_EDGE_WIDTH = 0.6
+LEGEND_FONTSIZE = 9
 
 
 # =============================================================================
-# 4. Plot styling
+# 5. Plot styling
 # =============================================================================
 
-PRECIP_LEVELS = np.arange(5, 55, 5)
-PRECIP_ZERO_THRESHOLD = 5.0
-PRECIP_CMAP = plt.get_cmap("GnBu").copy()
-PRECIP_CMAP.set_under("white")
-
-MSL_CONTOUR_LEVELS = np.arange(975, 1045, 5)
-MSL_CONTOUR_COLOR = "0.7"
-MSL_CONTOUR_LINEWIDTH = 1.5
+RUNOFF_LEVELS = np.arange(1, 31, 2)
+RUNOFF_ZERO_THRESHOLD = 1.0
+RUNOFF_CMAP = plt.get_cmap("Blues").copy()
+RUNOFF_CMAP.set_under("white")
 
 CATCHMENT_EDGE_COLOR = "red"
 CATCHMENT_LINEWIDTH = 1.0
 CATCHMENT_CRS_IF_MISSING = "EPSG:4326"
 
+RUNOFF_LINE_COLOR = "tab:blue"
+RUNOFF_LINEWIDTH = 2.0
+EVENT_MARKER_SIZE = 35
+
 
 # =============================================================================
-# 5. Catchment metadata
+# 6. Catchment metadata
 # =============================================================================
 
 CATCHMENTS = {
@@ -139,38 +137,20 @@ CATCHMENTS = {
 
 
 # =============================================================================
-# 6. Helper functions
+# 7. Helper functions
 # =============================================================================
 
 def get_catchment_settings(catchment_name):
     """Return settings for the selected catchment."""
 
     if catchment_name not in CATCHMENTS:
-        valid_names = ", ".join(CATCHMENTS)
-        raise ValueError(
-            f"Unknown catchment '{catchment_name}'. "
-            f"Valid options are: {valid_names}."
-        )
+        raise ValueError(f"Unknown catchment: {catchment_name}")
 
     return CATCHMENTS[catchment_name]
 
 
-def make_s2s_file(variable):
-    """Create S2S forecast file path."""
-
-    return (
-        S2S_BASE_DIR
-        / MODEL_TYPE
-        / "sfc"
-        / "daily"
-        / "europe"
-        / variable
-        / f"{variable}_{GRID}_{FORECAST_DATE}.nc"
-    )
-
-
 def get_time_coord_name(da):
-    """Return the time coordinate name."""
+    """Return time coordinate name."""
 
     for name in ["time", "valid_time"]:
         if name in da.dims or name in da.coords:
@@ -188,16 +168,6 @@ def get_lon_lat(da):
     return lon, lat
 
 
-def get_member_coord_name(da):
-    """Return ensemble member coordinate name."""
-
-    for name in ["number", "member", "ensemble_member", "realization"]:
-        if name in da.dims or name in da.coords:
-            return name
-
-    raise ValueError("Could not identify ensemble member coordinate.")
-
-
 def centers_to_edges(centers):
     """Convert 1D grid-cell centers to grid-cell edges."""
 
@@ -212,46 +182,43 @@ def centers_to_edges(centers):
 
 
 # =============================================================================
-# 7. Data loading
+# 8. Data loading
 # =============================================================================
 
-def open_s2s_variable(variable):
-    """Open one S2S variable and convert to plotting units."""
+def open_era5_runoff(filename):
+    """
+    Open ERA5 runoff.
 
-    filename = make_s2s_file(variable)
+    Assumes runoff is already in mm/day unless metadata clearly says metres.
+    """
+
+    filename = Path(filename)
 
     if not filename.exists():
         raise FileNotFoundError(f"File not found: {filename}")
 
     ds = xr.open_dataset(filename)
 
-    if variable not in ds:
+    if RUNOFF_VAR not in ds:
         raise KeyError(
-            f"Variable '{variable}' not found in {filename}. "
+            f"Variable '{RUNOFF_VAR}' not found in {filename}. "
             f"Available variables: {list(ds.data_vars)}"
         )
 
-    if variable == PRECIP_VAR:
-        ds[variable] = ds[variable] * 1000.0
-        ds[variable].attrs["units"] = "mm/day"
+    units = str(ds[RUNOFF_VAR].attrs.get("units", "")).strip().lower()
 
-    elif variable == MSL_VAR:
-        ds[variable] = ds[variable] / 100.0
-        ds[variable].attrs["units"] = "hPa"
+    if units in {"m", "meter", "metre", "m/day", "m d-1", "m/day"}:
+        ds[RUNOFF_VAR] = ds[RUNOFF_VAR] * 1000.0
+        ds[RUNOFF_VAR].attrs["units"] = "mm/day"
+
+    else:
+        ds[RUNOFF_VAR].attrs["units"] = "mm/day"
 
     return ds
 
 
-def select_member(da):
-    """Select the requested ensemble member."""
-
-    member_name = get_member_coord_name(da)
-
-    return da.sel({member_name: ENSEMBLE_MEMBER})
-
-
 def select_date(da, target_date):
-    """Select one target date and load it into memory."""
+    """Select one date from a DataArray."""
 
     time_name = get_time_coord_name(da)
     target_date = np.datetime64(target_date, "ns")
@@ -259,39 +226,35 @@ def select_date(da, target_date):
     return da.sel({time_name: target_date}).load()
 
 
-def load_daily_variable(variable, target_date):
-    """Load one daily S2S field for the selected member and date."""
+def load_runoff_map(ds_ro, target_date):
+    """Load ERA5 runoff map for one date."""
 
-    ds = open_s2s_variable(variable)
-
-    try:
-        da = ds[variable]
-        da = select_member(da)
-        da = select_date(da, target_date)
-
-    finally:
-        ds.close()
-
-    return da
+    return select_date(ds_ro[RUNOFF_VAR], target_date)
 
 
-def load_precipitation(target_date):
-    """Load daily precipitation in mm/day."""
+def load_runoff_timeseries_nearest_drammen(ds_ro):
+    """Load runoff time series nearest Drammen city."""
 
-    return load_daily_variable(PRECIP_VAR, target_date)
+    da = ds_ro[RUNOFF_VAR]
+    lon, lat = get_lon_lat(da)
+
+    ts = da.sel(
+        {
+            lon.name: DRAMMEN_LON,
+            lat.name: DRAMMEN_LAT,
+        },
+        method="nearest",
+    )
+
+    ts = ts.sel(time=slice(TIMESERIES_START, TIMESERIES_END)).load()
+
+    ts.attrs["selected_lon"] = float(ts[lon.name].values)
+    ts.attrs["selected_lat"] = float(ts[lat.name].values)
+
+    return ts
 
 
-def load_msl(target_date):
-    """Load mean sea level pressure in hPa."""
-
-    return load_daily_variable(MSL_VAR, target_date)
-
-
-def load_catchment_outer_boundary(
-    filename,
-    base_dir,
-    crs_if_missing="EPSG:4326",
-):
+def load_catchment_outer_boundary(filename, base_dir, crs_if_missing="EPSG:4326"):
     """Load catchment and keep only the outer boundary."""
 
     plot_crs = "EPSG:4326"
@@ -325,11 +288,11 @@ def load_catchment_outer_boundary(
 
 
 # =============================================================================
-# 8. Figure setup
+# 9. Figure setup
 # =============================================================================
 
 def make_figure_axes():
-    """Create four map panels and a right-side colorbar."""
+    """Create four map panels, colorbar axis, and bottom time-series panel."""
 
     proj_map = ccrs.LambertConformal(
         central_longitude=CENTRAL_LON,
@@ -340,11 +303,11 @@ def make_figure_axes():
     fig = plt.figure(figsize=(FIG_WIDTH_IN, FIG_HEIGHT_IN))
 
     gs = GridSpec(
-        2,
+        3,
         3,
         figure=fig,
         width_ratios=[1.0, 1.0, 0.045],
-        height_ratios=[1.0, 1.0],
+        height_ratios=[1.0, 1.0, 0.45],
         wspace=MAP_WSPACE,
         hspace=MAP_HSPACE,
     )
@@ -355,79 +318,54 @@ def make_figure_axes():
     axes[1, 0] = fig.add_subplot(gs[1, 0], projection=proj_map)
     axes[1, 1] = fig.add_subplot(gs[1, 1], projection=proj_map)
 
-    cbar_ax = fig.add_subplot(gs[:, 2])
+    cbar_ax = fig.add_subplot(gs[0:2, 2])
+    ts_ax = fig.add_subplot(gs[2, 0:2])
 
     for ax in axes.flat:
         ax.coastlines(resolution="10m", linewidth=0.5)
         ax.set_extent(MAP_EXTENT, crs=proj_data)
 
-    return fig, axes, cbar_ax, proj_map, proj_data
+    return fig, axes, ts_ax, cbar_ax, proj_map, proj_data
 
 
 def get_plot_axes(axes):
-    """Return map panels as a flat list."""
+    """Return four map panels as a flat list."""
 
     return list(axes.flat)
 
 
 # =============================================================================
-# 9. Plotting functions
+# 10. Map plotting functions
 # =============================================================================
 
-def plot_precipitation(ax, da_precip, proj_data):
-    """Plot daily precipitation as shaded grid cells."""
+def plot_runoff_map(ax, da_runoff, proj_data):
+    """Plot ERA5 daily runoff as shaded grid cells."""
 
-    lon, lat = get_lon_lat(da_precip)
-    precip = da_precip.values
+    lon, lat = get_lon_lat(da_runoff)
+    runoff = da_runoff.values
 
     lon_edges = centers_to_edges(lon.values)
     lat_edges = centers_to_edges(lat.values)
 
     if lat_edges[0] > lat_edges[-1]:
         lat_edges = lat_edges[::-1]
-        precip = precip[::-1, :]
+        runoff = runoff[::-1, :]
 
     if lon_edges[0] > lon_edges[-1]:
         lon_edges = lon_edges[::-1]
-        precip = precip[:, ::-1]
+        runoff = runoff[:, ::-1]
 
     lon_edges_2d, lat_edges_2d = np.meshgrid(lon_edges, lat_edges)
 
     return ax.pcolormesh(
         lon_edges_2d,
         lat_edges_2d,
-        precip,
-        cmap=PRECIP_CMAP,
-        vmin=PRECIP_ZERO_THRESHOLD,
-        vmax=PRECIP_LEVELS.max(),
+        runoff,
+        cmap=RUNOFF_CMAP,
+        vmin=RUNOFF_ZERO_THRESHOLD,
+        vmax=RUNOFF_LEVELS.max(),
         shading="auto",
         transform=proj_data,
-    )
-
-
-def plot_msl_contours(ax, da_msl, proj_data):
-    """Plot labelled mean sea level pressure contours."""
-
-    lon, lat = get_lon_lat(da_msl)
-
-    contour = ax.contour(
-        lon.values,
-        lat.values,
-        da_msl.values,
-        levels=MSL_CONTOUR_LEVELS,
-        colors=MSL_CONTOUR_COLOR,
-        linewidths=MSL_CONTOUR_LINEWIDTH,
-        transform=proj_data,
-        zorder=6,
-    )
-
-    ax.clabel(
-        contour,
-        inline=True,
-        inline_spacing=4,
-        fontsize=CONTOUR_LABELSIZE,
-        fmt="%d",
-        colors=MSL_CONTOUR_COLOR,
     )
 
 
@@ -445,7 +383,7 @@ def plot_catchment_boundary(ax, geometry, proj_data, linewidth=CATCHMENT_LINEWID
 
 
 def plot_drammen_city(ax, proj_data):
-    """Mark the city of Drammen."""
+    """Mark Drammen city."""
 
     ax.plot(
         DRAMMEN_LON,
@@ -461,14 +399,12 @@ def plot_drammen_city(ax, proj_data):
     )
 
 
-def plot_event_panel(ax, target_date, catchment_boundary, proj_data):
-    """Plot one daily map panel."""
+def plot_event_panel(ax, ds_ro, target_date, catchment_boundary, proj_data):
+    """Plot one runoff map panel."""
 
-    da_precip = load_precipitation(target_date)
-    da_msl = load_msl(target_date)
+    da_runoff = load_runoff_map(ds_ro, target_date)
 
-    mesh = plot_precipitation(ax, da_precip, proj_data)
-    plot_msl_contours(ax, da_msl, proj_data)
+    mesh = plot_runoff_map(ax, da_runoff, proj_data)
     plot_catchment_boundary(ax, catchment_boundary, proj_data)
     plot_drammen_city(ax, proj_data)
 
@@ -535,7 +471,75 @@ def add_zoom_inset(parent_ax, proj_map, proj_data, catchment_boundary):
 
 
 # =============================================================================
-# 10. Figure finishing
+# 11. Time-series plotting
+# =============================================================================
+
+def plot_runoff_timeseries(ts_ax, ds_ro):
+    """Plot ERA5 runoff time series nearest Drammen."""
+
+    da_event = load_runoff_timeseries_nearest_drammen(ds_ro)
+    time_name = get_time_coord_name(da_event)
+
+    ts_ax.plot(
+        da_event[time_name].values,
+        da_event.values,
+        color=RUNOFF_LINE_COLOR,
+        linewidth=RUNOFF_LINEWIDTH,
+        label="ERA5 runoff",
+    )
+
+    for date in EVENT_DATES:
+        value = da_event.sel({time_name: np.datetime64(date)}, method="nearest")
+
+        ts_ax.scatter(
+            value[time_name].values,
+            value.values,
+            color=RUNOFF_LINE_COLOR,
+            s=EVENT_MARKER_SIZE,
+            zorder=5,
+        )
+
+    ts_ax.set_title(
+        f"e) ERA5 runoff nearest {DRAMMEN_LABEL}",
+        fontsize=TITLE_FONTSIZE,
+        pad=5,
+    )
+
+    ts_ax.set_ylabel("Runoff (mm/day)", fontsize=AXIS_LABELSIZE)
+    ts_ax.set_xlabel("Date", fontsize=AXIS_LABELSIZE)
+    ts_ax.tick_params(labelsize=TICK_LABELSIZE)
+
+    ts_ax.set_xlim(
+        np.datetime64(TIMESERIES_START),
+        np.datetime64(TIMESERIES_END),
+    )
+    ts_ax.margins(x=0)
+
+    tick_interval_days = 2
+
+    tick_dates = np.arange(
+        np.datetime64(TIMESERIES_START),
+        np.datetime64(TIMESERIES_END) + np.timedelta64(1, "D"),
+        np.timedelta64(tick_interval_days, "D"),
+    )
+
+    ts_ax.set_xticks(tick_dates)
+
+    ts_ax.xaxis.set_major_formatter(
+        mdates.DateFormatter("%d %b")
+    )
+
+    plt.setp(
+        ts_ax.get_xticklabels(),
+        rotation=30,
+        ha="right",
+    )
+
+    ts_ax.legend(frameon=False, fontsize=LEGEND_FONTSIZE)
+
+
+# =============================================================================
+# 12. Figure finishing
 # =============================================================================
 
 def add_panel_titles(axes):
@@ -544,7 +548,7 @@ def add_panel_titles(axes):
     panel_labels = ["a)", "b)", "c)", "d)"]
 
     for ax, panel_label, lag, date in zip(
-        axes,
+        get_plot_axes(axes),
         panel_labels,
         EVENT_LAGS,
         EVENT_DATES,
@@ -557,14 +561,14 @@ def add_panel_titles(axes):
         )
 
         ax.set_title(
-            f"{panel_label} Day {lag:+d}: {formatted_date}",
+            f"{panel_label} Day {lag:+d}: {formatted_date} {YEAR}",
             fontsize=TITLE_FONTSIZE,
             pad=3,
         )
 
 
 def add_colorbar(fig, mesh, cbar_ax):
-    """Add precipitation colorbar."""
+    """Add vertical runoff colorbar beside map panels."""
 
     cbar = fig.colorbar(
         mesh,
@@ -573,7 +577,7 @@ def add_colorbar(fig, mesh, cbar_ax):
     )
 
     cbar.set_label(
-        "Daily accumulated precipitation (mm/day)",
+        "Daily runoff (mm/day)",
         fontsize=AXIS_LABELSIZE,
     )
 
@@ -581,7 +585,7 @@ def add_colorbar(fig, mesh, cbar_ax):
 
 
 def add_legend(axes, catchment_label):
-    """Add map legend inside the upper-left panel."""
+    """Add map legend inside panel a."""
 
     legend_handles = [
         Line2D(
@@ -594,20 +598,13 @@ def add_legend(axes, catchment_label):
         Line2D(
             [0],
             [0],
-            color=MSL_CONTOUR_COLOR,
-            linewidth=MSL_CONTOUR_LINEWIDTH,
-            label="Mean sea level pressure (hPa)",
-        ),
-        Line2D(
-            [0],
-            [0],
             marker="o",
             color="none",
             markerfacecolor=DRAMMEN_MARKER_FACE_COLOR,
             markeredgecolor=DRAMMEN_MARKER_EDGE_COLOR,
             markeredgewidth=DRAMMEN_MARKER_EDGE_WIDTH,
             markersize=6,
-            label="City of Drammen",
+            label=f"City of {DRAMMEN_LABEL}",
         ),
     ]
 
@@ -615,7 +612,7 @@ def add_legend(axes, catchment_label):
         handles=legend_handles,
         loc="upper left",
         frameon=True,
-        fontsize=9,
+        fontsize=LEGEND_FONTSIZE,
     )
 
     legend.get_frame().set_facecolor("white")
@@ -625,28 +622,51 @@ def add_legend(axes, catchment_label):
     legend.set_zorder(100)
 
 
+def align_timeseries_axis_to_map_panels(fig, axes, ts_ax):
+    """Align panel e with the combined left/right borders of panels a-d."""
+
+    fig.canvas.draw()
+
+    left = min(
+        axes[0, 0].get_position().x0,
+        axes[1, 0].get_position().x0,
+    )
+
+    right = max(
+        axes[0, 1].get_position().x1,
+        axes[1, 1].get_position().x1,
+    )
+
+    pos = ts_ax.get_position()
+
+    ts_ax.set_position(
+        [
+            left,
+            pos.y0,
+            right - left,
+            pos.height,
+        ]
+    )
+
+
 def finalize_figure(
     fig,
     axes,
+    ts_ax,
     cbar_ax,
     proj_map,
     proj_data,
     mesh,
+    ds_ro,
     catchment_boundary,
     catchment_label,
     savepath,
 ):
-    """Add titles, colorbar, legend, inset, save, and show."""
+    """Add titles, colorbar, legend, inset, time series, save, and show."""
 
-    plot_axes = get_plot_axes(axes)
+    add_panel_titles(axes)
 
-    add_panel_titles(plot_axes)
-    add_zoom_inset(
-        parent_ax=axes[1, 1],
-        proj_map=proj_map,
-        proj_data=proj_data,
-        catchment_boundary=catchment_boundary,
-    )
+    plot_runoff_timeseries(ts_ax, ds_ro)
 
     add_colorbar(fig, mesh, cbar_ax)
     add_legend(axes, catchment_label)
@@ -654,9 +674,11 @@ def finalize_figure(
     fig.subplots_adjust(
         left=0.09,
         right=0.98,
-        bottom=0.06,
+        bottom=0.075,
         top=0.96,
     )
+
+    align_timeseries_axis_to_map_panels(fig, axes, ts_ax)
 
     if WRITE_TO_FILE:
         fig.savefig(savepath, dpi=300, bbox_inches="tight")
@@ -665,43 +687,53 @@ def finalize_figure(
 
 
 # =============================================================================
-# 11. Main workflow
+# 13. Main workflow
 # =============================================================================
 
 def main():
     """Run full plotting workflow."""
 
     catchment = get_catchment_settings(CATCHMENT_NAME)
+    savepath = OUTPUT_FILENAME
 
-    catchment_boundary = load_catchment_outer_boundary(
-        filename=catchment["filename"],
-        base_dir=PATH_CATCHMENT,
-        crs_if_missing=CATCHMENT_CRS_IF_MISSING,
-    )
+    ds_ro = open_era5_runoff(RUNOFF_FILE)
 
-    fig, axes, cbar_ax, proj_map, proj_data = make_figure_axes()
-
-    mesh = None
-
-    for ax, target_date in zip(get_plot_axes(axes), EVENT_DATES):
-        mesh = plot_event_panel(
-            ax=ax,
-            target_date=target_date,
-            catchment_boundary=catchment_boundary,
-            proj_data=proj_data,
+    try:
+        catchment_boundary = load_catchment_outer_boundary(
+            filename=catchment["filename"],
+            base_dir=PATH_CATCHMENT,
+            crs_if_missing=CATCHMENT_CRS_IF_MISSING,
         )
 
-    finalize_figure(
-        fig=fig,
-        axes=axes,
-        cbar_ax=cbar_ax,
-        proj_map=proj_map,
-        proj_data=proj_data,
-        mesh=mesh,
-        catchment_boundary=catchment_boundary,
-        catchment_label=catchment["label"],
-        savepath=OUTPUT_FILENAME,
-    )
+        fig, axes, ts_ax, cbar_ax, proj_map, proj_data = make_figure_axes()
+
+        mesh = None
+
+        for ax, target_date in zip(get_plot_axes(axes), EVENT_DATES):
+            mesh = plot_event_panel(
+                ax=ax,
+                ds_ro=ds_ro,
+                target_date=target_date,
+                catchment_boundary=catchment_boundary,
+                proj_data=proj_data,
+            )
+
+        finalize_figure(
+            fig=fig,
+            axes=axes,
+            ts_ax=ts_ax,
+            cbar_ax=cbar_ax,
+            proj_map=proj_map,
+            proj_data=proj_data,
+            mesh=mesh,
+            ds_ro=ds_ro,
+            catchment_boundary=catchment_boundary,
+            catchment_label=catchment["label"],
+            savepath=savepath,
+        )
+
+    finally:
+        ds_ro.close()
 
 
 if __name__ == "__main__":
