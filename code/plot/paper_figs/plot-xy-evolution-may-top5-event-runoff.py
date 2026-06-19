@@ -7,8 +7,8 @@ The figure contains:
 2. Daily runoff as shading.
 3. Selected catchment boundary in red.
 4. Drammen city location as a yellow circle with text label.
-5. A bottom time-series panel showing:
-   - the selected runoff event at the grid point nearest Drammen
+5. A bottom time-series panel showing catchment-spatial-mean runoff:
+   - the selected runoff event averaged over the catchment
    - the full min-max range from all other hindcast years and ensemble members
    - the median of all other hindcast years and ensemble members.
 """
@@ -117,10 +117,12 @@ EVENT_DATE_ALPHA = 0.6
 CATCHMENTS = {
     "drammen": {
         "filename": "catchment_nve_regine_drammen.geojson",
+        "weights_id": "regine_drammen",
         "label": "Drammen catchment",
     },
     "glomma": {
         "filename": "catchment_nve_regine_glomma.geojson",
+        "weights_id": "regine_glomma",
         "label": "Glomma catchment",
     },
 }
@@ -327,6 +329,96 @@ def centers_to_edges(centers):
 
 
 # =============================================================================
+# Catchment-weight helpers
+# =============================================================================
+
+def make_catchment_weights_file(catchment_name, grid):
+    """Create the expected catchment-weight file path for the S2S/ERA5 grid."""
+    catchment = get_catchment_settings(catchment_name)
+
+    return (
+        Path(PATH_CATCHMENT)
+        / f"weights_catchment_{catchment['weights_id']}_era5_{grid}.nc"
+    )
+
+
+def check_dims(da, expected_dims, name):
+    """Check that required dimensions exist."""
+    missing = [dim for dim in expected_dims if dim not in da.dims]
+
+    if missing:
+        raise ValueError(
+            f"{name} is missing dimensions {missing}. "
+            f"Found dimensions: {da.dims}"
+        )
+
+
+def load_weights(filename, spatial_dims):
+    """Load predefined catchment weights."""
+    filename = Path(filename)
+
+    if not filename.exists():
+        raise FileNotFoundError(f"Catchment weights not found: {filename}")
+
+    ds = xr.open_dataset(filename)
+
+    if "catchment_weight" not in ds:
+        ds.close()
+        raise KeyError(
+            f"'catchment_weight' not found in {filename}. "
+            f"Available variables: {list(ds.data_vars)}"
+        )
+
+    weights = ds["catchment_weight"].astype("float32").load()
+    ds.close()
+
+    weights.name = "catchment_weight"
+    check_dims(weights, spatial_dims, "Catchment weights")
+
+    return weights
+
+
+def align_weights(da, weights):
+    """Align catchment weights to the runoff grid."""
+    time_name = get_time_coord_name(da) if any(
+        name in da.dims or name in da.coords for name in ["time", "valid_time"]
+    ) else None
+
+    if time_name is not None and time_name in da.dims:
+        grid_template = da.isel({time_name: 0}, drop=True)
+    else:
+        grid_template = da
+
+    try:
+        return weights.reindex_like(grid_template)
+    except Exception:
+        return weights.broadcast_like(grid_template)
+
+
+def catchment_mean(da, weights, spatial_dims):
+    """Calculate catchment-weighted spatial mean runoff."""
+    weights = align_weights(da, weights)
+
+    valid = xr.ufuncs.isfinite(da) & xr.ufuncs.isfinite(weights) & (weights > 0)
+
+    weighted_sum = (da.where(valid) * weights.where(valid)).sum(
+        dim=spatial_dims,
+        skipna=True,
+    )
+
+    weight_sum = weights.where(valid).sum(
+        dim=spatial_dims,
+        skipna=True,
+    )
+
+    out = weighted_sum / weight_sum
+    out.name = "catchment_mean_runoff"
+    out.attrs["units"] = da.attrs.get("units", "mm/day")
+
+    return out
+
+
+# =============================================================================
 # Data loading
 # =============================================================================
 
@@ -421,50 +513,47 @@ def load_runoff(event, target_date):
     return load_daily_variable(event, target_date, RUNOFF_VAR)
 
 
-def load_runoff_timeseries_at_drammen(event):
-    """
-    Load the selected runoff event time series at the grid point nearest Drammen.
-    """
+def load_runoff_timeseries_for_catchment(event, catchment_name):
+    """Load the selected runoff event time series averaged over the catchment."""
     grids_to_try = ["0.5x0.5", "0.25x0.25"]
+    spatial_dims = ("latitude", "longitude")
 
     for grid in grids_to_try:
         filename = make_s2s_file(event, RUNOFF_VAR, grid)
+        weights_filename = make_catchment_weights_file(catchment_name, grid)
 
-        if not filename.exists():
+        if not filename.exists() or not weights_filename.exists():
             continue
 
         ds = open_s2s_variable(filename, RUNOFF_VAR)
 
         try:
             da = select_event_member(ds, event, RUNOFF_VAR)
-            lon, lat = get_lon_lat(da)
+            weights = load_weights(weights_filename, spatial_dims)
 
-            da_point = da.sel(
-                {
-                    lon.name: DRAMMEN_LON,
-                    lat.name: DRAMMEN_LAT,
-                },
-                method="nearest",
+            da_mean = catchment_mean(
+                da=da,
+                weights=weights,
+                spatial_dims=spatial_dims,
             ).load()
 
-            da_point.attrs["selected_grid"] = grid
-            da_point.attrs["selected_lon"] = float(da_point[lon.name].values)
-            da_point.attrs["selected_lat"] = float(da_point[lat.name].values)
+            da_mean.attrs["selected_grid"] = grid
+            da_mean.attrs["catchment_name"] = catchment_name
 
-            return da_point
+            return da_mean
 
         finally:
             ds.close()
 
     raise FileNotFoundError(
-        f"Could not find selected {RUNOFF_VAR} time series "
-        f"for {event['forecast_date']}."
+        f"Could not find selected {RUNOFF_VAR} catchment-mean time series "
+        f"for {event['forecast_date']} and catchment '{catchment_name}'."
     )
 
 
-def load_runoff_hindcast_member_stats_at_drammen(event):
+def load_runoff_hindcast_member_stats_for_catchment(event, catchment_name):
     """
-    Load min, max, and median runoff at the grid point nearest Drammen.
+    Load 95% interval and median catchment-mean runoff.
 
     Statistics are computed from all hindcast dates and ensemble members
     for the same forecast initialization date, excluding the selected event.
@@ -475,33 +564,33 @@ def load_runoff_hindcast_member_stats_at_drammen(event):
         )
 
     grids_to_try = ["0.5x0.5", "0.25x0.25"]
+    spatial_dims = ("latitude", "longitude")
 
     for grid in grids_to_try:
         filename = make_s2s_file(event, RUNOFF_VAR, grid)
+        weights_filename = make_catchment_weights_file(catchment_name, grid)
 
-        if not filename.exists():
+        if not filename.exists() or not weights_filename.exists():
             continue
 
         ds = open_s2s_variable(filename, RUNOFF_VAR)
 
         try:
             da = ds[RUNOFF_VAR]
-            lon, lat = get_lon_lat(da)
+            weights = load_weights(weights_filename, spatial_dims)
 
-            da_point = da.sel(
-                {
-                    lon.name: DRAMMEN_LON,
-                    lat.name: DRAMMEN_LAT,
-                },
-                method="nearest",
+            da_mean = catchment_mean(
+                da=da,
+                weights=weights,
+                spatial_dims=spatial_dims,
             )
 
-            hdate_name = get_hdate_coord_name(da_point)
-            member_name = get_member_coord_name(da_point)
-            time_name = get_time_coord_name(da_point)
+            hdate_name = get_hdate_coord_name(da_mean)
+            member_name = get_member_coord_name(da_mean)
+            time_name = get_time_coord_name(da_mean)
 
-            hdate_values = da_point[hdate_name]
-            member_values = da_point[member_name]
+            hdate_values = da_mean[hdate_name]
+            member_values = da_mean[member_name]
 
             selected_hdate = event["hdate"]
             selected_member = event["ensemble_member"]
@@ -510,40 +599,65 @@ def load_runoff_hindcast_member_stats_at_drammen(event):
             is_selected_member = member_values == selected_member
 
             keep_mask = ~(
-                is_selected_hdate.broadcast_like(da_point)
-                & is_selected_member.broadcast_like(da_point)
+                is_selected_hdate.broadcast_like(da_mean)
+                & is_selected_member.broadcast_like(da_mean)
             )
 
-            da_others = da_point.where(keep_mask)
+            da_others = da_mean.where(keep_mask)
 
             sample_dims = [hdate_name, member_name]
-            n_samples_total = da_point.sizes[hdate_name] * da_point.sizes[member_name]
-            n_samples_used = int(keep_mask.any(time_name).sum().values)
 
-            da_min = da_others.min(sample_dims, skipna=True).load()
-            da_max = da_others.max(sample_dims, skipna=True).load()
-            da_median = da_others.median(sample_dims, skipna=True).load()
+            n_samples_total = (
+                da_mean.sizes[hdate_name]
+                * da_mean.sizes[member_name]
+            )
+
+            n_samples_used = int(
+                keep_mask
+                .any(time_name)
+                .sum()
+                .values
+            )
+
+            da_lower = da_others.quantile(
+                0.025,
+                dim=sample_dims,
+                skipna=True,
+            ).load()
+
+            da_upper = da_others.quantile(
+                0.975,
+                dim=sample_dims,
+                skipna=True,
+            ).load()
+
+            da_median = da_others.median(
+                dim=sample_dims,
+                skipna=True,
+            ).load()
+
+            da_lower = da_lower.squeeze(drop=True)
+            da_upper = da_upper.squeeze(drop=True)
 
             attrs = {
                 "selected_grid": grid,
-                "selected_lon": float(da_point[lon.name].values),
-                "selected_lat": float(da_point[lat.name].values),
+                "catchment_name": catchment_name,
                 "n_samples_total": n_samples_total,
                 "n_samples_used": n_samples_used,
             }
 
-            da_min.attrs.update(attrs)
-            da_max.attrs.update(attrs)
+            da_lower.attrs.update(attrs)
+            da_upper.attrs.update(attrs)
             da_median.attrs.update(attrs)
 
-            return da_min, da_max, da_median
+            return da_lower, da_upper, da_median
 
         finally:
             ds.close()
 
     raise FileNotFoundError(
-        f"Could not find hindcast/member statistics file "
-        f"for {event['forecast_date']}."
+        f"Could not find hindcast/member statistics file and weights "
+        f"for {event['forecast_date']} and catchment '{catchment_name}'."
     )
 
 
@@ -693,23 +807,26 @@ def plot_event_panel(ax, event, lag, target_date, catchment_boundary, proj_data)
     return mesh
 
 
-def plot_runoff_timeseries(ts_ax, event, event_dates):
-    """Plot selected runoff time series and hindcast/member statistics."""
-    da_event = load_runoff_timeseries_at_drammen(event)
-    da_min, da_max, da_median = load_runoff_hindcast_member_stats_at_drammen(event)
+def plot_runoff_timeseries(ts_ax, event, event_dates, catchment_name, catchment_label):
+    """Plot selected catchment-mean runoff time series and hindcast/member statistics."""
+    da_event = load_runoff_timeseries_for_catchment(event, catchment_name)
+
+    da_lower, da_upper, da_median = (
+        load_runoff_hindcast_member_stats_for_catchment(event, catchment_name)
+    )
 
     time_name = get_time_coord_name(da_event)
 
     ts_ax.fill_between(
-        da_min[time_name].values,
-        da_min.values,
-        da_max.values,
+        da_lower[time_name].values,
+        da_lower.values,
+        da_upper.values,
         color=RANGE_FILL_COLOR,
         alpha=RANGE_FILL_ALPHA,
         linewidth=0,
         label=(
-            "Full range, excluding selected event "
-            f"(n={da_min.attrs['n_samples_used']})"
+            "95% interval, excluding selected event "
+            f"(n={da_lower.attrs['n_samples_used']})"
         ),
     )
 
@@ -730,15 +847,10 @@ def plot_runoff_timeseries(ts_ax, event, event_dates):
     )
 
     for date in event_dates:
-        #ts_ax.axvline(
-        #    np.datetime64(date),
-        #    color="0.4",
-        #    linewidth=EVENT_DATE_LINEWIDTH,
-        #    alpha=EVENT_DATE_ALPHA,
-        #    linestyle="--",
-        #)
-
-        value = da_event.sel({time_name: np.datetime64(date)}, method="nearest")
+        value = da_event.sel(
+            {time_name: np.datetime64(date)},
+            method="nearest",
+        )
 
         ts_ax.scatter(
             value[time_name].values,
@@ -748,15 +860,10 @@ def plot_runoff_timeseries(ts_ax, event, event_dates):
             zorder=5,
         )
 
-    selected_lon = da_event.attrs["selected_lon"]
-    selected_lat = da_event.attrs["selected_lat"]
     selected_grid = da_event.attrs["selected_grid"]
 
     ts_ax.set_title(
-        (
-            f"e) Runoff at grid point nearest {DRAMMEN_LABEL} "
-            f"({selected_lat:.2f}°N, {selected_lon:.2f}°E; {selected_grid})"
-        ),
+        f"e) Catchment-spatial-mean runoff for {catchment_label} ({selected_grid})",
         fontsize=TITLE_FONTSIZE,
         pad=5,
     )
@@ -771,7 +878,6 @@ def plot_runoff_timeseries(ts_ax, event, event_dates):
         ha="right",
     )
 
-    #ts_ax.grid(True, linewidth=0.5, alpha=0.4)
     ts_ax.legend(frameon=False, fontsize=AXIS_LABELSIZE)
 
 
@@ -858,7 +964,7 @@ def finalize_figure(
     plot_axes = get_plot_axes(axes)
 
     add_panel_titles(plot_axes, event_dates)
-    plot_runoff_timeseries(ts_ax, event, event_dates)
+    plot_runoff_timeseries(ts_ax, event, event_dates, CATCHMENT_NAME, catchment_label)
 
     fig.subplots_adjust(
         left=0.08,

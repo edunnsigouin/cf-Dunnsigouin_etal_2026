@@ -8,8 +8,10 @@ The figure contains:
 3. Mean sea level pressure as labelled grey contours.
 4. Snowmelt, defined as daily change in SWE < 0, as stippling or hatching.
 5. Selected catchment boundary in red.
-6. A zoomed inset in panel d showing Drammen catchment and Drammen city.
-7. A bottom runoff time-series panel showing catchment-mean runoff.
+6. A bottom runoff time-series panel showing catchment-spatial-mean runoff:
+   - the selected runoff event averaged over the catchment
+   - the 95% interval from all other hindcast years and ensemble members
+   - the median of all other hindcast years and ensemble members.
 """
 
 from pathlib import Path
@@ -47,14 +49,12 @@ WRITE_TO_FILE = False
 
 
 # =============================================================================
-# Drammen city and inset settings
+# Drammen city settings
 # =============================================================================
 
 DRAMMEN_LON = 10.2045
 DRAMMEN_LAT = 59.7440
 DRAMMEN_LABEL = "Drammen"
-
-ZOOM_MAP_EXTENT = [6.5, 11.5, 59, 61.5]
 
 DRAMMEN_MARKER_SIZE = 5
 DRAMMEN_MARKER_FACE_COLOR = "yellow"
@@ -70,11 +70,6 @@ PATH_OUT = config.dirs["fig"]
 PATH_CATCHMENT = config.dirs["nve"]
 
 S2S_BASE_DIR = Path("/nird/datapeak/NS9873K/etdu/raw/s2s/mars/ecmwf")
-
-FILENAME_RUNOFF_WEIGHTS = (
-    config.dirs["nve"]
-    + f"weights_catchment_regine_{CATCHMENT_NAME}_era5_0.25x0.25.nc"
-)
 
 
 # =============================================================================
@@ -143,10 +138,12 @@ RUNOFF_MEDIAN_LINEWIDTH = 2.0
 CATCHMENTS = {
     "drammen": {
         "filename": "catchment_nve_regine_drammen.geojson",
+        "weights_id": "regine_drammen",
         "label": "Drammen catchment",
     },
     "glomma": {
         "filename": "catchment_nve_regine_glomma.geojson",
+        "weights_id": "regine_glomma",
         "label": "Glomma catchment",
     },
 }
@@ -246,7 +243,6 @@ TOP_EVENTS = {
 
 def get_catchment_settings(catchment_name):
     """Return settings for the selected catchment."""
-
     if catchment_name not in CATCHMENTS:
         valid_names = ", ".join(CATCHMENTS)
         raise ValueError(
@@ -259,7 +255,6 @@ def get_catchment_settings(catchment_name):
 
 def get_selected_event(catchment_name, event_rank):
     """Return metadata for the selected ranked event."""
-
     if catchment_name not in TOP_EVENTS:
         raise ValueError(f"No event metadata available for '{catchment_name}'.")
 
@@ -272,7 +267,6 @@ def get_selected_event(catchment_name, event_rank):
 
 def get_event_dates(event):
     """Return event-relative dates as strings."""
-
     date_of_max = np.datetime64(event["date_of_max"], "D")
 
     return [
@@ -282,8 +276,7 @@ def get_event_dates(event):
 
 
 def make_s2s_file(event, variable, grid):
-    """Create expected S2S file path."""
-
+    """Create the expected S2S file path."""
     return (
         S2S_BASE_DIR
         / event["model_type"]
@@ -297,7 +290,6 @@ def make_s2s_file(event, variable, grid):
 
 def make_output_filename(catchment_name, event_rank):
     """Create output filename."""
-
     return f"{PATH_OUT}fig-0X1.png"
 
 
@@ -306,8 +298,7 @@ def make_output_filename(catchment_name, event_rank):
 # =============================================================================
 
 def get_time_coord_name(da):
-    """Return time coordinate name."""
-
+    """Return the time coordinate name used by the DataArray."""
     for name in ["time", "valid_time"]:
         if name in da.dims or name in da.coords:
             return name
@@ -317,7 +308,6 @@ def get_time_coord_name(da):
 
 def get_lon_lat(da):
     """Return longitude and latitude coordinates."""
-
     lon = da["longitude"] if "longitude" in da.coords else da["lon"]
     lat = da["latitude"] if "latitude" in da.coords else da["lat"]
 
@@ -326,7 +316,6 @@ def get_lon_lat(da):
 
 def get_member_coord_name(da):
     """Return ensemble member coordinate name."""
-
     for name in ["number", "member", "ensemble_member", "realization"]:
         if name in da.dims or name in da.coords:
             return name
@@ -336,7 +325,6 @@ def get_member_coord_name(da):
 
 def get_hdate_coord_name(da):
     """Return hindcast date coordinate name."""
-
     for name in ["hdate", "hindcast_date"]:
         if name in da.dims or name in da.coords:
             return name
@@ -346,7 +334,6 @@ def get_hdate_coord_name(da):
 
 def centers_to_edges(centers):
     """Convert 1D grid-cell center coordinates to grid-cell edges."""
-
     centers = np.asarray(centers)
 
     if centers.ndim != 1:
@@ -363,12 +350,102 @@ def centers_to_edges(centers):
 
 
 # =============================================================================
+# Catchment-weight helpers
+# =============================================================================
+
+def make_catchment_weights_file(catchment_name, grid):
+    """Create the expected catchment-weight file path for the S2S/ERA5 grid."""
+    catchment = get_catchment_settings(catchment_name)
+
+    return (
+        Path(PATH_CATCHMENT)
+        / f"weights_catchment_{catchment['weights_id']}_era5_{grid}.nc"
+    )
+
+
+def check_dims(da, expected_dims, name):
+    """Check that required dimensions exist."""
+    missing = [dim for dim in expected_dims if dim not in da.dims]
+
+    if missing:
+        raise ValueError(
+            f"{name} is missing dimensions {missing}. "
+            f"Found dimensions: {da.dims}"
+        )
+
+
+def load_weights(filename, spatial_dims):
+    """Load predefined catchment weights."""
+    filename = Path(filename)
+
+    if not filename.exists():
+        raise FileNotFoundError(f"Catchment weights not found: {filename}")
+
+    ds = xr.open_dataset(filename)
+
+    if "catchment_weight" not in ds:
+        ds.close()
+        raise KeyError(
+            f"'catchment_weight' not found in {filename}. "
+            f"Available variables: {list(ds.data_vars)}"
+        )
+
+    weights = ds["catchment_weight"].astype("float32").load()
+    ds.close()
+
+    weights.name = "catchment_weight"
+    check_dims(weights, spatial_dims, "Catchment weights")
+
+    return weights
+
+
+def align_weights(da, weights):
+    """Align catchment weights to the runoff grid."""
+    time_name = get_time_coord_name(da) if any(
+        name in da.dims or name in da.coords
+        for name in ["time", "valid_time"]
+    ) else None
+
+    if time_name is not None and time_name in da.dims:
+        grid_template = da.isel({time_name: 0}, drop=True)
+    else:
+        grid_template = da
+
+    try:
+        return weights.reindex_like(grid_template)
+    except Exception:
+        return weights.broadcast_like(grid_template)
+
+
+def catchment_mean(da, weights, spatial_dims):
+    """Calculate catchment-weighted spatial mean runoff."""
+    weights = align_weights(da, weights)
+
+    valid = xr.ufuncs.isfinite(da) & xr.ufuncs.isfinite(weights) & (weights > 0)
+
+    weighted_sum = (da.where(valid) * weights.where(valid)).sum(
+        dim=spatial_dims,
+        skipna=True,
+    )
+
+    weight_sum = weights.where(valid).sum(
+        dim=spatial_dims,
+        skipna=True,
+    )
+
+    out = weighted_sum / weight_sum
+    out.name = "catchment_mean_runoff"
+    out.attrs["units"] = da.attrs.get("units", "mm/day")
+
+    return out
+
+
+# =============================================================================
 # Data loading
 # =============================================================================
 
 def open_s2s_variable(filename, variable):
-    """Open one S2S variable and convert to plotting units."""
-
+    """Open one S2S variable and convert it to plotting units."""
     filename = Path(filename)
 
     if not filename.exists():
@@ -399,8 +476,7 @@ def open_s2s_variable(filename, variable):
 
 
 def select_event_member(ds, event, variable):
-    """Select hindcast date and ensemble member if present."""
-
+    """Select hindcast date and ensemble member when those dimensions exist."""
     da = ds[variable]
 
     if event["model_type"] == "hindcast":
@@ -418,8 +494,7 @@ def select_event_member(ds, event, variable):
 
 
 def date_exists(da, target_date):
-    """Check whether target date exists in DataArray."""
-
+    """Check whether a target date exists in a DataArray."""
     time_name = get_time_coord_name(da)
     target_date = np.datetime64(target_date, "ns")
     available_dates = da[time_name].values.astype("datetime64[ns]")
@@ -428,8 +503,7 @@ def date_exists(da, target_date):
 
 
 def select_date(da, target_date):
-    """Select one date and load it."""
-
+    """Select one date from a DataArray and load it into memory."""
     time_name = get_time_coord_name(da)
     target_date = np.datetime64(target_date, "ns")
 
@@ -437,8 +511,12 @@ def select_date(da, target_date):
 
 
 def load_daily_variable(event, target_date, variable):
-    """Load one daily S2S field."""
+    """
+    Load one daily S2S field.
 
+    The script first tries the 0.5-degree file. If the target date is missing,
+    it then tries the 0.25-degree file.
+    """
     grids_to_try = ["0.5x0.5", "0.25x0.25"]
 
     for grid in grids_to_try:
@@ -466,19 +544,21 @@ def load_daily_variable(event, target_date, variable):
 
 def load_precipitation(event, target_date):
     """Load daily precipitation in mm/day."""
-
     return load_daily_variable(event, target_date, PRECIP_VAR)
 
 
 def load_msl(event, target_date):
     """Load mean sea level pressure in hPa."""
-
     return load_daily_variable(event, target_date, MSL_VAR)
 
 
 def load_snowmelt(event, lag):
-    """Compute daily SWE change."""
+    """
+    Compute daily SWE change.
 
+    Snowmelt is later plotted where:
+        SWE(current day) - SWE(previous day) < 0
+    """
     date_of_max = np.datetime64(event["date_of_max"], "D")
     previous_date = date_of_max + np.timedelta64(lag - 1, "D")
     current_date = date_of_max + np.timedelta64(lag, "D")
@@ -493,84 +573,32 @@ def load_snowmelt(event, lag):
     return da_change
 
 
-def load_weights(filename_weights):
-    """Load catchment weights."""
-
-    ds = xr.open_dataset(filename_weights)
-
-    if "catchment_weight" not in ds:
-        raise KeyError(
-            f"'catchment_weight' not found in {filename_weights}. "
-            f"Available variables: {list(ds.data_vars)}"
-        )
-
-    weights = ds["catchment_weight"].astype("float32")
-    weights.name = "catchment_weight"
-
-    return weights
-
-
-def align_weights(da, weights):
-    """Align catchment weights to the runoff grid."""
-
-    grid_template = da.isel(time=0, drop=True)
-
-    try:
-        return weights.reindex_like(grid_template)
-    except Exception:
-        return weights.broadcast_like(grid_template)
-
-
-def catchment_mean(da, weights, spatial_dims=("latitude", "longitude")):
-    """Calculate catchment-weighted spatial mean."""
-
-    weights = align_weights(da, weights)
-
-    valid = xr.ufuncs.isfinite(da) & xr.ufuncs.isfinite(weights) & (weights > 0)
-
-    weighted_sum = (da.where(valid) * weights.where(valid)).sum(
-        dim=spatial_dims,
-        skipna=True,
-    )
-
-    weight_sum = weights.where(valid).sum(
-        dim=spatial_dims,
-        skipna=True,
-    )
-
-    out = weighted_sum / weight_sum
-
-    out.name = "catchment_mean_runoff"
-    out.attrs["units"] = da.attrs.get("units", "mm/day")
-
-    return out
-
-
-def load_catchment_mean_runoff_timeseries(event):
-    """Load catchment-mean runoff time series for the selected event."""
-
-    weights = load_weights(FILENAME_RUNOFF_WEIGHTS)
-
-    grids_to_try = ["0.25x0.25"]
+def load_runoff_timeseries_for_catchment(event, catchment_name):
+    """Load the selected runoff event time series averaged over the catchment."""
+    grids_to_try = ["0.5x0.5", "0.25x0.25"]
+    spatial_dims = ("latitude", "longitude")
 
     for grid in grids_to_try:
         filename = make_s2s_file(event, RUNOFF_VAR, grid)
+        weights_filename = make_catchment_weights_file(catchment_name, grid)
 
-        if not filename.exists():
+        if not filename.exists() or not weights_filename.exists():
             continue
 
         ds = open_s2s_variable(filename, RUNOFF_VAR)
 
         try:
             da = select_event_member(ds, event, RUNOFF_VAR)
+            weights = load_weights(weights_filename, spatial_dims)
 
             da_mean = catchment_mean(
                 da=da,
                 weights=weights,
-                spatial_dims=("latitude", "longitude"),
+                spatial_dims=spatial_dims,
             ).load()
 
             da_mean.attrs["selected_grid"] = grid
+            da_mean.attrs["catchment_name"] = catchment_name
 
             return da_mean
 
@@ -578,46 +606,48 @@ def load_catchment_mean_runoff_timeseries(event):
             ds.close()
 
     raise FileNotFoundError(
-        f"Could not find catchment-mean {RUNOFF_VAR} time series "
-        f"for {event['forecast_date']}."
+        f"Could not find selected {RUNOFF_VAR} catchment-mean time series "
+        f"for {event['forecast_date']} and catchment '{catchment_name}'."
     )
 
 
-def load_runoff_hindcast_member_stats_catchment_mean(event):
+def load_runoff_hindcast_member_stats_for_catchment(event, catchment_name):
     """
-    Load min, max, and median catchment-mean runoff.
+    Load 95% interval and median catchment-mean runoff.
 
-    Statistics are computed from all hindcast dates and ensemble members for
-    the same forecast initialization date, excluding the selected event.
+    Statistics are computed from all hindcast dates and ensemble members
+    for the same forecast initialization date, excluding the selected event.
     """
-
     if event["model_type"] != "hindcast":
         raise ValueError(
             "The hindcast/member statistics are only defined for hindcast events."
         )
 
-    weights = load_weights(FILENAME_RUNOFF_WEIGHTS)
-    grids_to_try = ["0.25x0.25"]
+    grids_to_try = ["0.5x0.5", "0.25x0.25"]
+    spatial_dims = ("latitude", "longitude")
 
     for grid in grids_to_try:
         filename = make_s2s_file(event, RUNOFF_VAR, grid)
+        weights_filename = make_catchment_weights_file(catchment_name, grid)
 
-        if not filename.exists():
+        if not filename.exists() or not weights_filename.exists():
             continue
 
         ds = open_s2s_variable(filename, RUNOFF_VAR)
 
         try:
             da = ds[RUNOFF_VAR]
+            weights = load_weights(weights_filename, spatial_dims)
 
             da_mean = catchment_mean(
                 da=da,
                 weights=weights,
-                spatial_dims=("latitude", "longitude"),
+                spatial_dims=spatial_dims,
             )
 
             hdate_name = get_hdate_coord_name(da_mean)
             member_name = get_member_coord_name(da_mean)
+            time_name = get_time_coord_name(da_mean)
 
             hdate_values = da_mean[hdate_name]
             member_values = da_mean[member_name]
@@ -637,24 +667,59 @@ def load_runoff_hindcast_member_stats_catchment_mean(event):
 
             sample_dims = [hdate_name, member_name]
 
-            da_min = da_others.min(sample_dims, skipna=True).load()
-            da_max = da_others.max(sample_dims, skipna=True).load()
-            da_median = da_others.median(sample_dims, skipna=True).load()
+            n_samples_total = (
+                da_mean.sizes[hdate_name]
+                * da_mean.sizes[member_name]
+            )
 
-            return da_min, da_max, da_median
+            n_samples_used = int(
+                keep_mask
+                .any(time_name)
+                .sum()
+                .values
+            )
+
+            da_lower = da_others.quantile(
+                0.025,
+                dim=sample_dims,
+                skipna=True,
+            ).load().squeeze(drop=True)
+
+            da_upper = da_others.quantile(
+                0.975,
+                dim=sample_dims,
+                skipna=True,
+            ).load().squeeze(drop=True)
+
+            da_median = da_others.median(
+                dim=sample_dims,
+                skipna=True,
+            ).load()
+
+            attrs = {
+                "selected_grid": grid,
+                "catchment_name": catchment_name,
+                "n_samples_total": n_samples_total,
+                "n_samples_used": n_samples_used,
+            }
+
+            da_lower.attrs.update(attrs)
+            da_upper.attrs.update(attrs)
+            da_median.attrs.update(attrs)
+
+            return da_lower, da_upper, da_median
 
         finally:
             ds.close()
 
     raise FileNotFoundError(
-        f"Could not find hindcast/member statistics file "
-        f"for {event['forecast_date']}."
+        f"Could not find hindcast/member statistics file and weights "
+        f"for {event['forecast_date']} and catchment '{catchment_name}'."
     )
 
 
 def load_catchment_outer_boundary(filename, base_dir, crs_if_missing="EPSG:4326"):
-    """Load catchment and keep only outer boundary."""
-
+    """Load the catchment and keep only the outer boundary."""
     plot_crs = "EPSG:4326"
     metric_crs = "EPSG:32633"
 
@@ -690,8 +755,7 @@ def load_catchment_outer_boundary(filename, base_dir, crs_if_missing="EPSG:4326"
 # =============================================================================
 
 def make_figure_axes():
-    """Create four map panels, a right colorbar, and bottom time-series panel."""
-
+    """Create four map panels, a right colorbar, and a bottom time-series panel."""
     proj_map = ccrs.LambertConformal(
         central_longitude=CENTRAL_LON,
         central_latitude=CENTRAL_LAT,
@@ -727,8 +791,7 @@ def make_figure_axes():
 
 
 def get_plot_axes(axes):
-    """Return four map panels."""
-
+    """Return the four map panels."""
     return list(axes.flat)
 
 
@@ -737,8 +800,7 @@ def get_plot_axes(axes):
 # =============================================================================
 
 def plot_drammen_city(ax, proj_data):
-    """Mark Drammen city."""
-
+    """Mark the city of Drammen."""
     ax.plot(
         DRAMMEN_LON,
         DRAMMEN_LAT,
@@ -755,7 +817,6 @@ def plot_drammen_city(ax, proj_data):
 
 def plot_precipitation(ax, da_precip, proj_data):
     """Plot daily precipitation as shaded grid cells."""
-
     lon, lat = get_lon_lat(da_precip)
     precip = da_precip.values
 
@@ -786,7 +847,6 @@ def plot_precipitation(ax, da_precip, proj_data):
 
 def plot_msl_contours(ax, da_msl, proj_data):
     """Plot labelled mean sea level pressure contours."""
-
     lon, lat = get_lon_lat(da_msl)
 
     contour = ax.contour(
@@ -812,7 +872,6 @@ def plot_msl_contours(ax, da_msl, proj_data):
 
 def plot_snowmelt(ax, da_snowmelt, proj_data):
     """Overlay locations where daily SWE change is negative."""
-
     lon, lat = get_lon_lat(da_snowmelt)
 
     snowmelt = np.isfinite(da_snowmelt.values)
@@ -832,7 +891,6 @@ def plot_snowmelt(ax, da_snowmelt, proj_data):
 
 def plot_snowmelt_stippling(ax, lon, lat, snowmelt, proj_data):
     """Plot snowmelt as orange stippling."""
-
     iy, ix = np.where(snowmelt)
 
     if SNOWMELT_DOT_STRIDE > 1:
@@ -853,7 +911,6 @@ def plot_snowmelt_stippling(ax, lon, lat, snowmelt, proj_data):
 
 def plot_snowmelt_hatching(ax, lon, lat, snowmelt, proj_data):
     """Plot snowmelt as orange hatching."""
-
     old_hatch_color = plt.rcParams["hatch.color"]
     old_hatch_linewidth = plt.rcParams["hatch.linewidth"]
 
@@ -878,8 +935,7 @@ def plot_snowmelt_hatching(ax, lon, lat, snowmelt, proj_data):
 
 
 def plot_catchment_boundary(ax, geometry, proj_data, linewidth=CATCHMENT_LINEWIDTH):
-    """Overlay selected catchment boundary."""
-
+    """Overlay the selected catchment boundary."""
     ax.add_geometries(
         [geometry],
         crs=proj_data,
@@ -892,7 +948,6 @@ def plot_catchment_boundary(ax, geometry, proj_data, linewidth=CATCHMENT_LINEWID
 
 def plot_event_panel(ax, event, lag, target_date, catchment_boundary, proj_data):
     """Plot one event-relative map panel."""
-
     da_precip = load_precipitation(event, target_date)
     da_msl = load_msl(event, target_date)
     da_snowmelt = load_snowmelt(event, lag)
@@ -906,97 +961,39 @@ def plot_event_panel(ax, event, lag, target_date, catchment_boundary, proj_data)
     return mesh
 
 
-def add_zoom_inset(parent_ax, proj_map, proj_data, catchment_boundary):
-    """Add zoomed inset map to panel d."""
+def plot_runoff_timeseries(ts_ax, event, event_dates, catchment_name, catchment_label):
+    """Plot selected catchment-mean runoff time series and hindcast/member statistics."""
+    da_event = load_runoff_timeseries_for_catchment(event, catchment_name)
 
-    inset_ax = parent_ax.inset_axes(
-        [0.01, 0.01, 0.3, 0.3],
-        projection=proj_map,
-        zorder=20,
-    )
-
-    inset_ax.set_facecolor("white")
-    inset_ax.patch.set_alpha(1.0)
-    inset_ax.set_extent(ZOOM_MAP_EXTENT, crs=proj_data)
-
-    inset_ax.coastlines(
-        resolution="10m",
-        linewidth=0.4,
-        color="black",
-        zorder=2,
-    )
-
-    plot_catchment_boundary(
-        inset_ax,
-        catchment_boundary,
-        proj_data,
-        linewidth=1.0,
-    )
-
-    plot_drammen_city(inset_ax, proj_data)
-
-    txt = inset_ax.text(
-        DRAMMEN_LON,
-        DRAMMEN_LAT + 0.06,
-        DRAMMEN_LABEL,
-        fontsize=7,
-        color="yellow",
-        fontweight="bold",
-        ha="right",
-        va="bottom",
-        transform=proj_data,
-        zorder=13,
-    )
-
-    txt.set_path_effects(
-        [
-            pe.Stroke(linewidth=1.5, foreground="black"),
-            pe.Normal(),
-        ]
-    )
-
-    inset_ax.set_xticks([])
-    inset_ax.set_yticks([])
-
-    for spine in inset_ax.spines.values():
-        spine.set_linewidth(0.8)
-        spine.set_edgecolor("black")
-
-    return inset_ax
-
-
-def plot_runoff_timeseries(ts_ax, event, event_dates):
-    """Plot catchment-mean runoff time series and hindcast/member statistics."""
-
-    da_event = load_catchment_mean_runoff_timeseries(event)
-
-    if event["model_type"] == "hindcast":
-        da_min, da_max, da_median = load_runoff_hindcast_member_stats_catchment_mean(
-            event
+    da_lower, da_upper, da_median = (
+        load_runoff_hindcast_member_stats_for_catchment(
+            event,
+            catchment_name,
         )
+    )
 
-        time_name = get_time_coord_name(da_event)
+    time_name = get_time_coord_name(da_event)
 
-        ts_ax.fill_between(
-            da_min[time_name].values,
-            da_min.values,
-            da_max.values,
-            color=RUNOFF_RANGE_FILL_COLOR,
-            alpha=RUNOFF_RANGE_FILL_ALPHA,
-            linewidth=0,
-            label="Hindcast range excluding selected member",
-        )
+    ts_ax.fill_between(
+        da_lower[time_name].values,
+        da_lower.values,
+        da_upper.values,
+        color=RUNOFF_RANGE_FILL_COLOR,
+        alpha=RUNOFF_RANGE_FILL_ALPHA,
+        linewidth=0,
+        label=(
+            "95% interval, excluding selected event "
+            f"(n={da_lower.attrs['n_samples_used']})"
+        ),
+    )
 
-        ts_ax.plot(
-            da_median[time_name].values,
-            da_median.values,
-            color=RUNOFF_MEDIAN_LINE_COLOR,
-            linewidth=RUNOFF_MEDIAN_LINEWIDTH,
-            label="Hindcast median excluding selected member",
-        )
-
-    else:
-        time_name = get_time_coord_name(da_event)
+    ts_ax.plot(
+        da_median[time_name].values,
+        da_median.values,
+        color=RUNOFF_MEDIAN_LINE_COLOR,
+        linewidth=RUNOFF_MEDIAN_LINEWIDTH,
+        label="Median of hindcast members",
+    )
 
     ts_ax.plot(
         da_event[time_name].values,
@@ -1007,7 +1004,10 @@ def plot_runoff_timeseries(ts_ax, event, event_dates):
     )
 
     for date in event_dates:
-        value = da_event.sel({time_name: np.datetime64(date)}, method="nearest")
+        value = da_event.sel(
+            {time_name: np.datetime64(date)},
+            method="nearest",
+        )
 
         ts_ax.scatter(
             value[time_name].values,
@@ -1017,8 +1017,10 @@ def plot_runoff_timeseries(ts_ax, event, event_dates):
             zorder=5,
         )
 
+    selected_grid = da_event.attrs["selected_grid"]
+
     ts_ax.set_title(
-        f"e) Catchment-mean runoff in the {CATCHMENT_NAME} catchment",
+        f"e) Catchment-spatial-mean runoff for {catchment_label} ({selected_grid})",
         fontsize=TITLE_FONTSIZE,
         pad=5,
     )
@@ -1032,6 +1034,14 @@ def plot_runoff_timeseries(ts_ax, event, event_dates):
         da_event[time_name].values[-1],
     )
     ts_ax.margins(x=0)
+
+    plt.setp(
+        ts_ax.get_xticklabels(),
+        rotation=30,
+        ha="right",
+    )
+
+    ts_ax.legend(frameon=False, fontsize=9)
 
     tick_interval_days = 2
 
@@ -1050,14 +1060,6 @@ def plot_runoff_timeseries(ts_ax, event, event_dates):
         mdates.DateFormatter("%d %b")
     )
 
-    plt.setp(
-        ts_ax.get_xticklabels(),
-        rotation=30,
-        ha="right",
-    )
-
-    ts_ax.legend(frameon=False, fontsize=9)
-
 
 # =============================================================================
 # Figure finishing
@@ -1065,7 +1067,6 @@ def plot_runoff_timeseries(ts_ax, event, event_dates):
 
 def add_panel_titles(axes, event_dates):
     """Add panel labels and event-relative dates."""
-
     panel_labels = ["a)", "b)", "c)", "d)"]
 
     for ax, panel_label, lag, date in zip(
@@ -1089,8 +1090,7 @@ def add_panel_titles(axes, event_dates):
 
 
 def add_colorbar(fig, mesh, cbar_ax):
-    """Add vertical precipitation colorbar beside map panels."""
-
+    """Add vertical precipitation colorbar beside the map panels."""
     cbar = fig.colorbar(
         mesh,
         cax=cbar_ax,
@@ -1101,13 +1101,11 @@ def add_colorbar(fig, mesh, cbar_ax):
         "Daily accumulated precipitation (mm/day)",
         fontsize=AXIS_LABELSIZE,
     )
-
     cbar.ax.tick_params(labelsize=TICK_LABELSIZE)
 
 
 def get_snowmelt_legend_handle():
-    """Return legend handle for snowmelt overlay."""
-
+    """Return legend handle for the selected snowmelt overlay."""
     if SNOWMELT_OVERLAY == "hatching":
         return Patch(
             facecolor="white",
@@ -1128,8 +1126,7 @@ def get_snowmelt_legend_handle():
 
 
 def add_legend(axes, catchment_label):
-    """Add map legend inside upper-left panel."""
-
+    """Add map legend inside the upper-left panel."""
     legend_handles = [
         Line2D(
             [0],
@@ -1174,12 +1171,17 @@ def add_legend(axes, catchment_label):
 
 
 def align_timeseries_axis_to_map_panels(fig, axes, ts_ax):
-    """Align panel e with combined left/right borders of panels a-d."""
-
+    """Align panel e with the combined left/right borders of panels a-d."""
     fig.canvas.draw()
 
-    left = min(axes[0, 0].get_position().x0, axes[1, 0].get_position().x0)
-    right = max(axes[0, 1].get_position().x1, axes[1, 1].get_position().x1)
+    left = min(
+        axes[0, 0].get_position().x0,
+        axes[1, 0].get_position().x0,
+    )
+    right = max(
+        axes[0, 1].get_position().x1,
+        axes[1, 1].get_position().x1,
+    )
 
     pos = ts_ax.get_position()
 
@@ -1198,36 +1200,27 @@ def finalize_figure(
     axes,
     ts_ax,
     cbar_ax,
-    proj_map,
-    proj_data,
     mesh,
     event,
     event_dates,
-    catchment_boundary,
     catchment_label,
     savepath,
 ):
-    """Add titles, colorbar, legend, inset, save, and show."""
-
+    """Add titles, colorbar, legend, save the figure, and show it."""
     plot_axes = get_plot_axes(axes)
 
     add_panel_titles(plot_axes, event_dates)
 
     plot_runoff_timeseries(
-        ts_ax=ts_ax,
-        event=event,
-        event_dates=event_dates,
+        ts_ax,
+        event,
+        event_dates,
+        CATCHMENT_NAME,
+        catchment_label,
     )
 
     add_colorbar(fig, mesh, cbar_ax)
     add_legend(axes, catchment_label)
-
-    add_zoom_inset(
-        parent_ax=axes[1, 1],
-        proj_map=proj_map,
-        proj_data=proj_data,
-        catchment_boundary=catchment_boundary,
-    )
 
     fig.subplots_adjust(
         left=0.09,
@@ -1249,8 +1242,7 @@ def finalize_figure(
 # =============================================================================
 
 def main():
-    """Run full plotting workflow."""
-
+    """Run the full plotting workflow."""
     catchment = get_catchment_settings(CATCHMENT_NAME)
     event = get_selected_event(CATCHMENT_NAME, EVENT_RANK)
     event_dates = get_event_dates(event)
@@ -1266,7 +1258,11 @@ def main():
 
     mesh = None
 
-    for ax, lag, target_date in zip(get_plot_axes(axes), EVENT_LAGS, event_dates):
+    for ax, lag, target_date in zip(
+        get_plot_axes(axes),
+        EVENT_LAGS,
+        event_dates,
+    ):
         mesh = plot_event_panel(
             ax=ax,
             event=event,
@@ -1281,12 +1277,9 @@ def main():
         axes=axes,
         ts_ax=ts_ax,
         cbar_ax=cbar_ax,
-        proj_map=proj_map,
-        proj_data=proj_data,
         mesh=mesh,
         event=event,
         event_dates=event_dates,
-        catchment_boundary=catchment_boundary,
         catchment_label=catchment["label"],
         savepath=savepath,
     )
