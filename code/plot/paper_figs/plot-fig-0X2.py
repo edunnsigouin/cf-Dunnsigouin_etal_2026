@@ -404,9 +404,7 @@ def plot_ensemble_timeseries(
     The ensemble member with the highest maximum precipitation is highlighted.
     """
 
-    wettest_member, max_precip, max_time = (
-        get_wettest_ensemble_member(forecast)
-    )
+    wettest_member, max_precip, max_time = get_extreme_ensemble_member(forecast,mode="max")
 
     fig, ax = plt.subplots(figsize=figure_size)
 
@@ -528,48 +526,67 @@ def plot_ensemble_timeseries(
 
 
     
-def get_wettest_ensemble_member(forecast):
+
+def get_extreme_ensemble_member(forecast, mode="max"):
     """
-    Identify the ensemble member with the highest accumulated precipitation
-    at any point during the forecast period.
+    Identify the ensemble member with either the largest or smallest
+    value occurring at any point during the forecast period.
 
     Parameters
     ----------
     forecast : xarray.DataArray
-        Forecast accumulated precipitation with dimensions
-        (time, number).
+        Forecast variable with dimensions (time, number).
+
+    mode : {"max", "min"}, default="max"
+        Whether to return the ensemble member associated with the
+        largest or smallest value.
 
     Returns
     -------
     member : int
         Ensemble member number.
 
-    max_precip : float
-        Maximum precipitation [mm].
+    value : float
+        Extreme value.
 
-    max_time : pandas.Timestamp
-        Date of maximum precipitation.
+    time : pandas.Timestamp
+        Date of occurrence.
     """
 
-    # Maximum value for each member
-    member_max = forecast.max(dim="time")
+    if mode not in ["max", "min"]:
+        raise ValueError(
+            f"mode must be 'max' or 'min', got '{mode}'"
+        )
 
-    # Member producing largest value
-    member = int(member_max.idxmax(dim="number"))
+    if mode == "max":
+        member_extreme = forecast.max(dim="time")
+        member = int(member_extreme.idxmax(dim="number"))
+        value = float(member_extreme.max())
 
-    # Value itself
-    max_precip = float(member_max.max())
+        member_series = forecast.sel(number=member)
 
-    # Date of occurrence
-    member_series = forecast.sel(number=member)
+        time = pd.Timestamp(
+            member_series.time[
+                member_series.argmax(dim="time")
+            ].values
+        )
 
-    max_time = pd.Timestamp(
-        member_series.time[
-            member_series.argmax(dim="time")
-        ].values
-    )
+    else:  # mode == "min"
 
-    return member, max_precip, max_time
+        member_extreme = forecast.min(dim="time")
+        member = int(member_extreme.idxmin(dim="number"))
+        value = float(member_extreme.min())
+
+        member_series = forecast.sel(number=member)
+
+        time = pd.Timestamp(
+            member_series.time[
+                member_series.argmin(dim="time")
+            ].values
+        )
+
+    return member, value, time
+
 
 
 # =============================================================================
@@ -718,7 +735,7 @@ if __name__ == "__main__":
     # ------------------------------------------------------------------------- 
     # get info on wettest member
     # -------------------------------------------------------------------------    
-    member, max_precip, max_time = get_wettest_ensemble_member(
+    member, max_precip, max_time = get_extreme_ensemble_member(
     forecast_accumulated
     )
 
