@@ -17,6 +17,7 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 import matplotlib.pyplot as plt
+import matplotlib.dates as mdates
 
 from Dunnsigouin_etal_2026 import config, misc
 
@@ -85,20 +86,14 @@ era5_color = "tab:blue"
 senorge_color = "tab:red"
 obs_line_width = 2.5
 
-title = (
-    f"{x_days}-day accumulated precipitation\n"
-    f"{catchment} catchment, forecast initialized {forecast_date}"
-)
+title = "Drammen catchment mean daily-accumulated precipitation"
 
 xlabel = "Date"
-ylabel = f"{x_days}-day accumulated precipitation [mm]"
+ylabel = f"mm/day"
 
-save_figure = False
-figure_filename = (
-    f"ensemble_timeseries_with_era5_senorge_"
-    f"{forecast_variable}_{x_days}dayacc_"
-    f"{catchment}_{forecast_date}.png"
-)
+save_figure = True
+figure_filename = "fig-0X2.png"
+
 
 
 # =============================================================================
@@ -449,7 +444,7 @@ def plot_ensemble_timeseries(
         linewidth=obs_line_width,
         zorder=10,
         label=(
-            f"Wettest ensemble member"
+            f"Counterfactual Storm Hans"
         ),
     )
 
@@ -462,7 +457,7 @@ def plot_ensemble_timeseries(
         era5,
         color=era5_color,
         linewidth=obs_line_width,
-        label="ERA5",
+        label="ERA5 Storm Hans",
     )
 
     # ---------------------------------------------------------------------
@@ -474,7 +469,7 @@ def plot_ensemble_timeseries(
         senorge,
         color=senorge_color,
         linewidth=obs_line_width,
-        label="SeNorge",
+        label="SeNorge Storm Hans",
     )
 
     # ---------------------------------------------------------------------
@@ -497,11 +492,19 @@ def plot_ensemble_timeseries(
     ax.set_xlabel(xlabel)
     ax.set_ylabel(ylabel)
 
-    ax.grid(True, alpha=0.3)
-
     # Remove whitespace at ends of x-axis
     ax.set_xlim(plot_start, plot_end)
     ax.margins(x=0)
+    
+    # Format dates as: 02 Aug, 03 Aug, ...
+    ax.xaxis.set_major_formatter(
+        mdates.DateFormatter("%d %b")
+    )
+
+    # Optional: force one tick per day
+    ax.xaxis.set_major_locator(
+        mdates.DayLocator(interval=1)
+    )
 
     # Rotate date labels
     plt.setp(
