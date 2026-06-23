@@ -92,7 +92,7 @@ xlabel = "Date"
 ylabel = f"mm/day"
 
 save_figure = True
-figure_filename = "fig-0X2.png"
+figure_filename = f"{PATH_OUT}fig-0X2.png"
 
 
 
