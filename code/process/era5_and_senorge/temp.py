@@ -434,7 +434,7 @@ def build_daily_catchment_mean(
             print(f"Processing {dataset} {variable} {year}")
 
             da = load_senorge_year(cfg, int(year))
-
+            
             ts_year = catchment_mean(
                 da=da,
                 w=w,
