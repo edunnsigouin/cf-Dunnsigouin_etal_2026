@@ -2,13 +2,14 @@
 """
 Plot seNorge runoff during Storm Hans for the Drammen catchment.
 
-Workflow:
-1. Load yearly seNorge runoff.
-2. Load Drammen catchment weights.
-3. Calculate catchment-weighted runoff time series.
-4. Load catchment boundary.
-5. Plot four runoff maps.
-6. Plot catchment-mean runoff time series.
+The figure contains:
+1. Four seNorge runoff map panels for 2023-08-08 to 2023-08-11.
+2. Daily runoff as shading.
+3. Drammen catchment boundary in red.
+4. A bottom time-series panel showing:
+   - 2023 Drammen catchment-mean runoff
+   - 95% interval over all years
+   - Median over all years
 """
 
 from pathlib import Path
@@ -18,6 +19,7 @@ import geopandas as gpd
 import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
 import xarray as xr
 from matplotlib.gridspec import GridSpec
 from matplotlib.lines import Line2D
@@ -35,17 +37,13 @@ CATCHMENT_NAME = "drammen"
 
 EVENT_LAGS = [-2, -1, 0, 1]
 EVENT_DATES = [
+    "2023-08-07",
     "2023-08-08",
     "2023-08-09",
     "2023-08-10",
-    "2023-08-11",
 ]
 
 RUNOFF_VAR = "gwb_q"
-WEIGHT_VAR = "catchment_weight"
-
-TIMESERIES_START = "2023-01-01"
-TIMESERIES_END = "2023-12-31"
 
 WRITE_TO_FILE = True
 
@@ -61,13 +59,12 @@ PATH_SENORGE_RUNOFF = Path(config.dirs["senorge_continuous_daily"]) / RUNOFF_VAR
 
 RUNOFF_FILE = PATH_SENORGE_RUNOFF / f"{RUNOFF_VAR}_{YEAR}.nc"
 
-WEIGHTS_FILE = (
-    Path(config.dirs["nve"])
-    / "weights_catchment_regine_drammen_senorge.nc"
+RUNOFF_TIMESERIES_FILE = (
+    config.dirs["senorge_processed"]
+    + "t_gwb_q_1dayacc_regine_drammen_senorge_1958-2023.nc"
 )
 
 OUTPUT_FILENAME = f"{PATH_OUT}xy_evolution_storm_hans_runoff_senorge.png"
-
 
 
 # =============================================================================
@@ -103,10 +100,12 @@ CATCHMENT_EDGE_COLOR = "red"
 CATCHMENT_LINEWIDTH = 1.0
 CATCHMENT_CRS_IF_MISSING = "EPSG:4326"
 
-RUNOFF_LINE_COLOR = "tab:blue"
-RUNOFF_LINEWIDTH = 1.6
-EVENT_MARKER_SIZE = 35
+RUNOFF_RANGE_FILL_ALPHA = 0.25
+RUNOFF_MEDIAN_LINE_COLOR = "tab:red"
+RUNOFF_MEDIAN_LINEWIDTH = 1.4
+RUNOFF_YEAR_LINEWIDTH = 1.2
 
+EVENT_MARKER_SIZE = 20
 
 # =============================================================================
 # 5. Catchment metadata
@@ -169,11 +168,11 @@ def get_lon_lat(da):
 
 
 # =============================================================================
-# 7. Load runoff, weights, and calculate time series
+# 7. Data loading
 # =============================================================================
 
 def load_runoff_file(filename, variable):
-    """Load the yearly seNorge runoff file."""
+    """Load the yearly seNorge runoff file used for the map panels."""
 
     filename = Path(filename)
 
@@ -197,97 +196,31 @@ def load_runoff_file(filename, variable):
     return ds, da
 
 
-def load_catchment_weights(filename, weight_var):
-    """Load catchment weights and orient them like the seNorge runoff grid."""
+def load_runoff_timeseries(filename):
+    """Load processed Drammen catchment-mean surface runoff time series."""
 
     filename = Path(filename)
 
     if not filename.exists():
         raise FileNotFoundError(f"File not found: {filename}")
 
-    ds_w = xr.open_dataset(filename)
+    ds = xr.open_dataset(filename)
+    ds = xr.decode_cf(ds)
 
-    if weight_var not in ds_w:
+    if RUNOFF_VAR not in ds:
         raise KeyError(
-            f"Variable '{weight_var}' not found in {filename}. "
-            f"Available variables: {list(ds_w.data_vars)}"
+            f"Variable '{RUNOFF_VAR}' not found in {filename}. "
+            f"Available variables: {list(ds.data_vars)}"
         )
 
-    w = ds_w[weight_var].astype("float32")
+    da = ds[RUNOFF_VAR]
+    da.attrs["units"] = "mm/day"
 
-    if "Y" in w.dims:
-        w = w.rename({"Y": "y"})
-    if "X" in w.dims:
-        w = w.rename({"X": "x"})
-
-    # Important: runoff y increases, weights y decreases
-    w = w.sortby("y")
-
-    return w
-
-
-def match_weights_to_runoff_grid(da_runoff, weights):
-    """Put weights onto the runoff grid using positional matching."""
-
-    runoff_grid = da_runoff.isel(time=0, drop=True)
-
-    if weights.shape != runoff_grid.shape:
-        raise ValueError(
-            f"Weight grid shape {weights.shape} does not match runoff grid "
-            f"shape {runoff_grid.shape}."
-        )
-
-    weights_on_grid = xr.DataArray(
-        weights.values,
-        dims=runoff_grid.dims,
-        coords=runoff_grid.coords,
-        name=WEIGHT_VAR,
-    )
-
-    return weights_on_grid
-
-
-def calculate_catchment_mean_runoff_timeseries(
-    da_runoff,
-    weights,
-    start_date,
-    end_date,
-):
-    """
-    Calculate catchment-weighted mean runoff time series.
-
-    Formula:
-        sum(runoff * weight) / sum(weight)
-
-    Only finite runoff values and positive finite weights are used.
-    """
-
-    da = da_runoff.sel(time=slice(start_date, end_date))
-    w = match_weights_to_runoff_grid(da, weights)
-
-    valid = np.isfinite(da) & np.isfinite(w) & (w > 0)
-
-    weighted_sum = (da.where(valid) * w.where(valid)).sum(
-        dim=("y", "x"),
-        skipna=True,
-    )
-
-    weight_sum = w.where(valid).sum(
-        dim=("y", "x"),
-        skipna=True,
-    )
-
-    da_ts = weighted_sum / weight_sum
-
-    da_ts.name = "daily_catchment_mean_runoff"
-    da_ts.attrs["description"] = "Catchment-weighted daily mean runoff"
-    da_ts.attrs["units"] = da.attrs.get("units", "mm/day")
-
-    return da_ts.load()
+    return ds, da
 
 
 # =============================================================================
-# 8. Load catchment boundary
+# 8. Catchment boundary
 # =============================================================================
 
 def load_catchment_outer_boundary(
@@ -328,7 +261,51 @@ def load_catchment_outer_boundary(
 
 
 # =============================================================================
-# 9. Figure setup
+# 9. Runoff time-series climatology
+# =============================================================================
+
+def year_series_and_climatology_by_doy(da, year):
+    """
+    Extract one full year's daily runoff and compute day-of-year climatology.
+
+    Returns:
+    - selected-year runoff
+    - 2.5% quantile
+    - 50% quantile
+    - 97.5% quantile
+
+    The climatology is calculated over all available years in the input file.
+    """
+
+    da = da.dropna("time")
+
+    start = f"{year}-01-01"
+    end = f"{year}-12-31"
+    x_dates = pd.date_range(start, end, freq="D")
+
+    da_year = da.sel(time=slice(start, end))
+
+    if da_year.sizes.get("time", 0) != len(x_dates):
+        da_year = da_year.resample(time="1D").mean().sel(time=slice(start, end))
+
+    y_year = da_year.values
+
+    q = da.groupby("time.dayofyear").quantile(
+        [0.025, 0.5, 0.975],
+        dim="time",
+    )
+
+    doy = np.arange(1, 366)
+
+    q_low = q.sel(quantile=0.025).sel(dayofyear=doy, drop=True).values
+    q_median = q.sel(quantile=0.5).sel(dayofyear=doy, drop=True).values
+    q_high = q.sel(quantile=0.975).sel(dayofyear=doy, drop=True).values
+
+    return x_dates, y_year, q_low, q_high, q_median
+
+
+# =============================================================================
+# 10. Figure setup
 # =============================================================================
 
 def make_figure_axes():
@@ -399,15 +376,20 @@ def align_timeseries_axis_to_map_panels(fig, map_axes, ts_ax):
             pos.height,
         ]
     )
+
+
 # =============================================================================
-# 10. Map plotting functions
+# 11. Map plotting functions
 # =============================================================================
 
 def select_runoff_date(da_runoff, date):
     """Select runoff for one date."""
 
     time_name = get_time_coord_name(da_runoff)
-    return da_runoff.sel({time_name: np.datetime64(date, "ns")}).load()
+
+    return da_runoff.sel(
+        {time_name: np.datetime64(date, "ns")}
+    ).load()
 
 
 def plot_runoff_map(ax, da_map, proj_data):
@@ -456,59 +438,87 @@ def plot_map_panels(map_axes, da_runoff, catchment_boundary, proj_data):
 
 
 # =============================================================================
-# 11. Time-series plotting function
+# 12. Time-series plotting function
 # =============================================================================
 
-def plot_runoff_timeseries(ts_ax, da_ts):
-    """Plot the 2023 catchment-mean runoff time series."""
+def plot_runoff_timeseries(ts_ax, da_runoff_ts, year):
+    """Plot Drammen catchment runoff for selected year and climatology."""
 
-    time_name = get_time_coord_name(da_ts)
-
-    ts_ax.plot(
-        da_ts[time_name].values,
-        da_ts.values,
-        color=RUNOFF_LINE_COLOR,
-        linewidth=RUNOFF_LINEWIDTH,
-        label="Catchment-mean runoff",
+    x, y, lo, hi, med = year_series_and_climatology_by_doy(
+        da=da_runoff_ts,
+        year=year,
     )
 
-    for date in EVENT_DATES:
-        event_value = da_ts.sel(
-            {time_name: np.datetime64(date)},
-            method="nearest",
-        )
+    ts_ax.fill_between(
+        x,
+        lo,
+        hi,
+        alpha=RUNOFF_RANGE_FILL_ALPHA,
+        linewidth=0,
+        label="95% interval over all years",
+    )
 
-        ts_ax.scatter(
-            event_value[time_name].values,
-            event_value.values,
-            color=RUNOFF_LINE_COLOR,
-            s=EVENT_MARKER_SIZE,
-            zorder=5,
-        )
+    ts_ax.plot(
+        x,
+        med,
+        linewidth=RUNOFF_MEDIAN_LINEWIDTH,
+        color=RUNOFF_MEDIAN_LINE_COLOR,
+        label="Median over all years",
+    )
+
+    ts_ax.plot(
+        x,
+        y,
+        linewidth=RUNOFF_YEAR_LINEWIDTH,
+        color="tab:blue",
+        label=f"{year}",
+    )
+
+    # Add blue dots corresponding to the map-panel dates a-d
+    for date in EVENT_DATES:
+        event_date = pd.Timestamp(date)
+
+        if event_date in x:
+            idx = np.where(x == event_date)[0][0]
+
+            ts_ax.scatter(
+                event_date,
+                y[idx],
+                color="tab:blue",
+                s=EVENT_MARKER_SIZE,
+                zorder=6,
+            )
 
     ts_ax.set_title(
-        "e) 2023 Drammen catchment-mean runoff",
+        "e) Drammen catchment runoff 1958-2023",
         fontsize=TITLE_FONTSIZE,
         pad=5,
     )
 
-    ts_ax.set_ylabel("Runoff (mm/day)", fontsize=AXIS_LABELSIZE)
-    ts_ax.set_xlabel("Date", fontsize=AXIS_LABELSIZE)
-    ts_ax.tick_params(labelsize=TICK_LABELSIZE)
+    ts_ax.set_ylabel("mm/day", fontsize=AXIS_LABELSIZE)
+    ts_ax.set_xlabel("Month", fontsize=AXIS_LABELSIZE)
 
-    ts_ax.set_xlim(
-        np.datetime64(TIMESERIES_START),
-        np.datetime64(TIMESERIES_END),
-    )
+    ts_ax.tick_params(axis="both", labelsize=TICK_LABELSIZE)
 
-    ts_ax.xaxis.set_major_locator(mdates.MonthLocator(interval=1))
+    start = pd.Timestamp(f"{year}-01-01")
+    end = pd.Timestamp(f"{year}-12-31")
+
+    ts_ax.set_xlim(start, end)
+    ts_ax.margins(x=0)
+
+    ts_ax.xaxis.set_major_locator(mdates.MonthLocator())
     ts_ax.xaxis.set_major_formatter(mdates.DateFormatter("%b"))
+    ts_ax.xaxis.set_minor_locator(mdates.MonthLocator())
 
-    ts_ax.legend(frameon=False, fontsize=LEGEND_FONTSIZE)
+    ts_ax.legend(
+        frameon=False,
+        fontsize=LEGEND_FONTSIZE,
+        loc="upper left",
+    )
 
 
 # =============================================================================
-# 12. Figure finishing functions
+# 13. Figure finishing functions
 # =============================================================================
 
 def add_panel_titles(map_axes):
@@ -545,7 +555,7 @@ def add_colorbar(fig, mesh, cbar_ax):
         orientation="vertical",
     )
 
-    cbar.set_label("Daily runoff (mm/day)", fontsize=AXIS_LABELSIZE)
+    cbar.set_label("Runoff (mm/day)", fontsize=AXIS_LABELSIZE)
     cbar.ax.tick_params(labelsize=TICK_LABELSIZE)
 
 
@@ -594,7 +604,7 @@ def finalize_layout_and_save(fig, map_axes, ts_ax, savepath):
 
 
 # =============================================================================
-# 13. Main script
+# 14. Main script
 # =============================================================================
 
 def main():
@@ -602,38 +612,24 @@ def main():
 
     catchment = get_catchment_settings(CATCHMENT_NAME)
 
-    # 1. Load runoff data
     ds_runoff, da_runoff = load_runoff_file(
         filename=RUNOFF_FILE,
         variable=RUNOFF_VAR,
     )
 
+    ds_runoff_ts, da_runoff_ts = load_runoff_timeseries(
+        filename=RUNOFF_TIMESERIES_FILE,
+    )
+
     try:
-        # 2. Load catchment weights
-        weights = load_catchment_weights(
-            filename=WEIGHTS_FILE,
-            weight_var=WEIGHT_VAR,
-        )
-
-        # 3. Calculate catchment-mean runoff time series
-        da_ts = calculate_catchment_mean_runoff_timeseries(
-            da_runoff=da_runoff,
-            weights=weights,
-            start_date=TIMESERIES_START,
-            end_date=TIMESERIES_END,
-        )
-
-        # 4. Load catchment boundary
         catchment_boundary = load_catchment_outer_boundary(
             filename=catchment["filename"],
             base_dir=PATH_CATCHMENT,
             crs_if_missing=CATCHMENT_CRS_IF_MISSING,
         )
 
-        # 5. Create figure
         fig, map_axes, ts_ax, cbar_ax, proj_map, proj_data = make_figure_axes()
 
-        # 6. Plot maps
         mesh = plot_map_panels(
             map_axes=map_axes,
             da_runoff=da_runoff,
@@ -641,18 +637,16 @@ def main():
             proj_data=proj_data,
         )
 
-        # 7. Plot time series
         plot_runoff_timeseries(
             ts_ax=ts_ax,
-            da_ts=da_ts,
+            da_runoff_ts=da_runoff_ts,
+            year=YEAR,
         )
 
-        # 8. Add titles, colorbar, and legend
         add_panel_titles(map_axes)
         add_colorbar(fig, mesh, cbar_ax)
         add_legend(map_axes, catchment["label"])
 
-        # 9. Save and show
         finalize_layout_and_save(
             fig=fig,
             map_axes=map_axes,
@@ -662,6 +656,7 @@ def main():
 
     finally:
         ds_runoff.close()
+        ds_runoff_ts.close()
 
 
 if __name__ == "__main__":
