@@ -28,8 +28,8 @@ from Dunnsigouin_etal_2026 import config, misc
 
 # General settings
 forecast_date = "2023-08-05"
-catchment = "regine_drammen"
-x_days = 1
+catchment = "regine_glomma"
+x_days = 2
 
 # Plot-window settings
 N_days_before = 3
@@ -86,12 +86,13 @@ era5_color = "tab:blue"
 senorge_color = "tab:red"
 obs_line_width = 2.5
 
-title = "Drammen catchment mean daily-accumulated precipitation"
+title = "Drammen catchment mean 2-daiy accumulated precipitation"
 
 xlabel = "Date"
-ylabel = f"mm/day"
+ylabel = f"mm"
 
-save_figure = True
+save_figure = False
+PATH_OUT = config.dirs['fig']
 figure_filename = f"{PATH_OUT}fig-0X2.png"
 
 

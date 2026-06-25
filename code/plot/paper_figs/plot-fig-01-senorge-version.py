@@ -40,7 +40,7 @@ PRECIP_VAR = "rr"          # seNorge precipitation
 MSL_VAR = "msl"            # ERA5 mean sea level pressure
 STREAMFLOW_VAR = "vannforing"
 
-WRITE_TO_FILE = True
+WRITE_TO_FILE = False
 
 
 # =============================================================================
