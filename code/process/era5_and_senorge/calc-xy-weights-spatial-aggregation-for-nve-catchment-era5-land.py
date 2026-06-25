@@ -1,5 +1,5 @@
 """
-Create an xy (lat,lon) weight field in [0,1] that maps an ERA5-style model grid to an
+Create an xy (lat,lon) weight field in [0,1] that maps an ERA5_land-style model grid to an
 NVE regine catchment by area fraction.
 
 Method (Shapely + pyproj area-fraction):
@@ -25,15 +25,15 @@ from Dunnsigouin_etal_2026 import config
 
 
 # input ------------------------------------------------------------------
-resolution            = "0.25x0.25"
+resolution            = "0.1x0.1"
 path_in_catchment     = config.dirs["nve"]
-dlon                  = 0.25  # degrees
-dlat                  = 0.25
+dlon                  = 0.1  # degrees
+dlat                  = 0.1
 dst_epsg              = "EPSG:25833"
 
 catchment             = "regine_drammen"
 filename_in_catchment = f"{path_in_catchment}catchment_nve_{catchment}.geojson"
-out_xy                = f"{path_in_catchment}weights_catchment_{catchment}_era5_{resolution}.nc"
+out_xy                = f"{path_in_catchment}weights_catchment_{catchment}_era5_land_{resolution}.nc"
 write2file            = True
 # -------------------------------------------------------------------------
 
@@ -71,6 +71,9 @@ def make_model_grid(resolution: str):
     elif resolution == "0.25x0.25":
         model_latitude = np.arange(73.5, 32.25, -0.25)
         model_longitude = np.arange(-27.0, 45.25, 0.25)
+    elif resolution == "0.1x0.1":
+        model_latitude = np.arange(73.5, 32.1, -0.1)
+        model_longitude = np.arange(-27.0, 45.1, 0.1)        
     else:
         raise ValueError(f"Unsupported resolution: {resolution}")
 

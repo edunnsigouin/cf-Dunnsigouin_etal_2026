@@ -1,21 +1,44 @@
 """
 Create an X-day accumulated, catchment-weighted mean time series
-for either SeNorge or ERA5.
+for SeNorge, ERA5, or ERA5-Land.
 
-Supported variables:
-- SeNorge precipitation: rr
-- SeNorge runoff:        gwb_q
-- ERA5 precipitation:    tp24
-- ERA5 runoff:           ro
+Supported variables
+-------------------
+SeNorge:
+    rr      precipitation
+    gwb_q   runoff
 
-Output:
-- One NetCDF variable named after the selected variable.
-- Units: mm
-- Values are X-day accumulated catchment-mean values.
+ERA5:
+    tp24    precipitation
+    ro      runoff
+    sro     surface runoff
+
+ERA5-Land:
+    ro      runoff
+    sro     surface runoff
+
+Main idea
+---------
+1. Load the requested dataset and variable.
+2. Optionally subset the data to a named domain, for example Norway.
+3. Load catchment weights. The weight grid may be larger than the data domain.
+4. Subset and align the weights to the exact data grid.
+5. Compute the catchment-weighted daily mean.
+6. Accumulate the daily values over X days.
+7. Optionally write the result to NetCDF.
+
+Output
+------
+One NetCDF variable named after the selected variable.
+Units are mm.
+Values are X-day accumulated catchment-mean values.
 """
+
+from __future__ import annotations
 
 import numpy as np
 import xarray as xr
+
 from Dunnsigouin_etal_2026 import config, misc
 
 
@@ -23,17 +46,20 @@ from Dunnsigouin_etal_2026 import config, misc
 # User settings
 # =============================================================================
 
-dataset    = "senorge"          # "senorge" or "era5"
-variable   = "gwb_q"            # "rr", "gwb_q", "tp24", or "ro"
-years      = np.arange(1958, 2024)
-x_days     = 1
-catchment  = "regine_drammen"
-write2file = True
+DATASET = "senorge"          # "senorge", "era5", or "era5_land"
+VARIABLE = "gwb_q"               # "rr", "gwb_q", "tp24", "ro", or "sro"
+YEARS = np.arange(2023, 2024)
+X_DAYS = 1
+CATCHMENT = "regine_drammen"
+GRID = "0.25x0.25"
+DOMAIN = "norway"
 
-# ERA5-only settings
-grid   = "0.25x0.25"
-domain = "norway"
+# Coordinate matching tolerance for regular lat/lon grids.
+# 1e-4 degrees is about 10 m in latitude, and is generous enough for rounding
+# differences while still being much smaller than a 0.1 degree grid cell.
+LATLON_TOLERANCE = 1e-4
 
+WRITE_TO_FILE = False
 
 # =============================================================================
 # Dataset and variable settings
@@ -56,7 +82,6 @@ VARIABLES = {
             "description": "runoff",
         },
     },
-
     "era5": {
         "tp24": {
             "path_in": config.dirs["era5_continuous_daily"] + "tp24/",
@@ -72,9 +97,31 @@ VARIABLES = {
             "output_name": "ro",
             "description": "runoff",
         },
+        "sro": {
+            "path_in": config.dirs["era5_continuous_daily_scandinavia"] + "sro/",
+            "file_pattern": "sro_{grid}_{year}.nc",
+            "spatial_dims": ("latitude", "longitude"),
+            "output_name": "sro",
+            "description": "surface_runoff",
+        },
+    },
+    "era5_land": {
+        "ro": {
+            "path_in": config.dirs["era5_land_continuous_daily_scandinavia"] + "ro/",
+            "file_pattern": "ro_{grid}_{year}.nc",
+            "spatial_dims": ("latitude", "longitude"),
+            "output_name": "ro",
+            "description": "runoff",
+        },
+        "sro": {
+            "path_in": config.dirs["era5_land_continuous_daily_scandinavia"] + "sro/",
+            "file_pattern": "sro_{grid}_{year}.nc",
+            "spatial_dims": ("latitude", "longitude"),
+            "output_name": "sro",
+            "description": "surface_runoff",
+        },
     },
 }
-
 
 DATASETS = {
     "senorge": {
@@ -85,7 +132,6 @@ DATASETS = {
         ),
         "path_out": config.dirs["senorge_processed"],
     },
-
     "era5": {
         "read_mode": "mfdataset",
         "path_weights": lambda catchment, grid: (
@@ -93,6 +139,14 @@ DATASETS = {
             + f"weights_catchment_{catchment}_era5_{grid}.nc"
         ),
         "path_out": config.dirs["era5_processed"],
+    },
+    "era5_land": {
+        "read_mode": "mfdataset",
+        "path_weights": lambda catchment, grid: (
+            config.dirs["nve"]
+            + f"weights_catchment_{catchment}_era5_land_{grid}.nc"
+        ),
+        "path_out": config.dirs["era5_land_processed"],
     },
 }
 
@@ -102,16 +156,17 @@ DATASETS = {
 # =============================================================================
 
 def get_config(dataset: str, variable: str) -> dict:
-    """Return combined dataset and variable configuration."""
+    """Return one combined configuration dictionary."""
 
     if dataset not in DATASETS:
-        raise ValueError(f"Unknown dataset '{dataset}'. Use 'senorge' or 'era5'.")
+        valid = ", ".join(DATASETS)
+        raise ValueError(f"Unknown dataset '{dataset}'. Valid datasets are: {valid}.")
 
     if variable not in VARIABLES[dataset]:
         valid = ", ".join(VARIABLES[dataset])
         raise ValueError(
             f"Variable '{variable}' is not available for dataset '{dataset}'. "
-            f"Valid options are: {valid}."
+            f"Valid variables are: {valid}."
         )
 
     cfg = {}
@@ -124,17 +179,23 @@ def get_config(dataset: str, variable: str) -> dict:
 
 
 def make_input_filename(cfg: dict, year: int, grid: str | None = None) -> str:
-    """Create input filename for one year."""
+    """Create the input filename for one year."""
 
-    if cfg["dataset"] == "era5":
-        return cfg["path_in"] + cfg["file_pattern"].format(
-            grid=grid,
-            year=int(year),
-        )
+    if cfg["dataset"] in {"era5", "era5_land"}:
+        if grid is None:
+            raise ValueError(f"grid must be provided for dataset '{cfg['dataset']}'.")
+        return cfg["path_in"] + cfg["file_pattern"].format(grid=grid, year=int(year))
 
-    return cfg["path_in"] + cfg["file_pattern"].format(
-        year=int(year),
-    )
+    return cfg["path_in"] + cfg["file_pattern"].format(year=int(year))
+
+
+def make_weight_filename(cfg: dict, catchment: str, grid: str | None = None) -> str:
+    """Create the catchment-weight filename."""
+
+    if cfg["dataset"] in {"era5", "era5_land"} and grid is None:
+        raise ValueError(f"grid must be provided for dataset '{cfg['dataset']}'.")
+
+    return cfg["path_weights"](catchment, grid)
 
 
 # =============================================================================
@@ -143,27 +204,39 @@ def make_input_filename(cfg: dict, year: int, grid: str | None = None) -> str:
 
 def standardize_units(da: xr.DataArray, variable: str) -> xr.DataArray:
     """
-    Convert daily variable to mm/day where needed.
+    Convert daily variables to mm/day when needed.
 
-    SeNorge:
-        rr is usually kg/m2, equivalent to mm.
-        gwb_q is already mm/day.
-
-    ERA5:
-        tp24 and ro are usually in m/day and are converted to mm/day.
+    Notes
+    -----
+    - kg m-2 is equivalent to mm water depth.
+    - ERA5 and ERA5-Land accumulated runoff variables are commonly stored in m.
+    - If a runoff variable is already labelled as mm, it is not multiplied again.
     """
 
     units = str(da.attrs.get("units", "")).strip().lower()
 
-    if variable in {"tp24", "ro"}:
-        da = da * 1000.0
+    units_in_metres = units in {"m", "meter", "metre", "meters", "metres"}
+    units_in_mm = units in {"mm", "millimeter", "millimetre", "millimeters", "millimetres"}
+    units_as_water_mass = units in {"kg/m^2", "kg/m2", "kg m-2", "kg m**-2"}
+
+    if variable in {"tp24", "ro", "sro"}:
+        if units_in_metres or units == "":
+            da = da * 1000.0
+        elif not units_in_mm:
+            print(
+                f"Warning: variable '{variable}' has unrecognized units '{units}'. "
+                "Leaving values unchanged, but setting output units to mm/day."
+            )
         da.attrs["units"] = "mm/day"
 
     elif variable == "rr":
-        if units in {"kg/m^2", "kg/m2", "kg m-2"}:
-            da.attrs["units"] = "mm/day"
-        else:
-            da.attrs["units"] = "mm/day"
+        # SeNorge precipitation is often kg m-2, which is equivalent to mm.
+        if not (units_in_mm or units_as_water_mass or units == ""):
+            print(
+                f"Warning: variable 'rr' has unrecognized units '{units}'. "
+                "Leaving values unchanged, but setting output units to mm/day."
+            )
+        da.attrs["units"] = "mm/day"
 
     elif variable == "gwb_q":
         da.attrs["units"] = "mm/day"
@@ -172,7 +245,7 @@ def standardize_units(da: xr.DataArray, variable: str) -> xr.DataArray:
 
 
 # =============================================================================
-# General helpers
+# General validation and reporting helpers
 # =============================================================================
 
 def check_dims(da: xr.DataArray, expected_dims: tuple[str, ...], name: str) -> None:
@@ -183,84 +256,219 @@ def check_dims(da: xr.DataArray, expected_dims: tuple[str, ...], name: str) -> N
     if missing:
         raise ValueError(
             f"{name} is missing expected dimensions {missing}. "
-            f"Found dimensions: {da.dims}"
+            f"Found dimensions: {da.dims}."
         )
 
 
+def print_grid_summary(label: str, da: xr.DataArray, spatial_dims: tuple[str, str]) -> None:
+    """Print a compact summary of the spatial grid."""
+
+    ydim, xdim = spatial_dims
+    print(f"{label} grid:")
+    print(f"  shape: ({da.sizes[ydim]}, {da.sizes[xdim]})")
+
+    for dim in spatial_dims:
+        if dim in da.coords:
+            coord = da[dim]
+            print(
+                f"  {dim}: {float(coord.min()):.6f} to "
+                f"{float(coord.max()):.6f}, n={coord.size}"
+            )
+        else:
+            print(f"  {dim}: no coordinate values found")
+
+
 def preprocess_era5(ds: xr.Dataset) -> xr.Dataset:
-    """Drop unnecessary ERA5 ensemble dimension if present."""
+    """Drop unnecessary ERA5 ensemble dimension/coordinate if present."""
 
     return ds.drop_vars("number", errors="ignore")
 
 
 # =============================================================================
-# Weight loading and alignment
+# Domain and grid alignment helpers
 # =============================================================================
 
+def subset_latlon_domain(ds: xr.Dataset, domain: str | None) -> xr.Dataset:
+    """
+    Subset an ERA5/ERA5-Land dataset to a named lat/lon domain.
+
+    The domain coordinates are supplied by misc.get_domain_latlon(domain).
+    If domain is None, the full dataset grid is returned.
+    """
+
+    if domain is None:
+        return ds
+
+    domain_lats, domain_lons = misc.get_domain_latlon(domain)
+    return ds.sel(latitude=domain_lats, longitude=domain_lons)
+
+
+def rename_weight_dims_if_needed(
+    w: xr.DataArray,
+    spatial_dims: tuple[str, str],
+) -> xr.DataArray:
+    """
+    Rename weight dimensions so they match the data dimensions.
+
+    This mainly handles the SeNorge case where some files may use Y/X and
+    others may use y/x.
+    """
+
+    rename_dims = {}
+
+    if "Y" in w.dims and "y" in spatial_dims:
+        rename_dims["Y"] = "y"
+    if "X" in w.dims and "x" in spatial_dims:
+        rename_dims["X"] = "x"
+    if "y" in w.dims and "Y" in spatial_dims:
+        rename_dims["y"] = "Y"
+    if "x" in w.dims and "X" in spatial_dims:
+        rename_dims["x"] = "X"
+
+    if rename_dims:
+        w = w.rename(rename_dims)
+
+    return w
+
+
+def sort_spatial_coordinates(
+    da: xr.DataArray,
+    spatial_dims: tuple[str, str],
+) -> xr.DataArray:
+    """
+    Sort spatial coordinates where helpful.
+
+    Sorting avoids confusing alignment behavior when one object is ascending and
+    the other is descending. xarray can usually handle this, but sorting makes
+    the later logic easier to reason about.
+    """
+
+    for dim in spatial_dims:
+        if dim in da.coords:
+            da = da.sortby(dim)
+
+    return da
+
+
 def load_weights(path_weights: str, spatial_dims: tuple[str, str]) -> xr.DataArray:
-    """Load catchment weights and rename dimensions when needed."""
+    """
+    Load catchment weights.
+
+    The loaded weights do not have to be on the same domain as the data. They
+    only need to be on the same grid spacing and cover at least the data domain.
+    The actual subsetting to the data grid happens later in align_weights_to_data_grid().
+    """
 
     ds = xr.open_dataset(path_weights)
 
     if "catchment_weight" not in ds:
         raise KeyError(
             f"'catchment_weight' not found in {path_weights}. "
-            f"Available variables: {list(ds.data_vars)}"
+            f"Available variables: {list(ds.data_vars)}."
         )
 
     w = ds["catchment_weight"].astype("float32")
     w.name = "catchment_weight"
 
-    rename_dims = {}
-
-    if "Y" in w.dims and "y" in spatial_dims:
-        rename_dims["Y"] = "y"
-
-    if "X" in w.dims and "x" in spatial_dims:
-        rename_dims["X"] = "x"
-
-    if rename_dims:
-        w = w.rename(rename_dims)
-
-    if "y" in w.dims:
-        w = w.sortby("y")
-
+    w = rename_weight_dims_if_needed(w, spatial_dims)
     check_dims(w, spatial_dims, "Catchment weights")
+    w = sort_spatial_coordinates(w, spatial_dims)
 
     return w
 
 
-def align_weights(da: xr.DataArray, w: xr.DataArray) -> xr.DataArray:
+def align_weights_to_data_grid(
+    da: xr.DataArray,
+    w: xr.DataArray,
+    spatial_dims: tuple[str, str],
+    tolerance: float = LATLON_TOLERANCE,
+) -> xr.DataArray:
     """
-    Align weights to the data grid.
+    Subset and align catchment weights to the exact data grid.
 
-    First tries coordinate-aware alignment. If that produces no valid weights,
-    it falls back to positional alignment.
+    Why this exists
+    ---------------
+    The catchment-weight files can be larger than the selected data domain.
+    For example, weights may cover Scandinavia while data are subset to Norway.
+    Before multiplying data by weights, both arrays must have exactly the same
+    spatial shape and coordinates.
+
+    Strategy
+    --------
+    1. Take one time slice from the data to define the target spatial grid.
+    2. Select the same coordinates from the weight grid.
+    3. Reindex to the data grid so dimension order and coordinates match.
+    4. Check that the result has valid, non-empty weights.
     """
 
     grid_template = da.isel(time=0, drop=True)
+    grid_template = grid_template.transpose(*spatial_dims)
 
-    try:
-        w_aligned = w.reindex_like(grid_template)
+    # Make sure weight dimensions are ordered like the data dimensions.
+    w = w.transpose(*spatial_dims)
 
-        if np.isfinite(w_aligned).sum().item() > 0:
-            return w_aligned
+    # Lat/lon grids sometimes differ by tiny floating-point rounding errors.
+    # For those grids, nearest-neighbor selection with a small tolerance is safer
+    # than exact coordinate matching.
+    if spatial_dims == ("latitude", "longitude"):
+        try:
+            w_on_data_grid = w.sel(
+                latitude=grid_template.latitude,
+                longitude=grid_template.longitude,
+                method="nearest",
+                tolerance=tolerance,
+            )
+        except KeyError as exc:
+            raise ValueError(
+                "Could not subset weights to the data latitude/longitude grid. "
+                "This usually means the weight file does not cover the selected "
+                "data domain, or the coordinate values differ by more than the "
+                f"tolerance={tolerance}."
+            ) from exc
+    else:
+        # For projected or index-like grids, first try exact coordinate-aware
+        # subsetting. If coordinates are not available, xarray will fall back to
+        # dimension-based behavior in the later shape check.
+        selectors = {
+            dim: grid_template[dim]
+            for dim in spatial_dims
+            if dim in w.coords and dim in grid_template.coords
+        }
 
-    except Exception:
-        pass
+        if selectors:
+            w_on_data_grid = w.sel(selectors)
+        else:
+            w_on_data_grid = w
 
-    if w.shape != grid_template.shape:
+    # Final coordinate-aware alignment to the data grid.
+    w_on_data_grid = w_on_data_grid.reindex_like(grid_template)
+
+    if w_on_data_grid.shape != grid_template.shape:
         raise ValueError(
-            f"Weights shape {w.shape} does not match data grid shape "
-            f"{grid_template.shape}."
+            "Weights and data do not have the same spatial shape after subsetting.\n"
+            f"  Weights shape: {w_on_data_grid.shape}\n"
+            f"  Data shape:    {grid_template.shape}\n"
+            "Check that the weight grid covers the selected data domain and "
+            "uses the same spatial resolution."
         )
 
-    return xr.DataArray(
-        w.values,
-        dims=grid_template.dims,
-        coords=grid_template.coords,
-        name=w.name,
-    )
+    valid_weight_count = np.isfinite(w_on_data_grid).sum().item()
+    positive_weight_count = ((w_on_data_grid > 0) & np.isfinite(w_on_data_grid)).sum().item()
+
+    if valid_weight_count == 0:
+        raise ValueError(
+            "Weights were subset to the data grid, but all values are NaN. "
+            "This means the data and weight coordinates do not overlap."
+        )
+
+    if positive_weight_count == 0:
+        raise ValueError(
+            "Weights were subset to the data grid, but no positive catchment "
+            "weights were found. Check that the selected catchment intersects "
+            "the selected domain."
+        )
+
+    return w_on_data_grid
 
 
 # =============================================================================
@@ -268,46 +476,54 @@ def align_weights(da: xr.DataArray, w: xr.DataArray) -> xr.DataArray:
 # =============================================================================
 
 def load_senorge_year(cfg: dict, year: int) -> xr.DataArray:
-    """Load one SeNorge yearly file."""
+    """Load one yearly SeNorge file."""
 
     variable = cfg["variable"]
     filename = make_input_filename(cfg, year)
 
-    ds = xr.open_dataset(filename)
-    ds = xr.decode_cf(ds)
+    print(f"Opening {filename}")
 
-    if variable not in ds:
-        raise KeyError(
-            f"'{variable}' not found in {filename}. "
-            f"Available variables: {list(ds.data_vars)}"
+    with xr.open_dataset(filename) as ds:
+        ds = xr.decode_cf(ds)
+
+        if variable not in ds:
+            raise KeyError(
+                f"'{variable}' not found in {filename}. "
+                f"Available variables: {list(ds.data_vars)}."
+            )
+
+        da = ds[variable]
+
+        fill_value = da.attrs.get("_FillValue")
+        if fill_value is not None:
+            da = da.where(da != fill_value)
+
+        da = standardize_units(da, variable)
+
+        check_dims(
+            da,
+            ("time", *cfg["spatial_dims"]),
+            f"SeNorge {variable}",
         )
 
-    da = ds[variable]
-
-    fill_value = da.attrs.get("_FillValue")
-    if fill_value is not None:
-        da = da.where(da != fill_value)
-
-    da = standardize_units(da, variable)
-
-    check_dims(
-        da,
-        ("time", *cfg["spatial_dims"]),
-        f"SeNorge {variable}",
-    )
-
-    ds.close()
+        da = sort_spatial_coordinates(da, cfg["spatial_dims"])
+        da = da.load()
 
     return da
 
 
-def load_era5(
+def load_era5_like_dataset(
     cfg: dict,
     years: np.ndarray,
     grid: str,
     domain: str | None,
 ) -> xr.DataArray:
-    """Load all ERA5 files at once."""
+    """
+    Load ERA5 or ERA5-Land files and optionally subset to a domain.
+
+    This function is used for both ERA5 and ERA5-Land because the file layout,
+    coordinates, and processing steps are the same.
+    """
 
     variable = cfg["variable"]
 
@@ -316,20 +532,22 @@ def load_era5(
         for year in years
     ]
 
+    print("Opening files:")
+    for filename in filenames:
+        print(f"  {filename}")
+
     ds = xr.open_mfdataset(
         filenames,
         preprocess=preprocess_era5,
         combine="by_coords",
     )
 
-    if domain is not None:
-        domain_lats, domain_lons = misc.get_domain_latlon(domain)
-        ds = ds.sel(latitude=domain_lats, longitude=domain_lons)
+    ds = subset_latlon_domain(ds, domain)
 
     if variable not in ds:
         raise KeyError(
-            f"'{variable}' not found in ERA5 files. "
-            f"Available variables: {list(ds.data_vars)}"
+            f"'{variable}' not found in files. "
+            f"Available variables: {list(ds.data_vars)}."
         )
 
     da = standardize_units(ds[variable], variable)
@@ -337,8 +555,10 @@ def load_era5(
     check_dims(
         da,
         ("time", *cfg["spatial_dims"]),
-        f"ERA5 {variable}",
+        f"{cfg['dataset']} {variable}",
     )
+
+    da = sort_spatial_coordinates(da, cfg["spatial_dims"])
 
     return da
 
@@ -357,11 +577,21 @@ def catchment_mean(
     """
     Compute catchment-weighted spatial mean.
 
-    Formula:
-        sum(variable * weight) / sum(weight)
+    Formula
+    -------
+    sum(variable * weight) / sum(weight)
+
+    The weights are first subset and aligned to the exact data grid. This is the
+    step that makes it safe for the original weight file to cover a larger domain
+    than the selected data domain.
     """
 
-    w = align_weights(da, w)
+    print_grid_summary("Data before weighting", da.isel(time=0, drop=True), spatial_dims)
+    print_grid_summary("Weights before alignment", w, spatial_dims)
+
+    w = align_weights_to_data_grid(da, w, spatial_dims)
+
+    print_grid_summary("Weights after alignment", w, spatial_dims)
 
     valid = xr.ufuncs.isfinite(da) & xr.ufuncs.isfinite(w) & (w > 0)
 
@@ -395,6 +625,9 @@ def xday_accumulation(
 ) -> xr.DataArray:
     """Compute trailing X-day accumulated catchment-mean values."""
 
+    if x_days < 1:
+        raise ValueError("x_days must be at least 1.")
+
     out = (
         ts
         .rolling(time=x_days, min_periods=x_days)
@@ -411,6 +644,10 @@ def xday_accumulation(
     return out
 
 
+# =============================================================================
+# Main processing function
+# =============================================================================
+
 def build_daily_catchment_mean(
     dataset: str,
     variable: str,
@@ -419,13 +656,16 @@ def build_daily_catchment_mean(
     grid: str | None = None,
     domain: str | None = None,
 ) -> tuple[xr.DataArray, dict]:
-    """Load data and return the daily catchment-mean time series."""
+    """
+    Load data, load weights, align weights to data grid, and return daily means.
+    """
 
     cfg = get_config(dataset, variable)
     spatial_dims = cfg["spatial_dims"]
 
-    path_weights = cfg["path_weights"](catchment, grid)
-    w = load_weights(path_weights, spatial_dims)
+    path_weights = make_weight_filename(cfg, catchment, grid)
+    print(f"Opening weights: {path_weights}")
+    weights = load_weights(path_weights, spatial_dims)
 
     if cfg["read_mode"] == "yearly":
         yearly_series = []
@@ -433,11 +673,11 @@ def build_daily_catchment_mean(
         for year in years:
             print(f"Processing {dataset} {variable} {year}")
 
-            da = load_senorge_year(cfg, int(year))
-            
+            da_year = load_senorge_year(cfg, int(year))
+
             ts_year = catchment_mean(
-                da=da,
-                w=w,
+                da=da_year,
+                w=weights,
                 spatial_dims=spatial_dims,
                 variable=variable,
                 load_result=True,
@@ -448,7 +688,7 @@ def build_daily_catchment_mean(
         ts_daily = xr.concat(yearly_series, dim="time").sortby("time")
 
     elif cfg["read_mode"] == "mfdataset":
-        da = load_era5(
+        da = load_era5_like_dataset(
             cfg=cfg,
             years=years,
             grid=grid,
@@ -457,14 +697,14 @@ def build_daily_catchment_mean(
 
         ts_daily = catchment_mean(
             da=da,
-            w=w,
+            w=weights,
             spatial_dims=spatial_dims,
             variable=variable,
             load_result=False,
         )
 
     else:
-        raise ValueError(f"Unknown read mode: {cfg['read_mode']}")
+        raise ValueError(f"Unknown read mode: {cfg['read_mode']}.")
 
     return ts_daily, cfg
 
@@ -484,7 +724,7 @@ def make_output_filename(
 ) -> str:
     """Create standardized output filename."""
 
-    if dataset == "era5":
+    if dataset in {"era5", "era5_land"}:
         return (
             f"{cfg['path_out']}"
             f"t_{variable}_{x_days}dayacc_"
@@ -507,13 +747,13 @@ def write_output(
     years: np.ndarray,
     x_days: int,
     grid: str | None = None,
-    write2file: bool = True,
+    write_to_file: bool = True,
 ) -> xr.Dataset:
     """Create output dataset and optionally write it to NetCDF."""
 
     out = xr.Dataset({da_out.name: da_out})
 
-    if write2file:
+    if write_to_file:
         filename_out = make_output_filename(
             cfg=cfg,
             dataset=dataset,
@@ -525,29 +765,33 @@ def write_output(
         )
 
         out.to_netcdf(filename_out)
-        print("Wrote:", filename_out)
+        print(f"Wrote: {filename_out}")
 
     return out
 
 
 # =============================================================================
-# Main
+# Script entry point
 # =============================================================================
 
-if __name__ == "__main__":
+def main() -> xr.Dataset:
+    """Run the full processing chain."""
+
+    domain_for_processing = DOMAIN if DATASET in {"era5", "era5_land"} else None
+    grid_for_processing = GRID if DATASET in {"era5", "era5_land"} else None
 
     ts_daily, cfg = build_daily_catchment_mean(
-        dataset=dataset,
-        variable=variable,
-        years=years,
-        catchment=catchment,
-        grid=grid,
-        domain=domain if dataset == "era5" else None,
+        dataset=DATASET,
+        variable=VARIABLE,
+        years=YEARS,
+        catchment=CATCHMENT,
+        grid=grid_for_processing,
+        domain=domain_for_processing,
     )
 
     da_acc = xday_accumulation(
         ts=ts_daily,
-        x_days=x_days,
+        x_days=X_DAYS,
         output_name=cfg["output_name"],
         description=cfg["description"],
     )
@@ -555,11 +799,17 @@ if __name__ == "__main__":
     out = write_output(
         da_out=da_acc,
         cfg=cfg,
-        dataset=dataset,
-        variable=variable,
-        catchment=catchment,
-        years=years,
-        x_days=x_days,
-        grid=grid,
-        write2file=write2file,
+        dataset=DATASET,
+        variable=VARIABLE,
+        catchment=CATCHMENT,
+        years=YEARS,
+        x_days=X_DAYS,
+        grid=grid_for_processing,
+        write_to_file=WRITE_TO_FILE,
     )
+
+    return out
+
+
+if __name__ == "__main__":
+    main()

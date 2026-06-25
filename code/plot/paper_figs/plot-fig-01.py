@@ -47,7 +47,7 @@ PRECIP_VAR = "tp24"
 MSL_VAR = "msl"
 STREAMFLOW_VAR = "vannforing"
 
-WRITE_TO_FILE = True
+WRITE_TO_FILE = False
 
 
 # =============================================================================
