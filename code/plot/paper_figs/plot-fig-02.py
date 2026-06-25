@@ -292,21 +292,20 @@ def plot_monthly_boxplots(
         counterfactual_month,
         counterfactual_value,
         facecolors="w",
-        marker="^",
+        marker="o",
         edgecolors=COUNTERFACTUAL_COLOR,
-        linewidths=1.5,
-        s=35,
+        linewidths=1.0,
+        s=20,
         zorder=6,
-        label="Counterfactual event",
+        label="Counterfactual spring storm Hans",
     )
 
-    ax.set_title(
-        "Monthly 2-day accumulated precipitation extremes averaged\n over drammen catchment",
-        fontsize=TITLE_FONTSIZE,
-        pad=8,
-    )
-
-    ax.set_ylabel("mm/2-days", fontsize=AXIS_LABELSIZE)
+    if catchment == 'regine_drammen':
+        ax.set_title("Drammen catchment, monthly 2-day accumulated precipitation maxima",fontsize=TITLE_FONTSIZE,pad=8)
+    elif catchment == 'regine_glomma':
+        ax.set_title("Glomma catchment, monthly 2-day accumulated precipitation maxima",fontsize=TITLE_FONTSIZE,pad=8)
+        
+    ax.set_ylabel("Precipitation [mm]", fontsize=AXIS_LABELSIZE)
     ax.set_xlabel("Month", fontsize=AXIS_LABELSIZE)
 
     ax.set_xlim(0.4, 12.6)
@@ -379,13 +378,13 @@ def plot_monthly_boxplots(
 
         Line2D(
             [0], [0],
-            marker="^",
+            marker="o",
             linestyle="none",
             markerfacecolor="white",
             markeredgecolor=COUNTERFACTUAL_COLOR,
-            markeredgewidth=1.5,
-            markersize=6,
-            label="Model counterfactual Storm Hans",
+            markeredgewidth=1.0,
+            markersize=5,
+            label=f"Counterfactual spring storm Hans",
         ),
     ]
 
