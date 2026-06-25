@@ -43,7 +43,7 @@ EVENT_LAGS = [-2, -1, 0, 1]
 PRECIP_VAR = "tp24"
 MSL_VAR = "msl"
 SNOW_VAR = "sd"
-RUNOFF_VAR = "ro24"
+RUNOFF_VAR = "sro24"
 
 WRITE_TO_FILE = True
 
@@ -959,25 +959,25 @@ def plot_runoff_timeseries(ts_ax, event, event_dates, catchment_name, catchment_
         alpha=RUNOFF_RANGE_FILL_ALPHA,
         linewidth=0,
         label=(
-            "95% interval over all hindcast years and members "
+            "95% interval over all years and members "
             f"(n={da_lower.attrs['n_samples_used']})"
         ),
     )
 
-    ts_ax.plot(
-        da_median[time_name].values,
-        da_median.values,
-        color=RUNOFF_MEDIAN_LINE_COLOR,
-        linewidth=RUNOFF_MEDIAN_LINEWIDTH,
-        label="Median over all hindcast years and members",
-    )
+    #ts_ax.plot(
+    #    da_median[time_name].values,
+    #    da_median.values,
+    #    color=RUNOFF_MEDIAN_LINE_COLOR,
+    #    linewidth=RUNOFF_MEDIAN_LINEWIDTH,
+    #    label="Median over all hindcast years and members",
+    #)
 
     ts_ax.plot(
         da_event[time_name].values,
         da_event.values,
         color=RUNOFF_EVENT_LINE_COLOR,
         linewidth=RUNOFF_EVENT_LINEWIDTH,
-        label="Counterfactual event",
+        label="Counterfactual spring storm Hans",
     )
 
     for date in event_dates:

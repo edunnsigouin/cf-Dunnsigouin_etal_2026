@@ -67,7 +67,7 @@ ERA5_RUNOFF_VAR = "ro"    # ERA5 runoff
 N_DAYS_BEFORE = 3
 M_DAYS_LEAD = 6
 
-WRITE_TO_FILE = True
+WRITE_TO_FILE = False
 
 
 # =============================================================================
