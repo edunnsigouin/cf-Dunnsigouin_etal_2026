@@ -60,14 +60,14 @@ EVENT_LAGS = [-2, -1, 0, 1]
 PRECIP_VAR = "tp24"
 MSL_VAR = "msl"
 
-RUNOFF_VAR = "ro24"       # S2S forecast runoff
-ERA5_RUNOFF_VAR = "ro"    # ERA5 runoff
+RUNOFF_VAR = "sro24"       # S2S forecast runoff
+ERA5_RUNOFF_VAR = "sro"    # ERA5 runoff
 
 # Panel e) date-window settings
 N_DAYS_BEFORE = 3
 M_DAYS_LEAD = 6
 
-WRITE_TO_FILE = False
+WRITE_TO_FILE = True
 
 
 # =============================================================================
@@ -907,7 +907,6 @@ def plot_catchment_mean_timeseries(ts_ax, catchment_name):
     ts_ax.set_xlabel("Date", fontsize=AXIS_LABELSIZE)
     ts_ax.tick_params(labelsize=TICK_LABELSIZE)
 
-    ts_ax.grid(True, alpha=0.3)
 
     ts_ax.set_xlim(plot_start, plot_end)
     ts_ax.margins(x=0)
