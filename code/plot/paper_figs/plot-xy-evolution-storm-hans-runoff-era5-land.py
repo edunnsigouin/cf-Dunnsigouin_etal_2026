@@ -35,6 +35,8 @@ from Dunnsigouin_etal_2026 import config
 YEAR = 2023
 CATCHMENT_NAME = "drammen"
 
+NDAY = 2 # timeseries Nday accumulation
+
 EVENT_LAGS = [-2, -1, 0, 1]
 EVENT_DATES = [
     "2023-08-06",
@@ -63,7 +65,7 @@ RUNOFF_FILE = PATH_ERA5_LAND_RUNOFF / f"{RUNOFF_VAR}_0.1x0.1_{YEAR}.nc"
 
 RUNOFF_TIMESERIES_FILE = (
     config.dirs["era5_land_processed"]
-    + "t_sro_1dayacc_regine_drammen_era5_land_0.1x0.1_1950-2023.nc"
+    + f"t_{RUNOFF_VAR}_{NDAY}dayacc_regine_drammen_era5_land_0.1x0.1_1950-2023.nc"
 )
 
 OUTPUT_FILENAME = f"{PATH_OUT}xy_evolution_storm_hans_sro_era5_land.png"
@@ -93,7 +95,7 @@ LEGEND_FONTSIZE = 9
 # 4. Plot styling
 # =============================================================================
 
-RUNOFF_LEVELS = np.arange(1, 31, 2)
+RUNOFF_LEVELS = np.arange(1, 51, 2)#np.arange(1, 31, 2)
 RUNOFF_ZERO_THRESHOLD = 1.0
 RUNOFF_CMAP = plt.get_cmap("Blues").copy()
 RUNOFF_CMAP.set_under("white")
@@ -512,12 +514,12 @@ def plot_runoff_timeseries(ts_ax, da_runoff_ts, year):
             )
 
     ts_ax.set_title(
-        "e) Drammen catchment ERA5-Land surface runoff 1950-2023",
+        f"e) Drammen catchment {NDAY}-day accumulated surface runoff 1950-2023",
         fontsize=TITLE_FONTSIZE,
         pad=5,
     )
 
-    ts_ax.set_ylabel("mm/day", fontsize=AXIS_LABELSIZE)
+    ts_ax.set_ylabel("mm", fontsize=AXIS_LABELSIZE)
     ts_ax.set_xlabel("Month", fontsize=AXIS_LABELSIZE)
 
     ts_ax.tick_params(axis="both", labelsize=TICK_LABELSIZE)

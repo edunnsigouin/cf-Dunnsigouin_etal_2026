@@ -35,6 +35,8 @@ from Dunnsigouin_etal_2026 import config
 YEAR = 2023
 CATCHMENT_NAME = "drammen"
 
+NDAY = 2 # NDAY accumulation for timeseries
+
 EVENT_LAGS = [-2, -1, 0, 1]
 EVENT_DATES = [
     "2023-08-07",
@@ -61,7 +63,7 @@ RUNOFF_FILE = PATH_SENORGE_RUNOFF / f"{RUNOFF_VAR}_{YEAR}.nc"
 
 RUNOFF_TIMESERIES_FILE = (
     config.dirs["senorge_processed"]
-    + "t_gwb_q_1dayacc_regine_drammen_senorge_1958-2023.nc"
+    + f"t_{RUNOFF_VAR}_{NDAY}dayacc_regine_drammen_senorge_1958-2023.nc"
 )
 
 OUTPUT_FILENAME = f"{PATH_OUT}xy_evolution_storm_hans_runoff_senorge.png"
@@ -490,7 +492,7 @@ def plot_runoff_timeseries(ts_ax, da_runoff_ts, year):
             )
 
     ts_ax.set_title(
-        "e) Drammen catchment runoff 1958-2023",
+        f"e) Drammen catchment {NDAY}-accumulated surface runoff 1958-2023",
         fontsize=TITLE_FONTSIZE,
         pad=5,
     )
