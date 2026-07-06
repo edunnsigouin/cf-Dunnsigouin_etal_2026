@@ -497,7 +497,7 @@ def plot_runoff_timeseries(ts_ax, da_runoff_ts, year):
         pad=5,
     )
 
-    ts_ax.set_ylabel("mm/day", fontsize=AXIS_LABELSIZE)
+    ts_ax.set_ylabel("mm", fontsize=AXIS_LABELSIZE)
     ts_ax.set_xlabel("Month", fontsize=AXIS_LABELSIZE)
 
     ts_ax.tick_params(axis="both", labelsize=TICK_LABELSIZE)
