@@ -25,6 +25,7 @@ import os
 import numpy as np
 import xarray as xr
 import xesmf as xe
+from pyproj import Transformer
 
 from Dunnsigouin_etal_2026 import config
 
@@ -36,7 +37,7 @@ from Dunnsigouin_etal_2026 import config
 DATASET = "senorge"          # "era5_land" or "senorge"
 SENORGE_VARIABLE = "gwb_q"      # "rr" or "gwb_q"
 
-YEARS = np.arange(2023, 2024)
+YEARS = np.arange(1959, 2024)
 
 WRITE_TO_FILE = True
 
@@ -304,48 +305,42 @@ def make_target_grid():
     return sort_coordinates(target_grid)
 
 
-def add_curvilinear_bounds(source_grid):
+def add_curvilinear_bounds(source_grid, ds):
     """
-    Add approximate corner coordinates to a 2D curvilinear grid.
+    Add lon/lat corner coordinates for a seNorge 2D curvilinear grid.
 
-    xESMF conservative regridding requires lon_b/lat_b for curvilinear grids.
-    The bounds are estimated from neighbouring cell centres.
+    seNorge is defined on a regular UTM Zone 33 grid. It is safer to compute
+    cell corners in projected x/y coordinates and then transform those corners
+    to lon/lat, rather than estimating corners directly from 2D lon/lat.
     """
 
-    lon = source_grid["lon"].values
-    lat = source_grid["lat"].values
+    x = ds["x"].values
+    y = ds["y"].values
 
-    ny, nx = lon.shape
+    dx = np.median(np.diff(x))
+    dy = np.median(np.diff(y))
 
-    lon_b = np.empty((ny + 1, nx + 1))
-    lat_b = np.empty((ny + 1, nx + 1))
+    x_b = np.empty(x.size + 1)
+    y_b = np.empty(y.size + 1)
 
-    lon_b[1:-1, 1:-1] = 0.25 * (
-        lon[:-1, :-1] + lon[1:, :-1] + lon[:-1, 1:] + lon[1:, 1:]
+    x_b[1:-1] = 0.5 * (x[:-1] + x[1:])
+    y_b[1:-1] = 0.5 * (y[:-1] + y[1:])
+
+    x_b[0] = x[0] - 0.5 * dx
+    x_b[-1] = x[-1] + 0.5 * dx
+
+    y_b[0] = y[0] - 0.5 * dy
+    y_b[-1] = y[-1] + 0.5 * dy
+
+    x_b_2d, y_b_2d = np.meshgrid(x_b, y_b)
+
+    transformer = Transformer.from_crs(
+        "EPSG:32633",   # UTM Zone 33N, WGS84
+        "EPSG:4326",    # lon/lat, WGS84
+        always_xy=True,
     )
-    lat_b[1:-1, 1:-1] = 0.25 * (
-        lat[:-1, :-1] + lat[1:, :-1] + lat[:-1, 1:] + lat[1:, 1:]
-    )
 
-    lon_b[0, 1:-1] = 2 * lon[0, :-1] - lon_b[1, 1:-1]
-    lon_b[-1, 1:-1] = 2 * lon[-1, :-1] - lon_b[-2, 1:-1]
-    lon_b[1:-1, 0] = 2 * lon[:-1, 0] - lon_b[1:-1, 1]
-    lon_b[1:-1, -1] = 2 * lon[:-1, -1] - lon_b[1:-1, -2]
-
-    lat_b[0, 1:-1] = 2 * lat[0, :-1] - lat_b[1, 1:-1]
-    lat_b[-1, 1:-1] = 2 * lat[-1, :-1] - lat_b[-2, 1:-1]
-    lat_b[1:-1, 0] = 2 * lat[:-1, 0] - lat_b[1:-1, 1]
-    lat_b[1:-1, -1] = 2 * lat[:-1, -1] - lat_b[1:-1, -2]
-
-    lon_b[0, 0] = 2 * lon_b[0, 1] - lon_b[0, 2]
-    lon_b[0, -1] = 2 * lon_b[0, -2] - lon_b[0, -3]
-    lon_b[-1, 0] = 2 * lon_b[-1, 1] - lon_b[-1, 2]
-    lon_b[-1, -1] = 2 * lon_b[-1, -2] - lon_b[-1, -3]
-
-    lat_b[0, 0] = 2 * lat_b[0, 1] - lat_b[0, 2]
-    lat_b[0, -1] = 2 * lat_b[0, -2] - lat_b[0, -3]
-    lat_b[-1, 0] = 2 * lat_b[-1, 1] - lat_b[-1, 2]
-    lat_b[-1, -1] = 2 * lat_b[-1, -2] - lat_b[-1, -3]
+    lon_b, lat_b = transformer.transform(x_b_2d, y_b_2d)
 
     source_grid["lon_b"] = (("y_b", "x_b"), lon_b)
     source_grid["lat_b"] = (("y_b", "x_b"), lat_b)
@@ -371,7 +366,8 @@ def make_source_grid(ds, cfg):
                 "lon": ds["lon"],
             }
         )
-        return add_curvilinear_bounds(source_grid)
+
+        return add_curvilinear_bounds(source_grid, ds)
 
     raise ValueError(f"Unknown grid type: {cfg['grid_type']}")
 
@@ -414,18 +410,25 @@ def load_era5_land_mask(cfg, ds_source):
     return mask
 
 
-def make_valid_data_mask(da):
+def make_valid_data_mask(da, cfg):
     """
     Create a binary mask from valid data values.
 
-    non-NaN values = valid source cells
-    NaN values     = masked source cells
+    General seNorge rule:
+        non-NaN values = valid source cells
+        NaN values     = masked source cells
+
+    Special case for seNorge gwb_q:
+        older files may use -0.1 for sea points, so these are also masked.
     """
 
+    valid = da.notnull()
+
+    if cfg["dataset"] == "senorge" and cfg["variable"] == "gwb_q":
+        valid = valid & (da != -0.1)
+
     if "time" in da.dims:
-        valid = da.notnull().any(dim="time")
-    else:
-        valid = da.notnull()
+        valid = valid.any(dim="time")
 
     mask = xr.where(valid, 1, 0).astype("int32")
     mask.name = "mask"
@@ -440,7 +443,7 @@ def make_source_mask(cfg, ds_source, da):
         return load_era5_land_mask(cfg, ds_source)
 
     if cfg["mask_type"] == "valid_data":
-        return make_valid_data_mask(da)
+        return make_valid_data_mask(da, cfg)
 
     raise ValueError(f"Unknown mask type: {cfg['mask_type']}")
 
@@ -542,8 +545,9 @@ def process_one_year(year, cfg):
 
 
     if cfg["dataset"] == "senorge":
+        da = da.where(source_mask == 1)
         da = da.fillna(0.0)
-
+    
     source_grid = make_source_grid(ds, cfg)
     source_grid = add_mask_to_source_grid(source_grid, source_mask)
 

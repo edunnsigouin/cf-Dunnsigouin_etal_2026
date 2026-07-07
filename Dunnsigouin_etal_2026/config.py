@@ -22,7 +22,7 @@ era5_continuous_daily_scandinavia      = raw + 'era5/continuous-format/daily/sca
 era5_land_continuous_daily_scandinavia = raw + 'era5_land/continuous-format/daily/scandinavia/'
 
 senorge_continuous_daily        = '/nird/datapeak/NS9873K/DATA/senorge/'
-senorge_continuous_daily_regrid = raw + 'senorge/'
+senorge_continuous_daily_regrid = raw + 'senorge/regrid_0.5x0.5/'
 
 nve                  = processed + 'nve/'
 station              = processed + 'station/'
