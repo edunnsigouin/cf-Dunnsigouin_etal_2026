@@ -24,11 +24,12 @@ era5_land_continuous_daily_scandinavia = raw + 'era5_land/continuous-format/dail
 senorge_continuous_daily        = '/nird/datapeak/NS9873K/DATA/senorge/'
 senorge_continuous_daily_regrid = raw + 'senorge/regrid_0.5x0.5/'
 
-nve                  = processed + 'nve/'
-station              = processed + 'station/'
-era5_processed       = processed + 'era5/'
-era5_land_processed  = processed + 'era5_land/'
-senorge_processed    = processed + 'senorge/'
+nve                       = processed + 'nve/'
+station                   = processed + 'station/'
+era5_processed            = processed + 'era5/'
+era5_land_processed       = processed + 'era5_land/'
+senorge_processed         = processed + 'senorge/'
+senorge_regrid_processed  = processed + 'senorge_regrid/'
 
 dirs = {"proj":proj,
         "data_interim":data_interim,
@@ -49,5 +50,6 @@ dirs = {"proj":proj,
         "era5_land_processed":era5_land_processed,
         "senorge_continuous_daily":senorge_continuous_daily,
         "senorge_processed":senorge_processed,
+        "senorge_regrid_processed":senorge_regrid_processed,
         "senorge_continuous_daily_regrid":senorge_continuous_daily_regrid,
 }        

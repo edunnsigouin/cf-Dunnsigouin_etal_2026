@@ -17,6 +17,8 @@ Method:
     - mask = 0 means masked source cell.
     - ERA5-Land mask is based on the land-sea mask file.
     - seNorge mask is based directly on non-NaN values in the data file.
+
+NOTE: you need to use the conda environment called "regrid" where xesmf is installed.
 """
 
 import glob
@@ -35,9 +37,9 @@ from Dunnsigouin_etal_2026 import config
 # ====================================================
 
 DATASET = "senorge"          # "era5_land" or "senorge"
-SENORGE_VARIABLE = "gwb_q"      # "rr" or "gwb_q"
+SENORGE_VARIABLE = "rr"      # "rr" or "gwb_q"
 
-YEARS = np.arange(1959, 2024)
+YEARS = np.arange(1957, 1958)
 
 WRITE_TO_FILE = True
 

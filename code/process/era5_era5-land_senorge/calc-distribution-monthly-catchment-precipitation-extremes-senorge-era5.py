@@ -1,9 +1,8 @@
 """
-Calculate the distribution of monthly precipitation extremes for a catchment.
+Calculate the distribution of monthly precipitation/runoff extremes for a catchment.
 
 Input:
-- Output files from the catchment-mean precipitation script
-- File contains one variable: tp(time)
+- Output files from the catchment-mean script
 
 Output:
 - Monthly maxima arranged as (year, month)
@@ -15,13 +14,15 @@ from Dunnsigouin_etal_2026 import config
 
 
 # input -----------------------------------------------------------------
-dataset    = "senorge"          # "senorge" or "era5"
-variable   = "tp"
+dataset    = "senorge_regrid"   # "senorge", "senorge_regrid", "era5", or "era5_land"
+variable   = "rr"               # e.g. "rr", "gwb_q", "tp24", "ro", "sro"
 years      = np.arange(1957, 2024)
-grid       = "0.5x0.5"       # ERA5 only
 x_days     = 2
 catchment  = "regine_glomma"
 write2file = True
+
+# ERA5 / ERA5-Land only
+grid = "0.5x0.5"
 
 path_in  = config.dirs[f"{dataset}_processed"]
 path_out = config.dirs[f"{dataset}_processed"]
@@ -39,17 +40,19 @@ def make_input_filename(
 ) -> str:
     """Create filename matching the standardized output from the previous script."""
 
-    if dataset == "era5":
+    if dataset in {"era5", "era5_land"}:
         return (
             f"{path_in}"
-            f"t_{variable}_{x_days}dayacc_nve_catchment_"
-            f"{catchment}_{dataset}_{grid}_{years[0]}-{years[-1]}.nc"
+            f"t_{variable}_{x_days}dayacc_"
+            f"{catchment}_{dataset}_{grid}_"
+            f"{years[0]}-{years[-1]}.nc"
         )
 
     return (
         f"{path_in}"
-        f"t_{variable}_{x_days}dayacc_nve_catchment_"
-        f"{catchment}_{dataset}_{years[0]}-{years[-1]}.nc"
+        f"t_{variable}_{x_days}dayacc_"
+        f"{catchment}_{dataset}_"
+        f"{years[0]}-{years[-1]}.nc"
     )
 
 
@@ -62,7 +65,7 @@ def load_data(
     years: np.ndarray,
     grid: str | None = None,
 ) -> xr.DataArray:
-    """Load standardized catchment-mean accumulated precipitation."""
+    """Load standardized catchment-mean accumulated data."""
 
     filename_in = make_input_filename(
         path_in=path_in,
@@ -107,7 +110,7 @@ def calc_monthly_maximum_distribution(da: xr.DataArray) -> xr.DataArray:
 
     annual_monthly_max.name = da.name
     annual_monthly_max.attrs["description"] = (
-        "Monthly maxima of X-day accumulated catchment-mean precipitation"
+        "Monthly maxima of X-day accumulated catchment-mean values"
     )
     annual_monthly_max.attrs["units"] = da.attrs.get("units", "")
 
@@ -125,18 +128,18 @@ def make_output_filename(
 ) -> str:
     """Create output filename."""
 
-    if dataset == "era5":
+    if dataset in {"era5", "era5_land"}:
         return (
             f"{path_out}"
             f"distribution_monthly_extremes_{variable}_{x_days}dayacc_"
-            f"nve_catchment_{catchment}_{dataset}_{grid}_"
+            f"{catchment}_{dataset}_{grid}_"
             f"{years[0]}-{years[-1]}.nc"
         )
 
     return (
         f"{path_out}"
         f"distribution_monthly_extremes_{variable}_{x_days}dayacc_"
-        f"nve_catchment_{catchment}_{dataset}_"
+        f"{catchment}_{dataset}_"
         f"{years[0]}-{years[-1]}.nc"
     )
 
@@ -175,6 +178,8 @@ def write_output(
 
 if __name__ == "__main__":
 
+    grid_for_filename = grid if dataset in {"era5", "era5_land"} else None
+
     da = load_data(
         path_in=path_in,
         dataset=dataset,
@@ -182,7 +187,7 @@ if __name__ == "__main__":
         x_days=x_days,
         catchment=catchment,
         years=years,
-        grid=grid,
+        grid=grid_for_filename,
     )
 
     monthly_extremes = calc_monthly_maximum_distribution(da)
@@ -195,6 +200,6 @@ if __name__ == "__main__":
         x_days=x_days,
         catchment=catchment,
         years=years,
-        grid=grid,
+        grid=grid_for_filename,
         write2file=write2file,
     )
