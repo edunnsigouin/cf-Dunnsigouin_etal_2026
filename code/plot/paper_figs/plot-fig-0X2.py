@@ -43,7 +43,7 @@ from Dunnsigouin_etal_2026 import config, misc
 
 FORECAST_DATE = "2023-08-05"
 CATCHMENT = "regine_drammen"
-X_DAYS = 2
+X_DAYS = 1
 
 # -----------------------------------------------------------------------------
 # Plot-window settings
@@ -164,7 +164,7 @@ DATE_TICK_ROTATION = 30
 # Output settings
 # -----------------------------------------------------------------------------
 
-SAVE_FIGURE = True
+SAVE_FIGURE = False
 FIGURE_OUTPUT_DIR = config.dirs["fig"]
 FIGURE_FILENAME = f"{FIGURE_OUTPUT_DIR}fig-0X2.png"
 FIGURE_DPI = 300
