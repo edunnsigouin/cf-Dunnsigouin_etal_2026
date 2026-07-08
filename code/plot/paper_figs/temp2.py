@@ -165,7 +165,7 @@ MAP_HSPACE = 0.12
 
 # This controls only the extra empty space between the top panel and panels a/b.
 # Increase to 0.25 if more space is needed. Decrease to 0.10 if too much.
-TOP_TO_MAP_SPACER_HEIGHT = 0.18
+TOP_TO_MAP_SPACER_HEIGHT = 0.10
 
 CENTRAL_LON = 10.0
 CENTRAL_LAT = 62.0
