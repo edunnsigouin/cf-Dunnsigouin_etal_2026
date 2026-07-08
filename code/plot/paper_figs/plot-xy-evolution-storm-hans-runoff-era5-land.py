@@ -35,7 +35,7 @@ from Dunnsigouin_etal_2026 import config
 YEAR = 2023
 CATCHMENT_NAME = "drammen"
 
-NDAY = 2 # timeseries Nday accumulation
+NDAY = 1 # timeseries Nday accumulation
 
 EVENT_LAGS = [-2, -1, 0, 1]
 EVENT_DATES = [
@@ -45,9 +45,9 @@ EVENT_DATES = [
     "2023-08-09",
 ]
 
-RUNOFF_VAR = "sro"
+RUNOFF_VAR = "ro"
 
-WRITE_TO_FILE = True
+WRITE_TO_FILE = False
 
 
 # =============================================================================

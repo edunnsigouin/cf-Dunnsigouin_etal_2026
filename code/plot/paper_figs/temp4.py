@@ -17,15 +17,16 @@ Middle time-series panel:
 - seNorge Storm Hans
 - forecast initialization date
 
-Panel e:
-- catchment-mean runoff
+Panel f:
+- catchment-mean surface runoff
 - S2S forecast ensemble
 - selected ensemble member highlighted
 - ERA5 runoff
+- seNorge runoff in red
 - forecast initialization date
 
 The precipitation and runoff time-series panels share the same x-axis.
-Only panel e shows the date labels.
+Only panel f shows the date labels.
 """
 
 from pathlib import Path
@@ -62,8 +63,6 @@ EVENT_DATES = [
     "2023-08-09",
 ]
 
-EVENT_LAGS = [-2, -1, 0, 1]
-
 # Map-panel variables
 MAP_PRECIP_VAR = "tp24"
 MAP_MSL_VAR = "msl"
@@ -77,6 +76,12 @@ PRECIP_ACCUMULATION_DAYS = 1
 # Runoff time-series variables
 RUNOFF_FORECAST_VAR = "sro24"  # S2S forecast runoff
 RUNOFF_ERA5_VAR = "sro"        # ERA5 runoff
+
+# seNorge runoff time-series variable.
+# This uses the processed catchment-mean file from the second script:
+# t_gwb_q_1dayacc_regine_drammen_senorge_1958-2023.nc
+RUNOFF_SENORGE_VAR = "gwb_q"
+RUNOFF_SENORGE_ACCUMULATION_DAYS = 1
 
 # Shared date window for precipitation and runoff time-series panels.
 # Using one shared window allows the two panels to share the same x-axis.
@@ -114,7 +119,7 @@ PRECIP_SENORGE_PATH = (
 )
 PRECIP_SENORGE_FILE_PATTERN = f"{PRECIP_SENORGE_VAR}" + "_{year}.nc"
 
-# ERA5 runoff for panel e
+# ERA5 runoff for panel f
 RUNOFF_ERA5_DOMAIN = "norway"
 RUNOFF_ERA5_PATH = (
     config.dirs["era5_continuous_daily_scandinavia"]
@@ -122,6 +127,9 @@ RUNOFF_ERA5_PATH = (
     + "/"
 )
 RUNOFF_ERA5_FILE_PATTERN = f"{RUNOFF_ERA5_VAR}_{GRID}" + "_{year}.nc"
+
+# seNorge runoff for panel f
+RUNOFF_SENORGE_PATH = Path(config.dirs["senorge_processed"])
 
 OUTPUT_FILENAME = f"{PATH_OUT}fig-0X_combined_maps_precip_runoff.png"
 
@@ -191,6 +199,9 @@ RUNOFF_SELECTED_MEMBER_LINEWIDTH = 2.5
 
 RUNOFF_ERA5_COLOR = "tab:blue"
 RUNOFF_ERA5_LINEWIDTH = 2.5
+
+RUNOFF_SENORGE_COLOR = "tab:red"
+RUNOFF_SENORGE_LINEWIDTH = 2.5
 
 EVENT_MARKER_SIZE = 35
 
@@ -269,6 +280,25 @@ def make_senorge_weights_file(catchment_name):
         Path(PATH_CATCHMENT)
         / f"weights_catchment_{catchment['weights_id']}_senorge.nc"
     )
+
+
+def make_senorge_runoff_timeseries_file(catchment_name):
+    """
+    Return the processed seNorge runoff time-series file.
+
+    Example for Drammen:
+    t_gwb_q_1dayacc_regine_drammen_senorge_1958-2023.nc
+    """
+
+    catchment = get_catchment_settings(catchment_name)
+
+    filename = (
+        f"t_{RUNOFF_SENORGE_VAR}_"
+        f"{RUNOFF_SENORGE_ACCUMULATION_DAYS}dayacc_"
+        f"{catchment['weights_id']}_senorge_1958-2023.nc"
+    )
+
+    return RUNOFF_SENORGE_PATH / filename
 
 
 def get_time_coord_name(da):
@@ -969,6 +999,35 @@ def load_era5_runoff(years, time_start, time_end):
     return da
 
 
+def load_senorge_runoff_timeseries(catchment_name):
+    """
+    Load processed seNorge catchment-mean runoff.
+
+    The input file is produced by the seNorge runoff-processing script and
+    already contains the catchment-mean runoff time series.
+    """
+
+    filename = make_senorge_runoff_timeseries_file(catchment_name)
+
+    if not filename.exists():
+        raise FileNotFoundError(f"File not found: {filename}")
+
+    with xr.open_dataset(filename) as ds:
+        ds = xr.decode_cf(ds)
+
+        if RUNOFF_SENORGE_VAR not in ds:
+            raise KeyError(
+                f"Variable '{RUNOFF_SENORGE_VAR}' not found in {filename}. "
+                f"Available variables: {list(ds.data_vars)}"
+            )
+
+        da = ds[RUNOFF_SENORGE_VAR].load()
+
+    da.attrs["units"] = "mm"
+
+    return da
+
+
 def process_forecast_runoff(catchment_name, init_date, plot_end):
     """Process catchment-mean S2S runoff for all ensemble members."""
 
@@ -1036,6 +1095,27 @@ def process_era5_runoff(
     return da_mean
 
 
+def process_senorge_runoff(catchment_name, plot_start, plot_end):
+    """
+    Process seNorge catchment-mean runoff for panel f.
+
+    Unlike the S2S and ERA5 runoff, the seNorge file is already processed to
+    catchment mean. Therefore this function only loads, rounds, and subsets it.
+    """
+
+    da = load_senorge_runoff_timeseries(catchment_name)
+
+    da = round_time_to_nearest_day(da)
+
+    da = subset_to_period(
+        da=da,
+        start_date=plot_start,
+        end_date=plot_end,
+    )
+
+    return da
+
+
 # =============================================================================
 # 12. Catchment boundary
 # =============================================================================
@@ -1093,7 +1173,7 @@ def make_figure_axes():
     - Row 0: map panels a and b
     - Row 1: map panels c and d
     - Row 2: precipitation time-series panel
-    - Row 3: runoff time-series panel e
+    - Row 3: runoff time-series panel f
 
     The precipitation and runoff panels share the same x-axis.
     """
@@ -1271,7 +1351,7 @@ def plot_precipitation_timeseries(ax, catchment_label):
     - ERA5
     - seNorge
 
-    The x-axis labels are hidden because panel e below shares the same x-axis.
+    The x-axis labels are hidden because panel f below shares the same x-axis.
     """
 
     (
@@ -1367,20 +1447,19 @@ def plot_precipitation_timeseries(ax, catchment_label):
 
     ax.plot(
         era5["time"],
-	era5,
+        era5,
         color=PRECIP_ERA5_COLOR,
-	linewidth=PRECIP_LINEWIDTH,
+        linewidth=PRECIP_LINEWIDTH,
         label="ERA5 Storm Hans",
     )
 
     ax.plot(
-	senorge["time"],
+        senorge["time"],
         senorge,
         color=PRECIP_SENORGE_COLOR,
-	linewidth=PRECIP_LINEWIDTH,
+        linewidth=PRECIP_LINEWIDTH,
         label="SeNorge Storm Hans",
     )
-
 
     ax.set_title(
         f"e) {catchment_label} precipitation",
@@ -1390,7 +1469,7 @@ def plot_precipitation_timeseries(ax, catchment_label):
 
     ax.set_ylabel("mm", fontsize=AXIS_LABELSIZE)
 
-    # Hide x-axis labels here because panel e below shares this x-axis.
+    # Hide x-axis labels here because panel f below shares this x-axis.
     ax.set_xlabel("")
     ax.tick_params(axis="x", labelbottom=False)
     ax.tick_params(axis="y", labelsize=TICK_LABELSIZE)
@@ -1411,9 +1490,10 @@ def plot_precipitation_timeseries(ax, catchment_label):
 
 def plot_runoff_timeseries(ax, catchment_name):
     """
-    Plot forecast ensemble and ERA5 catchment-mean runoff in panel e).
+    Plot forecast ensemble, ERA5 runoff, and seNorge runoff in panel f.
 
-    This keeps the main behavior from the second script.
+    The only addition relative to the first attached script is the red seNorge
+    runoff line from the processed seNorge runoff file.
     """
 
     (
@@ -1445,6 +1525,12 @@ def plot_runoff_timeseries(ax, catchment_name):
         plot_end=plot_end,
     )
 
+    senorge = process_senorge_runoff(
+        catchment_name=catchment_name,
+        plot_start=plot_start,
+        plot_end=plot_end,
+    )
+
     time_name = get_time_coord_name(forecast)
     member_name = get_member_coord_name(forecast)
 
@@ -1465,7 +1551,7 @@ def plot_runoff_timeseries(ax, catchment_name):
         alpha=RUNOFF_ENSEMBLE_ALPHA,
         label="Forecast ensemble",
     )
-    
+
     # Plot all non-selected forecast members.
     for member in forecast[member_name].values:
         if member == ENSEMBLE_MEMBER:
@@ -1486,7 +1572,7 @@ def plot_runoff_timeseries(ax, catchment_name):
         selected.values,
         color=RUNOFF_SELECTED_MEMBER_COLOR,
         linewidth=RUNOFF_SELECTED_MEMBER_LINEWIDTH,
-        label=f"Counterfactual Storm Hans",
+        label="Counterfactual Storm Hans",
         zorder=10,
     )
 
@@ -1498,6 +1584,17 @@ def plot_runoff_timeseries(ax, catchment_name):
         color=RUNOFF_ERA5_COLOR,
         linewidth=RUNOFF_ERA5_LINEWIDTH,
         label="ERA5",
+        zorder=9,
+    )
+
+    senorge_time_name = get_time_coord_name(senorge)
+
+    ax.plot(
+        senorge[senorge_time_name].values,
+        senorge.values,
+        color=RUNOFF_SENORGE_COLOR,
+        linewidth=RUNOFF_SENORGE_LINEWIDTH,
+        label="seNorge",
         zorder=9,
     )
 
@@ -1525,11 +1622,14 @@ def plot_runoff_timeseries(ax, catchment_name):
         rotation_mode="anchor",
     )
 
-    #ax.legend(
-    #    loc="upper left",
-    #    frameon=False,
-    #    fontsize=LEGEND_FONTSIZE,
-    #)
+    # The legend is kept commented out because it was commented out
+    # in your first attached script. Uncomment this if you want the new
+    # seNorge red line included in the panel-f legend.
+    # ax.legend(
+    #     loc="upper left",
+    #     frameon=False,
+    #     fontsize=LEGEND_FONTSIZE,
+    # )
 
 
 # =============================================================================
@@ -1668,7 +1768,7 @@ def main():
         proj_data,
     ) = make_figure_axes()
 
-    # Four map panels from the second script.
+    # Four map panels.
     mesh = None
 
     for ax, target_date in zip(get_map_axes(map_axes), EVENT_DATES):
@@ -1679,13 +1779,13 @@ def main():
             proj_data=proj_data,
         )
 
-    # Precipitation time series from the first script.
+    # Precipitation time series.
     plot_precipitation_timeseries(
         ax=precip_ts_ax,
         catchment_label=catchment["label"],
     )
 
-    # Runoff time series from the second script.
+    # Runoff time series, now including seNorge runoff in red.
     plot_runoff_timeseries(
         ax=runoff_ts_ax,
         catchment_name=CATCHMENT_NAME,

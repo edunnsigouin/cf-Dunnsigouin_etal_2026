@@ -9,7 +9,7 @@ Panels a-d:
 - S2S mean sea level pressure as labelled grey contours
 - selected catchment boundary in red
 
-Middle time-series panel:
+Panel e:
 - catchment-mean accumulated precipitation
 - S2S forecast ensemble
 - highlighted wettest forecast ensemble member
@@ -17,15 +17,14 @@ Middle time-series panel:
 - seNorge Storm Hans
 - forecast initialization date
 
-Panel e:
-- catchment-mean runoff
+Panel f:
+- catchment-mean surface runoff
 - S2S forecast ensemble
-- selected ensemble member highlighted
-- ERA5 runoff
-- forecast initialization date
+- selected S2S ensemble member highlighted
+- ERA5-Land surface runoff
+- seNorge surface runoff
 
-The precipitation and runoff time-series panels share the same x-axis.
-Only panel e shows the date labels.
+Only panel f shows the shared date labels.
 """
 
 from pathlib import Path
@@ -45,15 +44,13 @@ from Dunnsigouin_etal_2026 import config, misc
 
 
 # =============================================================================
-# 1. User-defined input parameters
+# 1. User settings
 # =============================================================================
 
 CATCHMENT_NAME = "drammen"  # options: "drammen", "glomma"
 
 FORECAST_DATE = "2023-08-05"
 ENSEMBLE_MEMBER = 48
-MODEL_TYPE = "forecast"
-GRID = "0.25x0.25"
 
 EVENT_DATES = [
     "2023-08-06",
@@ -62,24 +59,6 @@ EVENT_DATES = [
     "2023-08-09",
 ]
 
-EVENT_LAGS = [-2, -1, 0, 1]
-
-# Map-panel variables
-MAP_PRECIP_VAR = "tp24"
-MAP_MSL_VAR = "msl"
-
-# Precipitation time-series variables
-PRECIP_FORECAST_VAR = "tp24"
-PRECIP_ERA5_VAR = "tp24"
-PRECIP_SENORGE_VAR = "rr"
-PRECIP_ACCUMULATION_DAYS = 1
-
-# Runoff time-series variables
-RUNOFF_FORECAST_VAR = "sro24"  # S2S forecast runoff
-RUNOFF_ERA5_VAR = "sro"        # ERA5 runoff
-
-# Shared date window for precipitation and runoff time-series panels.
-# Using one shared window allows the two panels to share the same x-axis.
 TIMESERIES_N_DAYS_BEFORE = 3
 TIMESERIES_M_DAYS_LEAD = 6
 
@@ -87,47 +66,64 @@ WRITE_TO_FILE = True
 
 
 # =============================================================================
-# 2. Paths
+# 2. Data settings
 # =============================================================================
 
-PATH_OUT = config.dirs["fig"]
-PATH_CATCHMENT = config.dirs["nve"]
+MODEL_TYPE = "forecast"
+
+S2S_GRID = "0.25x0.25"
+ERA5_LAND_GRID = "0.1x0.1"
+
+# Map-panel variables
+MAP_PRECIP_VAR = "tp24"
+MAP_MSL_VAR = "msl"
+
+# Panel e precipitation variables
+PRECIP_FORECAST_VAR = "tp24"
+PRECIP_ERA5_VAR = "tp24"
+PRECIP_SENORGE_VAR = "rr"
+PRECIP_ACCUMULATION_DAYS = 1
+
+# Panel f runoff variables
+RUNOFF_FORECAST_VAR = "sro24"  # S2S forecast surface runoff
+RUNOFF_ERA5_LAND_VAR = "sro"   # ERA5-Land surface runoff
+RUNOFF_SENORGE_VAR = "gwb_q"   # seNorge surface runoff
+RUNOFF_ACCUMULATION_DAYS = 1
+
+
+# =============================================================================
+# 3. Paths
+# =============================================================================
+
+PATH_OUT = Path(config.dirs["fig"])
+PATH_CATCHMENT = Path(config.dirs["nve"])
 
 S2S_BASE_DIR = Path("/nird/datapeak/NS9873K/etdu/raw/s2s/mars/ecmwf")
 
-# Forecast precipitation for the middle time-series panel
 PRECIP_FORECAST_FILE = (
     Path(config.dirs["s2s_forecast_daily"])
     / PRECIP_FORECAST_VAR
-    / f"{PRECIP_FORECAST_VAR}_{GRID}_{FORECAST_DATE}.nc"
+    / f"{PRECIP_FORECAST_VAR}_{S2S_GRID}_{FORECAST_DATE}.nc"
 )
 
-# ERA5 precipitation for the middle time-series panel
-PRECIP_ERA5_DOMAIN = "norway"
 PRECIP_ERA5_PATH = Path(config.dirs["era5_continuous_daily"]) / PRECIP_ERA5_VAR
-PRECIP_ERA5_FILE_PATTERN = f"{PRECIP_ERA5_VAR}_{GRID}" + "_{year}.nc"
+PRECIP_ERA5_FILE_PATTERN = f"{PRECIP_ERA5_VAR}_{S2S_GRID}" + "_{year}.nc"
+PRECIP_ERA5_DOMAIN = "norway"
 
-# seNorge precipitation for the middle time-series panel
 PRECIP_SENORGE_PATH = (
     Path(config.dirs["senorge_continuous_daily"])
     / PRECIP_SENORGE_VAR
 )
 PRECIP_SENORGE_FILE_PATTERN = f"{PRECIP_SENORGE_VAR}" + "_{year}.nc"
 
-# ERA5 runoff for panel e
-RUNOFF_ERA5_DOMAIN = "norway"
-RUNOFF_ERA5_PATH = (
-    config.dirs["era5_continuous_daily_scandinavia"]
-    + RUNOFF_ERA5_VAR
-    + "/"
-)
-RUNOFF_ERA5_FILE_PATTERN = f"{RUNOFF_ERA5_VAR}_{GRID}" + "_{year}.nc"
+RUNOFF_ERA5_LAND_PATH = Path(config.dirs["era5_land_processed"])
+RUNOFF_SENORGE_PATH = Path(config.dirs["senorge_processed"])
 
-OUTPUT_FILENAME = f"{PATH_OUT}fig-0X_combined_maps_precip_runoff.png"
+OUTPUT_FILENAME = PATH_OUT / "fig-0X2.png"
 
 
 # =============================================================================
-# 3. Figure and map settings
+# 4. Figure settings
 # =============================================================================
 
 FIG_WIDTH_IN = 9.4
@@ -152,56 +148,47 @@ DATE_TICK_ROTATION = 30
 
 
 # =============================================================================
-# 4. Plot styling
+# 5. Plot styling
 # =============================================================================
 
-# Map precipitation
 PRECIP_LEVELS = np.arange(5, 55, 5)
 PRECIP_ZERO_THRESHOLD = 5.0
 PRECIP_CMAP = plt.get_cmap("GnBu").copy()
 PRECIP_CMAP.set_under("white")
 
-# Map mean sea level pressure
 MSL_CONTOUR_LEVELS = np.arange(975, 1045, 5)
 MSL_CONTOUR_COLOR = "0.7"
 MSL_CONTOUR_LINEWIDTH = 1.5
 
-# Catchment
 CATCHMENT_EDGE_COLOR = "red"
 CATCHMENT_LINEWIDTH = 1.0
 CATCHMENT_CRS_IF_MISSING = "EPSG:4326"
 
-# Precipitation time series
 PRECIP_ENSEMBLE_COLOR = "0.7"
-PRECIP_ENSEMBLE_LINEWIDTH = 0.8
-PRECIP_ENSEMBLE_ALPHA = 0.35
-
+PRECIP_ENSEMBLE_LINEWIDTH = 1.0
+PRECIP_ENSEMBLE_ALPHA = 0.6
 PRECIP_HIGHLIGHT_COLOR = "tab:green"
 PRECIP_ERA5_COLOR = "tab:blue"
 PRECIP_SENORGE_COLOR = "tab:red"
 PRECIP_LINEWIDTH = 2.5
 
-# Runoff time series
 RUNOFF_ENSEMBLE_COLOR = "0.7"
 RUNOFF_ENSEMBLE_LINEWIDTH = 1.0
 RUNOFF_ENSEMBLE_ALPHA = 0.6
-
-RUNOFF_SELECTED_MEMBER_COLOR = "tab:blue"
+RUNOFF_SELECTED_MEMBER_COLOR = "tab:green"
 RUNOFF_SELECTED_MEMBER_LINEWIDTH = 2.5
+RUNOFF_ERA5_LAND_COLOR = "tab:blue"
+RUNOFF_ERA5_LAND_LINEWIDTH = 2.5
+RUNOFF_SENORGE_COLOR = "tab:red"
+RUNOFF_SENORGE_LINEWIDTH = 2.5
 
-RUNOFF_ERA5_COLOR = "tab:red"
-RUNOFF_ERA5_LINEWIDTH = 2.5
-
-EVENT_MARKER_SIZE = 35
-
-# Shared time-series styling
 INITIALIZATION_LINE_COLOR = "k"
 INITIALIZATION_LINE_WIDTH = 1.2
 INITIALIZATION_LINE_STYLE = "--"
 
 
 # =============================================================================
-# 5. Catchment metadata
+# 6. Catchment metadata
 # =============================================================================
 
 CATCHMENTS = {
@@ -219,7 +206,7 @@ CATCHMENTS = {
 
 
 # =============================================================================
-# 6. General helper functions
+# 7. General helper functions
 # =============================================================================
 
 def get_catchment_settings(catchment_name):
@@ -236,7 +223,7 @@ def get_catchment_settings(catchment_name):
 
 
 def make_s2s_file(variable):
-    """Create S2S forecast file path."""
+    """Create path to one S2S daily forecast file."""
 
     return (
         S2S_BASE_DIR
@@ -245,18 +232,18 @@ def make_s2s_file(variable):
         / "daily"
         / "europe"
         / variable
-        / f"{variable}_{GRID}_{FORECAST_DATE}.nc"
+        / f"{variable}_{S2S_GRID}_{FORECAST_DATE}.nc"
     )
 
 
-def make_era5_weights_file(catchment_name, grid):
-    """Return the ERA5-grid catchment-weight file."""
+def make_era5_weights_file(catchment_name):
+    """Return the ERA5/S2S-grid catchment-weight file."""
 
     catchment = get_catchment_settings(catchment_name)
 
     return (
-        Path(PATH_CATCHMENT)
-        / f"weights_catchment_{catchment['weights_id']}_era5_{grid}.nc"
+        PATH_CATCHMENT
+        / f"weights_catchment_{catchment['weights_id']}_era5_{S2S_GRID}.nc"
     )
 
 
@@ -266,9 +253,49 @@ def make_senorge_weights_file(catchment_name):
     catchment = get_catchment_settings(catchment_name)
 
     return (
-        Path(PATH_CATCHMENT)
+        PATH_CATCHMENT
         / f"weights_catchment_{catchment['weights_id']}_senorge.nc"
     )
+
+
+def make_era5_land_runoff_timeseries_file(catchment_name):
+    """
+    Return the processed ERA5-Land surface runoff time-series file.
+
+    Example:
+    t_sro_1dayacc_regine_drammen_era5_land_0.1x0.1_1950-2023.nc
+    """
+
+    catchment = get_catchment_settings(catchment_name)
+
+    filename = (
+        f"t_{RUNOFF_ERA5_LAND_VAR}_"
+        f"{RUNOFF_ACCUMULATION_DAYS}dayacc_"
+        f"{catchment['weights_id']}_"
+        f"era5_land_{ERA5_LAND_GRID}_2023-2023.nc"
+    )
+
+    return RUNOFF_ERA5_LAND_PATH / filename
+
+
+def make_senorge_runoff_timeseries_file(catchment_name):
+    """
+    Return the processed seNorge surface runoff time-series file.
+
+    Example:
+    t_gwb_q_1dayacc_regine_drammen_senorge_1958-2023.nc
+    """
+
+    catchment = get_catchment_settings(catchment_name)
+
+    filename = (
+        f"t_{RUNOFF_SENORGE_VAR}_"
+        f"{RUNOFF_ACCUMULATION_DAYS}dayacc_"
+        f"{catchment['weights_id']}_"
+        f"senorge_1958-2023.nc"
+    )
+
+    return RUNOFF_SENORGE_PATH / filename
 
 
 def get_time_coord_name(da):
@@ -361,8 +388,8 @@ def get_plot_period(forecast_date, n_days_before, m_days_lead, x_days=1):
     """
     Return initialization date, plot window, loading window, and years.
 
-    The loading window is wider than the plot window to allow rolling
-    accumulations to be calculated safely.
+    The loading window is wider than the plot window so that rolling
+    accumulations can be calculated safely.
     """
 
     init_date = pd.to_datetime(forecast_date)
@@ -385,7 +412,7 @@ def remove_era5_ensemble_dimension_if_present(ds):
 
 
 # =============================================================================
-# 7. Unit handling
+# 8. Unit handling
 # =============================================================================
 
 def standardize_precipitation_units(da, variable_name):
@@ -404,26 +431,22 @@ def standardize_precipitation_units(da, variable_name):
 
 
 def standardize_runoff_units(da):
-    """
-    Convert runoff to mm/day if it is stored in metres.
-
-    S2S sro24 and ERA5 sro are assumed to represent daily accumulated runoff.
-    """
+    """Convert runoff to millimetres when needed."""
 
     units = str(da.attrs.get("units", "")).strip().lower()
 
     if units in {"m", "meter", "metre", ""}:
         da = da * 1000.0
-        da.attrs["units"] = "mm/day"
+        da.attrs["units"] = "mm"
 
-    elif units in {"mm", "mm/day", "mm d-1"}:
-        da.attrs["units"] = "mm/day"
+    elif units in {"mm", "mm/day", "mm d-1", "kg/m^2", "kg/m2", "kg m-2"}:
+        da.attrs["units"] = "mm"
 
     return da
 
 
 # =============================================================================
-# 8. Catchment weighting
+# 9. Catchment weighting
 # =============================================================================
 
 def load_weights(filename, spatial_dims):
@@ -535,21 +558,19 @@ def trailing_xday_accumulation(da, x_days):
 
 
 # =============================================================================
-# 9. Precipitation time-series data processing
+# 10. Panel e: precipitation time-series data
 # =============================================================================
 
 def load_precip_forecast():
-    """Load S2S forecast precipitation for the precipitation time-series panel."""
+    """Load S2S forecast precipitation."""
 
-    filename = Path(PRECIP_FORECAST_FILE)
+    if not PRECIP_FORECAST_FILE.exists():
+        raise FileNotFoundError(f"File not found: {PRECIP_FORECAST_FILE}")
 
-    if not filename.exists():
-        raise FileNotFoundError(f"File not found: {filename}")
-
-    with xr.open_dataset(filename) as ds:
+    with xr.open_dataset(PRECIP_FORECAST_FILE) as ds:
         if PRECIP_FORECAST_VAR not in ds:
             raise KeyError(
-                f"'{PRECIP_FORECAST_VAR}' not found in {filename}. "
+                f"'{PRECIP_FORECAST_VAR}' not found in {PRECIP_FORECAST_FILE}. "
                 f"Available variables: {list(ds.data_vars)}"
             )
 
@@ -570,7 +591,7 @@ def load_precip_forecast():
 
 
 def load_precip_era5(years, loading_start, loading_end):
-    """Load ERA5 precipitation for the precipitation time-series panel."""
+    """Load ERA5 precipitation."""
 
     filenames = [
         str(PRECIP_ERA5_PATH / PRECIP_ERA5_FILE_PATTERN.format(year=int(year)))
@@ -616,7 +637,7 @@ def load_precip_era5(years, loading_start, loading_end):
 
 
 def load_precip_senorge(years, loading_start, loading_end):
-    """Load seNorge precipitation for the precipitation time-series panel."""
+    """Load seNorge precipitation."""
 
     yearly_data = []
 
@@ -642,7 +663,6 @@ def load_precip_senorge(years, loading_start, loading_end):
             )
 
             fill_value = da_one_year.attrs.get("_FillValue")
-
             if fill_value is not None:
                 da_one_year = da_one_year.where(da_one_year != fill_value)
 
@@ -659,16 +679,14 @@ def load_precip_senorge(years, loading_start, loading_end):
 
             yearly_data.append(da_one_year.load())
 
-    da = xr.concat(yearly_data, dim="time").sortby("time")
-
-    return da
+    return xr.concat(yearly_data, dim="time").sortby("time")
 
 
 def process_precip_forecast(dates):
-    """Process S2S forecast precipitation for plotting."""
+    """Process S2S forecast precipitation for panel e."""
 
     weights = load_weights(
-        filename=make_era5_weights_file(CATCHMENT_NAME, GRID),
+        filename=make_era5_weights_file(CATCHMENT_NAME),
         spatial_dims=("latitude", "longitude"),
     )
 
@@ -688,20 +706,18 @@ def process_precip_forecast(dates):
 
     da_accumulated = round_time_to_nearest_day(da_accumulated)
 
-    da_accumulated = subset_to_period(
+    return subset_to_period(
         da=da_accumulated,
         start_date=dates["init_date"],
         end_date=dates["plot_end"],
     )
 
-    return da_accumulated
-
 
 def process_precip_era5(dates):
-    """Process ERA5 precipitation for plotting."""
+    """Process ERA5 precipitation for panel e."""
 
     weights = load_weights(
-        filename=make_era5_weights_file(CATCHMENT_NAME, GRID),
+        filename=make_era5_weights_file(CATCHMENT_NAME),
         spatial_dims=("latitude", "longitude"),
     )
 
@@ -725,17 +741,15 @@ def process_precip_era5(dates):
 
     da_accumulated = round_time_to_nearest_day(da_accumulated)
 
-    da_accumulated = subset_to_period(
+    return subset_to_period(
         da=da_accumulated,
         start_date=dates["plot_start"],
         end_date=dates["plot_end"],
     )
 
-    return da_accumulated
-
 
 def process_precip_senorge(dates):
-    """Process seNorge precipitation for plotting."""
+    """Process seNorge precipitation for panel e."""
 
     weights = load_weights(
         filename=make_senorge_weights_file(CATCHMENT_NAME),
@@ -765,13 +779,11 @@ def process_precip_senorge(dates):
 
     da_accumulated = round_time_to_nearest_day(da_accumulated)
 
-    da_accumulated = subset_to_period(
+    return subset_to_period(
         da=da_accumulated,
         start_date=dates["plot_start"],
         end_date=dates["plot_end"],
     )
-
-    return da_accumulated
 
 
 def keep_only_common_observation_dates(era5, senorge):
@@ -814,7 +826,7 @@ def find_wettest_ensemble_member(forecast):
 
 
 # =============================================================================
-# 10. Map-panel data loading
+# 11. Panels a-d: map data
 # =============================================================================
 
 def open_s2s_variable(variable):
@@ -883,23 +895,23 @@ def load_daily_s2s_variable(variable, target_date):
 
 
 def load_map_precipitation(target_date):
-    """Load daily S2S precipitation in mm/day."""
+    """Load S2S precipitation for one map panel."""
 
     return load_daily_s2s_variable(MAP_PRECIP_VAR, target_date)
 
 
 def load_map_msl(target_date):
-    """Load S2S mean sea level pressure in hPa."""
+    """Load S2S mean sea level pressure for one map panel."""
 
     return load_daily_s2s_variable(MAP_MSL_VAR, target_date)
 
 
 # =============================================================================
-# 11. Runoff time-series data processing
+# 12. Panel f: runoff time-series data
 # =============================================================================
 
 def load_forecast_runoff_all_members():
-    """Load S2S runoff for all forecast ensemble members."""
+    """Load S2S surface runoff for all forecast ensemble members."""
 
     filename = make_s2s_file(RUNOFF_FORECAST_VAR)
 
@@ -926,45 +938,27 @@ def load_forecast_runoff_all_members():
     return da
 
 
-def load_era5_runoff(years, time_start, time_end):
-    """Load ERA5 runoff over the requested period."""
+def load_processed_runoff_timeseries(filename, variable_name, dataset_name):
+    """Load a processed catchment-mean runoff time series."""
 
-    filenames = [
-        RUNOFF_ERA5_PATH + RUNOFF_ERA5_FILE_PATTERN.format(year=int(year))
-        for year in years
-    ]
+    filename = Path(filename)
 
-    ds = xr.open_mfdataset(
-        filenames,
-        preprocess=remove_era5_ensemble_dimension_if_present,
-        combine="by_coords",
-    )
+    if not filename.exists():
+        raise FileNotFoundError(f"File not found: {filename}")
 
-    try:
-        if RUNOFF_ERA5_DOMAIN is not None:
-            domain_lats, domain_lons = misc.get_domain_latlon(RUNOFF_ERA5_DOMAIN)
-            ds = ds.sel(latitude=domain_lats, longitude=domain_lons)
+    with xr.open_dataset(filename) as ds:
+        ds = xr.decode_cf(ds)
 
-        if RUNOFF_ERA5_VAR not in ds:
+        if variable_name not in ds:
             raise KeyError(
-                f"Variable '{RUNOFF_ERA5_VAR}' not found in ERA5 files. "
+                f"Variable '{variable_name}' not found in {filename}. "
                 f"Available variables: {list(ds.data_vars)}"
             )
 
-        da = ds[RUNOFF_ERA5_VAR].sel(
-            time=slice(time_start, time_end)
-        ).load()
+        da = ds[variable_name].load()
 
-    finally:
-        ds.close()
-
-    da = standardize_runoff_units(da)
-
-    check_dims(
-        da=da,
-        expected_dims=("time", "latitude", "longitude"),
-        name="ERA5 runoff",
-    )
+    da.name = f"{dataset_name}_catchment_mean_runoff"
+    da.attrs["units"] = "mm"
 
     return da
 
@@ -973,7 +967,7 @@ def process_forecast_runoff(catchment_name, init_date, plot_end):
     """Process catchment-mean S2S runoff for all ensemble members."""
 
     weights = load_weights(
-        filename=make_era5_weights_file(catchment_name, GRID),
+        filename=make_era5_weights_file(catchment_name),
         spatial_dims=("latitude", "longitude"),
     )
 
@@ -988,56 +982,59 @@ def process_forecast_runoff(catchment_name, init_date, plot_end):
 
     da_mean = round_time_to_nearest_day(da_mean)
 
-    da_mean = subset_to_period(
+    return subset_to_period(
         da=da_mean,
         start_date=init_date,
         end_date=plot_end,
     )
 
-    return da_mean
 
+def process_era5_land_runoff(catchment_name, plot_start, plot_end):
+    """
+    Process ERA5-Land surface runoff for panel f.
 
-def process_era5_runoff(
-    catchment_name,
-    years,
-    load_start,
-    load_end,
-    plot_start,
-    plot_end,
-):
-    """Process catchment-mean ERA5 runoff."""
+    The input file is already a processed catchment-mean time series.
+    """
 
-    weights = load_weights(
-        filename=make_era5_weights_file(catchment_name, GRID),
-        spatial_dims=("latitude", "longitude"),
+    da = load_processed_runoff_timeseries(
+        filename=make_era5_land_runoff_timeseries_file(catchment_name),
+        variable_name=RUNOFF_ERA5_LAND_VAR,
+        dataset_name="era5_land",
     )
 
-    da = load_era5_runoff(
-        years=years,
-        time_start=load_start,
-        time_end=load_end,
-    )
+    da = round_time_to_nearest_day(da)
 
-    da_mean = catchment_weighted_mean(
+    return subset_to_period(
         da=da,
-        weights=weights,
-        spatial_dims=("latitude", "longitude"),
-        output_name="catchment_mean_runoff",
-    )
-
-    da_mean = round_time_to_nearest_day(da_mean)
-
-    da_mean = subset_to_period(
-        da=da_mean,
         start_date=plot_start,
         end_date=plot_end,
     )
 
-    return da_mean
+
+def process_senorge_runoff(catchment_name, plot_start, plot_end):
+    """
+    Process seNorge surface runoff for panel f.
+
+    The input file is already a processed catchment-mean time series.
+    """
+
+    da = load_processed_runoff_timeseries(
+        filename=make_senorge_runoff_timeseries_file(catchment_name),
+        variable_name=RUNOFF_SENORGE_VAR,
+        dataset_name="senorge",
+    )
+
+    da = round_time_to_nearest_day(da)
+
+    return subset_to_period(
+        da=da,
+        start_date=plot_start,
+        end_date=plot_end,
+    )
 
 
 # =============================================================================
-# 12. Catchment boundary
+# 13. Catchment boundary
 # =============================================================================
 
 def load_catchment_outer_boundary(
@@ -1082,20 +1079,18 @@ def load_catchment_outer_boundary(
 
 
 # =============================================================================
-# 13. Figure setup
+# 14. Figure setup
 # =============================================================================
 
 def make_figure_axes():
     """
-    Create the full combined figure.
+    Create the full figure.
 
     Layout:
     - Row 0: map panels a and b
     - Row 1: map panels c and d
-    - Row 2: precipitation time-series panel
-    - Row 3: runoff time-series panel e
-
-    The precipitation and runoff panels share the same x-axis.
+    - Row 2: precipitation time-series panel e
+    - Row 3: runoff time-series panel f
     """
 
     proj_map = ccrs.LambertConformal(
@@ -1132,7 +1127,7 @@ def make_figure_axes():
         ax.coastlines(resolution="10m", linewidth=0.5)
         ax.set_extent(MAP_EXTENT, crs=proj_data)
 
-    return fig, map_axes, precip_ts_ax, runoff_ts_ax, cbar_ax, proj_map, proj_data
+    return fig, map_axes, precip_ts_ax, runoff_ts_ax, cbar_ax, proj_data
 
 
 def get_map_axes(map_axes):
@@ -1169,7 +1164,7 @@ def align_axis_to_map_panels(fig, map_axes, ax_to_align):
 
 
 # =============================================================================
-# 14. Map plotting functions
+# 15. Map plotting
 # =============================================================================
 
 def plot_precipitation_map(ax, da_precip, proj_data):
@@ -1191,7 +1186,7 @@ def plot_precipitation_map(ax, da_precip, proj_data):
 
     lon_edges_2d, lat_edges_2d = np.meshgrid(lon_edges, lat_edges)
 
-    mesh = ax.pcolormesh(
+    return ax.pcolormesh(
         lon_edges_2d,
         lat_edges_2d,
         precip,
@@ -1201,8 +1196,6 @@ def plot_precipitation_map(ax, da_precip, proj_data):
         shading="auto",
         transform=proj_data,
     )
-
-    return mesh
 
 
 def plot_msl_contours(ax, da_msl, proj_data):
@@ -1231,7 +1224,7 @@ def plot_msl_contours(ax, da_msl, proj_data):
     )
 
 
-def plot_catchment_boundary(ax, geometry, proj_data, linewidth=CATCHMENT_LINEWIDTH):
+def plot_catchment_boundary(ax, geometry, proj_data):
     """Overlay catchment boundary."""
 
     ax.add_geometries(
@@ -1239,7 +1232,7 @@ def plot_catchment_boundary(ax, geometry, proj_data, linewidth=CATCHMENT_LINEWID
         crs=proj_data,
         facecolor="none",
         edgecolor=CATCHMENT_EDGE_COLOR,
-        linewidth=linewidth,
+        linewidth=CATCHMENT_LINEWIDTH,
         zorder=9,
     )
 
@@ -1258,21 +1251,11 @@ def plot_event_panel(ax, target_date, catchment_boundary, proj_data):
 
 
 # =============================================================================
-# 15. Precipitation time-series plotting
+# 16. Panel e: precipitation time series
 # =============================================================================
 
 def plot_precipitation_timeseries(ax, catchment_label):
-    """
-    Plot the precipitation time-series panel.
-
-    This panel compares:
-    - S2S forecast ensemble
-    - wettest forecast member
-    - ERA5
-    - seNorge
-
-    The x-axis labels are hidden because panel e below shares the same x-axis.
-    """
+    """Plot catchment-mean precipitation in panel e."""
 
     (
         init_date,
@@ -1324,7 +1307,14 @@ def plot_precipitation_timeseries(ax, catchment_label):
 
     member_name = get_member_coord_name(forecast)
 
-    # Dummy line for the ensemble legend entry.
+    ax.axvline(
+        init_date,
+        color=INITIALIZATION_LINE_COLOR,
+        linewidth=INITIALIZATION_LINE_WIDTH,
+        linestyle=INITIALIZATION_LINE_STYLE,
+        label="Forecast initialization",
+    )
+
     ax.plot(
         [],
         [],
@@ -1334,7 +1324,6 @@ def plot_precipitation_timeseries(ax, catchment_label):
         label="Forecast ensemble",
     )
 
-    # Plot all non-highlighted forecast members.
     for member in forecast[member_name].values:
         if member == wettest_member:
             continue
@@ -1347,7 +1336,6 @@ def plot_precipitation_timeseries(ax, catchment_label):
             alpha=PRECIP_ENSEMBLE_ALPHA,
         )
 
-    # Plot the wettest member last so it appears on top.
     ax.plot(
         forecast["time"],
         forecast.sel({member_name: wettest_member}),
@@ -1370,26 +1358,17 @@ def plot_precipitation_timeseries(ax, catchment_label):
         senorge,
         color=PRECIP_SENORGE_COLOR,
         linewidth=PRECIP_LINEWIDTH,
-        label="seNorge Storm Hans",
-    )
-
-    ax.axvline(
-        init_date,
-        color=INITIALIZATION_LINE_COLOR,
-        linewidth=INITIALIZATION_LINE_WIDTH,
-        linestyle=INITIALIZATION_LINE_STYLE,
-        label="Forecast initialization",
+        label="SeNorge Storm Hans",
     )
 
     ax.set_title(
-        f"{catchment_label}, {PRECIP_ACCUMULATION_DAYS}-day accumulated precipitation",
+        f"e) {catchment_label} precipitation",
         fontsize=TITLE_FONTSIZE,
         pad=5,
     )
 
-    ax.set_ylabel("Precipitation (mm)", fontsize=AXIS_LABELSIZE)
+    ax.set_ylabel("mm", fontsize=AXIS_LABELSIZE)
 
-    # Hide x-axis labels here because panel e below shares this x-axis.
     ax.set_xlabel("")
     ax.tick_params(axis="x", labelbottom=False)
     ax.tick_params(axis="y", labelsize=TICK_LABELSIZE)
@@ -1405,28 +1384,32 @@ def plot_precipitation_timeseries(ax, catchment_label):
 
 
 # =============================================================================
-# 16. Runoff time-series plotting
+# 17. Panel f: runoff time series
 # =============================================================================
 
 def plot_runoff_timeseries(ax, catchment_name):
     """
-    Plot forecast ensemble and ERA5 catchment-mean runoff in panel e).
+    Plot catchment-mean surface runoff in panel f.
 
-    This keeps the main behavior from the second script.
+    Panel f uses:
+    - S2S forecast surface runoff ensemble
+    - selected S2S ensemble member in green
+    - ERA5-Land sro in blue
+    - seNorge gwb_q in red
     """
 
     (
         init_date,
         plot_start,
         plot_end,
-        load_start,
-        load_end,
-        years,
+        _,
+        _,
+        _,
     ) = get_plot_period(
         forecast_date=FORECAST_DATE,
         n_days_before=TIMESERIES_N_DAYS_BEFORE,
         m_days_lead=TIMESERIES_M_DAYS_LEAD,
-        x_days=1,
+        x_days=RUNOFF_ACCUMULATION_DAYS,
     )
 
     forecast = process_forecast_runoff(
@@ -1435,11 +1418,14 @@ def plot_runoff_timeseries(ax, catchment_name):
         plot_end=plot_end,
     )
 
-    era5 = process_era5_runoff(
+    era5_land = process_era5_land_runoff(
         catchment_name=catchment_name,
-        years=years,
-        load_start=load_start,
-        load_end=load_end,
+        plot_start=plot_start,
+        plot_end=plot_end,
+    )
+
+    senorge = process_senorge_runoff(
+        catchment_name=catchment_name,
         plot_start=plot_start,
         plot_end=plot_end,
     )
@@ -1447,7 +1433,14 @@ def plot_runoff_timeseries(ax, catchment_name):
     time_name = get_time_coord_name(forecast)
     member_name = get_member_coord_name(forecast)
 
-    # Dummy line for the ensemble legend entry.
+    ax.axvline(
+        init_date,
+        color=INITIALIZATION_LINE_COLOR,
+        linewidth=INITIALIZATION_LINE_WIDTH,
+        linestyle=INITIALIZATION_LINE_STYLE,
+        label="Forecast initialization",
+    )
+
     ax.plot(
         [],
         [],
@@ -1457,7 +1450,6 @@ def plot_runoff_timeseries(ax, catchment_name):
         label="Forecast ensemble",
     )
 
-    # Plot all non-selected forecast members.
     for member in forecast[member_name].values:
         if member == ENSEMBLE_MEMBER:
             continue
@@ -1477,51 +1469,39 @@ def plot_runoff_timeseries(ax, catchment_name):
         selected.values,
         color=RUNOFF_SELECTED_MEMBER_COLOR,
         linewidth=RUNOFF_SELECTED_MEMBER_LINEWIDTH,
-        label=f"Selected member {ENSEMBLE_MEMBER}",
+        label="Counterfactual Storm Hans",
         zorder=10,
     )
 
-    # Add dots for the four map-panel dates.
-    for date in EVENT_DATES:
-        value = selected.sel(
-            {time_name: np.datetime64(date)},
-            method="nearest",
-        )
-
-        ax.scatter(
-            value[time_name].values,
-            value.values,
-            color=RUNOFF_SELECTED_MEMBER_COLOR,
-            s=EVENT_MARKER_SIZE,
-            zorder=11,
-        )
-
-    era5_time_name = get_time_coord_name(era5)
+    era5_land_time_name = get_time_coord_name(era5_land)
 
     ax.plot(
-        era5[era5_time_name].values,
-        era5.values,
-        color=RUNOFF_ERA5_COLOR,
-        linewidth=RUNOFF_ERA5_LINEWIDTH,
-        label="ERA5",
+        era5_land[era5_land_time_name].values,
+        era5_land.values,
+        color=RUNOFF_ERA5_LAND_COLOR,
+        linewidth=RUNOFF_ERA5_LAND_LINEWIDTH,
+        label="ERA5-Land",
         zorder=9,
     )
 
-    ax.axvline(
-        init_date,
-        color=INITIALIZATION_LINE_COLOR,
-        linewidth=INITIALIZATION_LINE_WIDTH,
-        linestyle=INITIALIZATION_LINE_STYLE,
-        label="Forecast initialization",
+    senorge_time_name = get_time_coord_name(senorge)
+
+    ax.plot(
+        senorge[senorge_time_name].values,
+        senorge.values,
+        color=RUNOFF_SENORGE_COLOR,
+        linewidth=RUNOFF_SENORGE_LINEWIDTH,
+        label="seNorge",
+        zorder=9,
     )
 
     ax.set_title(
-        "e) Drammen catchment mean runoff",
+        "f) Drammen catchment surface runoff",
         fontsize=TITLE_FONTSIZE,
         pad=5,
     )
 
-    ax.set_ylabel("Runoff (mm/day)", fontsize=AXIS_LABELSIZE)
+    ax.set_ylabel("mm", fontsize=AXIS_LABELSIZE)
     ax.set_xlabel("Date", fontsize=AXIS_LABELSIZE)
 
     ax.tick_params(labelsize=TICK_LABELSIZE)
@@ -1539,26 +1519,26 @@ def plot_runoff_timeseries(ax, catchment_name):
         rotation_mode="anchor",
     )
 
-    ax.legend(
-        loc="upper left",
-        frameon=False,
-        fontsize=LEGEND_FONTSIZE,
-    )
+    # Uncomment if you want a legend in panel f.
+    # ax.legend(
+    #     loc="upper left",
+    #     frameon=False,
+    #     fontsize=LEGEND_FONTSIZE,
+    # )
 
 
 # =============================================================================
-# 17. Figure finishing
+# 18. Figure finishing
 # =============================================================================
 
 def add_map_panel_titles(map_axes):
-    """Add panel labels and event-relative dates to the map panels."""
+    """Add panel labels and dates to map panels a-d."""
 
     panel_labels = ["a)", "b)", "c)", "d)"]
 
-    for ax, panel_label, lag, date in zip(
+    for ax, panel_label, date in zip(
         get_map_axes(map_axes),
         panel_labels,
-        EVENT_LAGS,
         EVENT_DATES,
     ):
         formatted_date = (
@@ -1569,7 +1549,7 @@ def add_map_panel_titles(map_axes):
         )
 
         ax.set_title(
-            f"{panel_label} Day {lag:+d}: {formatted_date}",
+            f"{panel_label} {formatted_date}",
             fontsize=TITLE_FONTSIZE,
             pad=3,
         )
@@ -1593,7 +1573,7 @@ def add_colorbar(fig, mesh, cbar_ax):
 
 
 def add_map_legend(map_axes, catchment_label):
-    """Add map legend inside the upper-left map panel."""
+    """Add map legend inside panel a."""
 
     legend_handles = [
         Line2D(
@@ -1659,11 +1639,11 @@ def finalize_figure(
 
 
 # =============================================================================
-# 18. Main workflow
+# 19. Main workflow
 # =============================================================================
 
 def main():
-    """Run the full combined plotting workflow."""
+    """Run the full plotting workflow."""
 
     catchment = get_catchment_settings(CATCHMENT_NAME)
 
@@ -1679,11 +1659,9 @@ def main():
         precip_ts_ax,
         runoff_ts_ax,
         cbar_ax,
-        proj_map,
         proj_data,
     ) = make_figure_axes()
 
-    # Four map panels from the second script.
     mesh = None
 
     for ax, target_date in zip(get_map_axes(map_axes), EVENT_DATES):
@@ -1694,13 +1672,11 @@ def main():
             proj_data=proj_data,
         )
 
-    # Precipitation time series from the first script.
     plot_precipitation_timeseries(
         ax=precip_ts_ax,
         catchment_label=catchment["label"],
     )
 
-    # Runoff time series from the second script.
     plot_runoff_timeseries(
         ax=runoff_ts_ax,
         catchment_name=CATCHMENT_NAME,
