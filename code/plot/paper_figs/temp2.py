@@ -3,18 +3,18 @@
 Figure 1: seNorge precipitation, ERA5 mean sea level pressure,
 and Drammen catchment runoff during Storm Hans.
 
-This script keeps panels a-d from the original precipitation/MSLP figure:
+The figure contains:
+
+Panels a-d:
 - seNorge daily precipitation as shading
 - ERA5 mean sea level pressure as contours
-- Drammen catchment boundary
-- Bergheim station marker
+- Drammen catchment boundary in red
 
-Panel e has been replaced with the runoff time-series panel from the
-second script:
+Panel e:
 - 2023 Drammen catchment-mean seNorge runoff
 - 95% interval over all years
 - Median over all years
-- Markers for the map-panel dates
+- One marker for the specified Storm Hans date
 """
 
 from pathlib import Path
@@ -41,14 +41,15 @@ YEAR = 2023
 CATCHMENT_NAME = "drammen"
 
 # Dates shown in the four map panels.
-# These are also marked as dots in panel e.
-EVENT_LAGS = [-2, -1, 0, 1]
 EVENT_DATES = [
     "2023-08-06",
     "2023-08-07",
     "2023-08-08",
     "2023-08-09",
 ]
+
+# Date marked with one dot in panel e.
+HANS_DATE = "2023-08-10"
 
 # Map-panel variables
 PRECIP_VAR = "rr"       # seNorge precipitation
@@ -79,7 +80,7 @@ RUNOFF_TIMESERIES_FILE = (
     / f"t_{RUNOFF_VAR}_{NDAY}dayacc_regine_{CATCHMENT_NAME}_senorge_1958-2023.nc"
 )
 
-OUTPUT_FILE = PATH_OUT / "fig-01_senorge_precip_runoff_era5_msl.png"
+OUTPUT_FILE = PATH_OUT / "fig-01_senorge_version.png"
 
 
 # =============================================================================
@@ -107,7 +108,7 @@ LEGEND_FONTSIZE = 9
 # 4. Plot styling
 # =============================================================================
 
-PRECIP_LEVELS = np.arange(5, 75, 5)
+PRECIP_LEVELS = np.arange(5, 55, 5)
 PRECIP_ZERO_THRESHOLD = 5.0
 PRECIP_CMAP = plt.get_cmap("GnBu").copy()
 PRECIP_CMAP.set_under("white")
@@ -120,20 +121,17 @@ CATCHMENT_EDGE_COLOR = "red"
 CATCHMENT_LINEWIDTH = 1.0
 CATCHMENT_CRS_IF_MISSING = "EPSG:4326"
 
-STATION_MARKER_SIZE = 5
-STATION_MARKER_FACE_COLOR = "yellow"
-STATION_MARKER_EDGE_COLOR = "black"
-STATION_MARKER_EDGE_WIDTH = 0.6
-
 RUNOFF_RANGE_FILL_ALPHA = 0.25
 RUNOFF_MEDIAN_LINE_COLOR = "tab:red"
 RUNOFF_MEDIAN_LINEWIDTH = 1.4
 RUNOFF_YEAR_LINEWIDTH = 1.2
-EVENT_MARKER_SIZE = 20
+
+HANS_MARKER_SIZE = 30
+HANS_MARKER_COLOR = "tab:blue"
 
 
 # =============================================================================
-# 5. Catchment and station metadata
+# 5. Catchment metadata
 # =============================================================================
 
 CATCHMENTS = {
@@ -146,10 +144,6 @@ CATCHMENTS = {
         "label": "Glomma catchment",
     },
 }
-
-STATIONS = [
-    {"name": "Bergheim", "lon": 9.2483, "lat": 60.4761},
-]
 
 
 # =============================================================================
@@ -368,19 +362,12 @@ def year_series_and_climatology_by_doy(da, year):
     """
     Extract one year and calculate day-of-year climatology.
 
-    Returns
-    -------
-    x_dates : pandas.DatetimeIndex
-        Daily dates for the selected year.
-
-    y_year : numpy.ndarray
-        Daily runoff values for the selected year.
-
-    q_low, q_high : numpy.ndarray
-        2.5% and 97.5% quantiles for each day of year.
-
-    q_median : numpy.ndarray
-        Median value for each day of year.
+    Returns:
+    - daily dates for the selected year
+    - daily runoff values for the selected year
+    - 2.5% quantile for each day of year
+    - 97.5% quantile for each day of year
+    - median for each day of year
     """
 
     da = da.dropna("time")
@@ -551,24 +538,6 @@ def plot_catchment_boundary(ax, geometry, proj_data):
     )
 
 
-def plot_stations(ax, stations, proj_data):
-    """Plot station locations."""
-
-    for station in stations:
-        ax.plot(
-            station["lon"],
-            station["lat"],
-            marker="o",
-            markersize=STATION_MARKER_SIZE,
-            markeredgecolor=STATION_MARKER_EDGE_COLOR,
-            markeredgewidth=STATION_MARKER_EDGE_WIDTH,
-            markerfacecolor=STATION_MARKER_FACE_COLOR,
-            linestyle="none",
-            transform=proj_data,
-            zorder=12,
-        )
-
-
 def plot_event_map_panel(
     ax,
     ds_precip,
@@ -579,7 +548,7 @@ def plot_event_map_panel(
 ):
     """
     Plot one map panel:
-    precipitation + MSL contours + catchment boundary + station marker.
+    precipitation + MSL contours + catchment boundary.
     """
 
     da_precip = load_precipitation(ds_precip, target_date)
@@ -588,7 +557,6 @@ def plot_event_map_panel(
     mesh = plot_precipitation(ax, da_precip, proj_data)
     plot_msl_contours(ax, da_msl, proj_data)
     plot_catchment_boundary(ax, catchment_boundary, proj_data)
-    plot_stations(ax, STATIONS, proj_data)
 
     return mesh
 
@@ -624,8 +592,6 @@ def plot_all_map_panels(
 def plot_runoff_timeseries(ts_ax, da_runoff_ts, year, catchment_label):
     """
     Plot catchment-mean runoff for the selected year and climatology.
-
-    This is the replacement for the original Bergheim streamflow panel.
     """
 
     x, y, lo, hi, med = year_series_and_climatology_by_doy(
@@ -639,7 +605,7 @@ def plot_runoff_timeseries(ts_ax, da_runoff_ts, year, catchment_label):
         hi,
         alpha=RUNOFF_RANGE_FILL_ALPHA,
         linewidth=0,
-        label="95% interval over all years",
+        label="95% interval 1958-2022",
     )
 
     ts_ax.plot(
@@ -647,7 +613,7 @@ def plot_runoff_timeseries(ts_ax, da_runoff_ts, year, catchment_label):
         med,
         linewidth=RUNOFF_MEDIAN_LINEWIDTH,
         color=RUNOFF_MEDIAN_LINE_COLOR,
-        label="Median over all years",
+        label="Median 1958-2022",
     )
 
     ts_ax.plot(
@@ -658,28 +624,31 @@ def plot_runoff_timeseries(ts_ax, da_runoff_ts, year, catchment_label):
         label=f"{year}",
     )
 
-    # Add dots for the dates shown in panels a-d.
-    for date in EVENT_DATES:
-        event_date = pd.Timestamp(date)
+    # Add one dot for the specified Storm Hans date.
+    hans_date = pd.Timestamp(HANS_DATE)
 
-        if event_date in x:
-            idx = np.where(x == event_date)[0][0]
+    if hans_date in x:
+        idx = np.where(x == hans_date)[0][0]
 
-            ts_ax.scatter(
-                event_date,
-                y[idx],
-                color="tab:blue",
-                s=EVENT_MARKER_SIZE,
-                zorder=6,
-            )
+        ts_ax.scatter(
+            hans_date,
+            y[idx],
+            color=HANS_MARKER_COLOR,
+            s=HANS_MARKER_SIZE,
+            zorder=6,
+            label="Storm Hans",
+        )
+
+    else:
+        print(f"Warning: HANS_DATE {HANS_DATE} was not found in the time series.")
 
     ts_ax.set_title(
-        f"e) {catchment_label} {NDAY}-day accumulated seNorge runoff 1958-2023",
+        f"e) {catchment_label} seNorge surface runoff",
         fontsize=TITLE_FONTSIZE,
         pad=5,
     )
 
-    ts_ax.set_ylabel("Runoff (mm)", fontsize=AXIS_LABELSIZE)
+    ts_ax.set_ylabel("mm", fontsize=AXIS_LABELSIZE)
     ts_ax.set_xlabel("Month", fontsize=AXIS_LABELSIZE)
 
     ts_ax.tick_params(axis="both", labelsize=TICK_LABELSIZE)
@@ -706,14 +675,17 @@ def plot_runoff_timeseries(ts_ax, da_runoff_ts, year, catchment_label):
 # =============================================================================
 
 def add_panel_titles(map_axes):
-    """Add titles to panels a-d."""
+    """
+    Add titles to panels a-d.
+
+    The titles intentionally do not include Day -2, Day -1, Day +0, etc.
+    """
 
     panel_labels = ["a)", "b)", "c)", "d)"]
 
-    for ax, label, lag, date in zip(
+    for ax, label, date in zip(
         get_map_axes(map_axes),
         panel_labels,
-        EVENT_LAGS,
         EVENT_DATES,
     ):
         formatted_date = (
@@ -724,7 +696,7 @@ def add_panel_titles(map_axes):
         )
 
         ax.set_title(
-            f"{label} Day {lag:+d}: {formatted_date} {YEAR}",
+            f"{label} {formatted_date} {YEAR}",
             fontsize=TITLE_FONTSIZE,
             pad=3,
         )
@@ -764,17 +736,6 @@ def add_map_legend(map_axes, catchment_label):
             color=MSL_CONTOUR_COLOR,
             linewidth=MSL_CONTOUR_LINEWIDTH,
             label="ERA5 mean sea level pressure (hPa)",
-        ),
-        Line2D(
-            [0],
-            [0],
-            marker="o",
-            color="none",
-            markerfacecolor=STATION_MARKER_FACE_COLOR,
-            markeredgecolor=STATION_MARKER_EDGE_COLOR,
-            markeredgewidth=STATION_MARKER_EDGE_WIDTH,
-            markersize=6,
-            label="Bergheim station",
         ),
     ]
 

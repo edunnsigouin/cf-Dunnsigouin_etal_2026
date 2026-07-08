@@ -107,7 +107,7 @@ LEGEND_FONTSIZE = 9
 # 4. Plot styling
 # =============================================================================
 
-PRECIP_LEVELS = np.arange(5, 75, 5)
+PRECIP_LEVELS = np.arange(5, 55, 5)
 PRECIP_ZERO_THRESHOLD = 5.0
 PRECIP_CMAP = plt.get_cmap("GnBu").copy()
 PRECIP_CMAP.set_under("white")
@@ -119,11 +119,6 @@ MSL_CONTOUR_LINEWIDTH = 1.5
 CATCHMENT_EDGE_COLOR = "red"
 CATCHMENT_LINEWIDTH = 1.0
 CATCHMENT_CRS_IF_MISSING = "EPSG:4326"
-
-STATION_MARKER_SIZE = 5
-STATION_MARKER_FACE_COLOR = "yellow"
-STATION_MARKER_EDGE_COLOR = "black"
-STATION_MARKER_EDGE_WIDTH = 0.6
 
 RUNOFF_RANGE_FILL_ALPHA = 0.25
 RUNOFF_MEDIAN_LINE_COLOR = "tab:red"
@@ -146,10 +141,6 @@ CATCHMENTS = {
         "label": "Glomma catchment",
     },
 }
-
-STATIONS = [
-    {"name": "Bergheim", "lon": 9.2483, "lat": 60.4761},
-]
 
 
 # =============================================================================
@@ -551,23 +542,6 @@ def plot_catchment_boundary(ax, geometry, proj_data):
     )
 
 
-def plot_stations(ax, stations, proj_data):
-    """Plot station locations."""
-
-    for station in stations:
-        ax.plot(
-            station["lon"],
-            station["lat"],
-            marker="o",
-            markersize=STATION_MARKER_SIZE,
-            markeredgecolor=STATION_MARKER_EDGE_COLOR,
-            markeredgewidth=STATION_MARKER_EDGE_WIDTH,
-            markerfacecolor=STATION_MARKER_FACE_COLOR,
-            linestyle="none",
-            transform=proj_data,
-            zorder=12,
-        )
-
 
 def plot_event_map_panel(
     ax,
@@ -588,7 +562,6 @@ def plot_event_map_panel(
     mesh = plot_precipitation(ax, da_precip, proj_data)
     plot_msl_contours(ax, da_msl, proj_data)
     plot_catchment_boundary(ax, catchment_boundary, proj_data)
-    plot_stations(ax, STATIONS, proj_data)
 
     return mesh
 
@@ -657,21 +630,6 @@ def plot_runoff_timeseries(ts_ax, da_runoff_ts, year, catchment_label):
         color="tab:blue",
         label=f"{year}",
     )
-
-    # Add dots for the dates shown in panels a-d.
-    for date in EVENT_DATES:
-        event_date = pd.Timestamp(date)
-
-        if event_date in x:
-            idx = np.where(x == event_date)[0][0]
-
-            ts_ax.scatter(
-                event_date,
-                y[idx],
-                color="tab:blue",
-                s=EVENT_MARKER_SIZE,
-                zorder=6,
-            )
 
     ts_ax.set_title(
         f"e) {catchment_label} {NDAY}-day accumulated seNorge runoff 1958-2023",
@@ -764,17 +722,6 @@ def add_map_legend(map_axes, catchment_label):
             color=MSL_CONTOUR_COLOR,
             linewidth=MSL_CONTOUR_LINEWIDTH,
             label="ERA5 mean sea level pressure (hPa)",
-        ),
-        Line2D(
-            [0],
-            [0],
-            marker="o",
-            color="none",
-            markerfacecolor=STATION_MARKER_FACE_COLOR,
-            markeredgecolor=STATION_MARKER_EDGE_COLOR,
-            markeredgewidth=STATION_MARKER_EDGE_WIDTH,
-            markersize=6,
-            label="Bergheim station",
         ),
     ]
 
