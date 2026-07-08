@@ -154,7 +154,7 @@ OUTPUT_FILENAME = f"{PATH_OUT}fig-temp.png"
 # =============================================================================
 
 FIG_WIDTH_IN = 9.4
-FIG_HEIGHT_IN = 14.0
+FIG_HEIGHT_IN = 13.4
 
 MAP_EXTENT = [-10, 25, 50, 70]
 MAP_WSPACE = 0.02
