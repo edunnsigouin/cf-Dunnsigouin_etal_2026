@@ -1350,7 +1350,7 @@ def plot_precipitation_timeseries(ax, catchment_label):
         era5,
         color=PRECIP_ERA5_COLOR,
         linewidth=PRECIP_LINEWIDTH,
-        label="ERA5 Storm Hans",
+        label="ERA5-land Storm Hans",
     )
 
     ax.plot(
@@ -1565,7 +1565,7 @@ def add_colorbar(fig, mesh, cbar_ax):
     )
 
     cbar.set_label(
-        "Daily accumulated precipitation (mm)",
+        "Precipitation (mm)",
         fontsize=AXIS_LABELSIZE,
     )
 

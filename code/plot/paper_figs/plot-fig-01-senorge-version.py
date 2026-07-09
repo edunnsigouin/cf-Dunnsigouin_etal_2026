@@ -605,7 +605,7 @@ def plot_runoff_timeseries(ts_ax, da_runoff_ts, year, catchment_label):
         hi,
         alpha=RUNOFF_RANGE_FILL_ALPHA,
         linewidth=0,
-        label="95% interval 1958-2022",
+        label="95% interval 1958-2023",
     )
 
     ts_ax.plot(
@@ -613,7 +613,7 @@ def plot_runoff_timeseries(ts_ax, da_runoff_ts, year, catchment_label):
         med,
         linewidth=RUNOFF_MEDIAN_LINEWIDTH,
         color=RUNOFF_MEDIAN_LINE_COLOR,
-        label="Median 1958-2022",
+        label="Median 1958-2023",
     )
 
     ts_ax.plot(
@@ -712,7 +712,7 @@ def add_precip_colorbar(fig, mesh, cbar_ax):
     )
 
     cbar.set_label(
-        "seNorge daily accumulated precipitation (mm)",
+        "seNorge precipitation (mm)",
         fontsize=AXIS_LABELSIZE,
     )
 

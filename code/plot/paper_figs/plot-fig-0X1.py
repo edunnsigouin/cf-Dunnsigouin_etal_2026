@@ -3,7 +3,7 @@
 Plot one high-ranking S2S precipitation event.
 
 The figure contains:
-1. Four event-relative map panels: -2, -1, 0, +1.
+1. Four map panels around the selected event date.
 2. Daily precipitation as shading.
 3. Mean sea level pressure as labelled grey contours.
 4. Snowmelt, defined as daily change in SWE < 0, as stippling or hatching.
@@ -19,7 +19,6 @@ from pathlib import Path
 import cartopy.crs as ccrs
 import geopandas as gpd
 import matplotlib.dates as mdates
-import matplotlib.patheffects as pe
 import matplotlib.pyplot as plt
 import numpy as np
 import xarray as xr
@@ -37,6 +36,10 @@ from Dunnsigouin_etal_2026 import config
 
 CATCHMENT_NAME = "drammen"  # options: "drammen", "glomma"
 EVENT_RANK = 1              # options: 1-5
+
+# These offsets define which dates are plotted relative to date_of_max.
+# They are not used in the panel titles.
+EVENT_LAGS = [-2, -1, 0, 1]
 
 PRECIP_VAR = "tp24"
 MSL_VAR = "msl"
@@ -264,7 +267,7 @@ def get_selected_event(catchment_name, event_rank):
 
 
 def get_event_dates(event):
-    """Return event-relative dates as strings."""
+    """Return dates to plot as strings."""
     date_of_max = np.datetime64(event["date_of_max"], "D")
 
     return [
@@ -922,7 +925,7 @@ def plot_catchment_boundary(ax, geometry, proj_data, linewidth=CATCHMENT_LINEWID
 
 
 def plot_event_panel(ax, event, lag, target_date, catchment_boundary, proj_data):
-    """Plot one event-relative map panel."""
+    """Plot one map panel."""
     da_precip = load_precipitation(event, target_date)
     da_msl = load_msl(event, target_date)
     da_snowmelt = load_snowmelt(event, lag)
@@ -931,7 +934,7 @@ def plot_event_panel(ax, event, lag, target_date, catchment_boundary, proj_data)
     plot_msl_contours(ax, da_msl, proj_data)
     plot_snowmelt(ax, da_snowmelt, proj_data)
     plot_catchment_boundary(ax, catchment_boundary, proj_data)
-    #plot_drammen_city(ax, proj_data)
+    # plot_drammen_city(ax, proj_data)
 
     return mesh
 
@@ -962,20 +965,20 @@ def plot_runoff_timeseries(ts_ax, event, event_dates, catchment_name, catchment_
         ),
     )
 
-    #ts_ax.plot(
-    #    da_median[time_name].values,
-    #    da_median.values,
-    #    color=RUNOFF_MEDIAN_LINE_COLOR,
-    #    linewidth=RUNOFF_MEDIAN_LINEWIDTH,
-    #    label="Median over all hindcast years and members",
-    #)
+    # ts_ax.plot(
+    #     da_median[time_name].values,
+    #     da_median.values,
+    #     color=RUNOFF_MEDIAN_LINE_COLOR,
+    #     linewidth=RUNOFF_MEDIAN_LINEWIDTH,
+    #     label="Median over all hindcast years and members",
+    # )
 
     ts_ax.plot(
         da_event[time_name].values,
         da_event.values,
         color=RUNOFF_EVENT_LINE_COLOR,
         linewidth=RUNOFF_EVENT_LINEWIDTH,
-        label="Counterfactual spring storm Hans",
+        label="Counterfactual storm Hans",
     )
 
     for date in event_dates:
@@ -992,15 +995,13 @@ def plot_runoff_timeseries(ts_ax, event, event_dates, catchment_name, catchment_
             zorder=5,
         )
 
-    selected_grid = da_event.attrs["selected_grid"]
-
     ts_ax.set_title(
-        f"e) Drammen catchment mean runoff",
+        "e) Drammen catchment surface runoff",
         fontsize=TITLE_FONTSIZE,
         pad=5,
     )
 
-    ts_ax.set_ylabel("mm/day", fontsize=AXIS_LABELSIZE)
+    ts_ax.set_ylabel("mm", fontsize=AXIS_LABELSIZE)
     ts_ax.set_xlabel("Date", fontsize=AXIS_LABELSIZE)
     ts_ax.tick_params(labelsize=TICK_LABELSIZE)
 
@@ -1040,25 +1041,28 @@ def plot_runoff_timeseries(ts_ax, event, event_dates, catchment_name, catchment_
 # Figure finishing
 # =============================================================================
 
+def format_panel_date(date):
+    """Format a date as 'Jun 4' for panel titles."""
+    date_object = (
+        np.datetime64(date)
+        .astype("datetime64[D]")
+        .astype(object)
+    )
+
+    return f"{date_object.strftime('%B')} {date_object.day}"
+
+
 def add_panel_titles(axes, event_dates):
-    """Add panel labels and event-relative dates."""
+    """Add panel labels and calendar dates."""
     panel_labels = ["a)", "b)", "c)", "d)"]
 
-    for ax, panel_label, lag, date in zip(
+    for ax, panel_label, date in zip(
         axes,
         panel_labels,
-        EVENT_LAGS,
         event_dates,
     ):
-        formatted_date = (
-            np.datetime64(date)
-            .astype("datetime64[D]")
-            .astype(object)
-            .strftime("%B %-d")
-        )
-
         ax.set_title(
-            f"{panel_label} {formatted_date}",
+            f"{panel_label} {format_panel_date(date)}",
             fontsize=TITLE_FONTSIZE,
             pad=3,
         )
@@ -1073,7 +1077,7 @@ def add_colorbar(fig, mesh, cbar_ax):
     )
 
     cbar.set_label(
-        "Daily accumulated precipitation (mm/day)",
+        "precipitation (mm)",
         fontsize=AXIS_LABELSIZE,
     )
     cbar.ax.tick_params(labelsize=TICK_LABELSIZE)
