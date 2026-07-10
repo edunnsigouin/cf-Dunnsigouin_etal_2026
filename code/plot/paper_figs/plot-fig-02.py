@@ -29,7 +29,7 @@ from Dunnsigouin_etal_2026 import config
 # User settings
 # =============================================================================
 
-catchment = "regine_drammen"
+catchment = "regine_glomma"
 x_days = 2
 
 reference_dataset = "senorge"  # "senorge" or "senorge_regrid"
@@ -81,8 +81,8 @@ YMAX = 135
 
 BOX_WIDTH = 0.58
 
-REFERENCE_COLOR = "tab:blue"
-ERA5_COLOR = "tab:red"
+REFERENCE_COLOR = "tab:red"
+ERA5_COLOR = "tab:blue"
 COUNTERFACTUAL_COLOR = "tab:green"
 
 MONTHS = np.arange(1, 13)
