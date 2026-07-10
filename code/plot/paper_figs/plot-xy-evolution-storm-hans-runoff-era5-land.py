@@ -45,9 +45,9 @@ EVENT_DATES = [
     "2023-08-09",
 ]
 
-RUNOFF_VAR = "ro"
+RUNOFF_VAR = "sro"
 
-WRITE_TO_FILE = False
+WRITE_TO_FILE = True
 
 
 # =============================================================================
