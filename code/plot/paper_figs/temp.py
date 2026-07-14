@@ -3,13 +3,12 @@
 Plot one high-ranking S2S precipitation event.
 
 The figure contains:
-1. Four map panels around the selected event date.
+1. Four event-relative map panels: -2, -1, 0, +1.
 2. Daily precipitation as shading.
 3. Mean sea level pressure as labelled grey contours.
-4. Snowmelt, defined as daily change in SWE < 0, as stippling or hatching.
-5. Selected catchment boundary in red.
-6. A bottom runoff time-series panel showing catchment-spatial-mean runoff:
-   - the selected runoff event averaged over the catchment
+4. Selected catchment boundary in red.
+5. A bottom surface-streamflow time-series panel showing:
+   - the selected sro event averaged over the catchment
    - the 95% interval from all hindcast years and ensemble members
    - the median of all hindcast years and ensemble members.
 """
@@ -24,7 +23,6 @@ import numpy as np
 import xarray as xr
 from matplotlib.gridspec import GridSpec
 from matplotlib.lines import Line2D
-from matplotlib.patches import Patch
 from shapely.geometry import MultiPolygon, Polygon
 
 from Dunnsigouin_etal_2026 import config
@@ -35,18 +33,15 @@ from Dunnsigouin_etal_2026 import config
 # =============================================================================
 
 CATCHMENT_NAME = "drammen"  # options: "drammen", "glomma"
-EVENT_RANK = 5              # options: 1-5
+EVENT_RANK = 1              # options: 1-5
 
-# These offsets define which dates are plotted relative to date_of_max.
-# They are not used in the panel titles.
 EVENT_LAGS = [-2, -1, 0, 1]
 
 PRECIP_VAR = "tp24"
 MSL_VAR = "msl"
-SNOW_VAR = "sd"
-RUNOFF_VAR = "sro24"
+STREAMFLOW_VAR = "sro24"
 
-WRITE_TO_FILE = False
+WRITE_TO_FILE = True
 
 
 # =============================================================================
@@ -110,26 +105,13 @@ CATCHMENT_EDGE_COLOR = "red"
 CATCHMENT_LINEWIDTH = 1.0
 CATCHMENT_CRS_IF_MISSING = "EPSG:4326"
 
-SNOWMELT_OVERLAY = "stippling"  # options: "stippling", "hatching"
-SNOWMELT_THRESHOLD = 0.0
 
-SNOWMELT_DOT_COLOR = "orange"
-SNOWMELT_DOT_SIZE = 4
-SNOWMELT_DOT_ALPHA = 1.0
-SNOWMELT_DOT_STRIDE = 1
-
-SNOWMELT_HATCH_PATTERN = "////"
-SNOWMELT_HATCH_COLOR = "orange"
-SNOWMELT_HATCH_LINEWIDTH = 1.0
-
-SNOWMELT_ZORDER = 8
-
-RUNOFF_RANGE_FILL_COLOR = "tab:blue"
-RUNOFF_RANGE_FILL_ALPHA = 0.20
-RUNOFF_EVENT_LINE_COLOR = "tab:blue"
-RUNOFF_EVENT_LINEWIDTH = 2.0
-RUNOFF_MEDIAN_LINE_COLOR = "tab:red"
-RUNOFF_MEDIAN_LINEWIDTH = 2.0
+STREAMFLOW_RANGE_FILL_COLOR = "tab:blue"
+STREAMFLOW_RANGE_FILL_ALPHA = 0.20
+STREAMFLOW_EVENT_LINE_COLOR = "tab:blue"
+STREAMFLOW_EVENT_LINEWIDTH = 2.0
+STREAMFLOW_MEDIAN_LINE_COLOR = "tab:red"
+STREAMFLOW_MEDIAN_LINEWIDTH = 2.0
 
 
 # =============================================================================
@@ -155,84 +137,84 @@ TOP_EVENTS = {
         {
             "rank": 1,
             "model_type": "hindcast",
-            "forecast_date": "2021-04-26",
-            "date_of_max": "2021-06-06",
-            "hdate": 20150426.0,
-            "ensemble_member": 7,
+            "forecast_date": "2020-07-23",
+            "date_of_max": "2020-08-09",
+            "hdate": 20130723.0,
+            "ensemble_member": 2,
         },
         {
             "rank": 2,
             "model_type": "hindcast",
-            "forecast_date": "2022-04-28",
-            "date_of_max": "2022-06-02",
-            "hdate": 20140428.0,
-            "ensemble_member": 2,
+            "forecast_date": "2020-07-20",
+            "date_of_max": "2020-08-17",
+            "hdate": 20100720.0,
+            "ensemble_member": 8,
         },
         {
             "rank": 3,
             "model_type": "hindcast",
-            "forecast_date": "2021-04-29",
-            "date_of_max": "2021-05-28",
-            "hdate": 20190429.0,
+            "forecast_date": "2020-07-23",
+            "date_of_max": "2020-08-23",
+            "hdate": 20000723.0,
             "ensemble_member": 4,
         },
         {
             "rank": 4,
             "model_type": "hindcast",
-            "forecast_date": "2020-04-23",
-            "date_of_max": "2020-06-03",
-            "hdate": 20150423.0,
-            "ensemble_member": 51,
+            "forecast_date": "2022-07-18",
+            "date_of_max": "2022-08-18",
+            "hdate": 20100718.0,
+            "ensemble_member": 8,
         },
         {
             "rank": 5,
-            "model_type": "forecast",
-            "forecast_date": "2021-04-26",
-            "date_of_max": "2021-06-07",
-            "hdate": None,
-            "ensemble_member": 17,
+            "model_type": "hindcast",
+            "forecast_date": "2021-07-29",
+            "date_of_max": "2021-08-23",
+            "hdate": 20180729.0,
+            "ensemble_member": 3,
         },
     ],
     "glomma": [
         {
             "rank": 1,
             "model_type": "hindcast",
-            "forecast_date": "2022-04-28",
-            "date_of_max": "2022-06-02",
-            "hdate": 20140428.0,
-            "ensemble_member": 2,
+            "forecast_date": "2022-07-21",
+            "date_of_max": "2022-08-11",
+            "hdate": 20210721.0,
+            "ensemble_member": 10,
         },
         {
             "rank": 2,
             "model_type": "hindcast",
-            "forecast_date": "2022-04-21",
-            "date_of_max": "2022-05-31",
-            "hdate": 20160421.0,
-            "ensemble_member": 2,
+            "forecast_date": "2022-07-11",
+            "date_of_max": "2022-08-20",
+            "hdate": 20080711.0,
+            "ensemble_member": 6,
         },
         {
             "rank": 3,
             "model_type": "hindcast",
-            "forecast_date": "2022-04-11",
-            "date_of_max": "2022-05-10",
-            "hdate": 20150411.0,
-            "ensemble_member": 3,
+            "forecast_date": "2022-07-04",
+            "date_of_max": "2022-08-04",
+            "hdate": 20140704.0,
+            "ensemble_member": 5,
         },
         {
             "rank": 4,
             "model_type": "hindcast",
-            "forecast_date": "2021-04-15",
-            "date_of_max": "2021-05-29",
-            "hdate": 20150415.0,
-            "ensemble_member": 8,
+            "forecast_date": "2020-07-30",
+            "date_of_max": "2020-09-08",
+            "hdate": 20180730.0,
+            "ensemble_member": 6,
         },
         {
             "rank": 5,
             "model_type": "forecast",
-            "forecast_date": "2023-04-03",
-            "date_of_max": "2023-04-29",
+            "forecast_date": "2022-07-25",
+            "date_of_max": "2022-08-28",
             "hdate": None,
-            "ensemble_member": 43,
+            "ensemble_member": 39,
         },
     ],
 }
@@ -267,7 +249,7 @@ def get_selected_event(catchment_name, event_rank):
 
 
 def get_event_dates(event):
-    """Return dates to plot as strings."""
+    """Return event-relative dates as strings."""
     date_of_max = np.datetime64(event["date_of_max"], "D")
 
     return [
@@ -291,7 +273,7 @@ def make_s2s_file(event, variable, grid):
 
 def make_output_filename(catchment_name, event_rank):
     """Create output filename."""
-    return f"{PATH_OUT}fig-0X1.png"
+    return f"{PATH_OUT}temp.png"
 
 
 # =============================================================================
@@ -401,7 +383,7 @@ def load_weights(filename, spatial_dims):
 
 
 def align_weights(da, weights):
-    """Align catchment weights to the runoff grid."""
+    """Align catchment weights to the streamflow grid."""
     time_name = get_time_coord_name(da) if any(
         name in da.dims or name in da.coords
         for name in ["time", "valid_time"]
@@ -419,7 +401,7 @@ def align_weights(da, weights):
 
 
 def catchment_mean(da, weights, spatial_dims):
-    """Calculate catchment-weighted spatial mean runoff."""
+    """Calculate catchment-weighted spatial mean surface streamflow."""
     weights = align_weights(da, weights)
 
     valid = xr.ufuncs.isfinite(da) & xr.ufuncs.isfinite(weights) & (weights > 0)
@@ -435,7 +417,7 @@ def catchment_mean(da, weights, spatial_dims):
     )
 
     out = weighted_sum / weight_sum
-    out.name = "catchment_mean_runoff"
+    out.name = "catchment_mean_sro"
     out.attrs["units"] = da.attrs.get("units", "mm/day")
 
     return out
@@ -465,11 +447,8 @@ def open_s2s_variable(filename, variable):
         ds[variable] = ds[variable] / 100.0
         ds[variable].attrs["units"] = "hPa"
 
-    elif variable == SNOW_VAR:
-        ds[variable] = ds[variable] * 1000.0
-        ds[variable].attrs["units"] = "mm"
 
-    elif variable == RUNOFF_VAR:
+    elif variable == STREAMFLOW_VAR:
         ds[variable] = ds[variable] * 1000.0
         ds[variable].attrs["units"] = "mm/day"
 
@@ -553,43 +532,22 @@ def load_msl(event, target_date):
     return load_daily_variable(event, target_date, MSL_VAR)
 
 
-def load_snowmelt(event, lag):
-    """
-    Compute daily SWE change.
-
-    Snowmelt is later plotted where:
-        SWE(current day) - SWE(previous day) < 0
-    """
-    date_of_max = np.datetime64(event["date_of_max"], "D")
-    previous_date = date_of_max + np.timedelta64(lag - 1, "D")
-    current_date = date_of_max + np.timedelta64(lag, "D")
-
-    da_previous = load_daily_variable(event, str(previous_date), SNOW_VAR)
-    da_current = load_daily_variable(event, str(current_date), SNOW_VAR)
-
-    da_change = da_current - da_previous
-    da_change.attrs["units"] = "mm"
-    da_change.attrs["long_name"] = "Daily change in snow water equivalent"
-
-    return da_change
-
-
-def load_runoff_timeseries_for_catchment(event, catchment_name):
-    """Load the selected runoff event time series averaged over the catchment."""
+def load_streamflow_timeseries_for_catchment(event, catchment_name):
+    """Load the selected surface-streamflow event time series averaged over the catchment."""
     grids_to_try = ["0.5x0.5", "0.25x0.25"]
     spatial_dims = ("latitude", "longitude")
 
     for grid in grids_to_try:
-        filename = make_s2s_file(event, RUNOFF_VAR, grid)
+        filename = make_s2s_file(event, STREAMFLOW_VAR, grid)
         weights_filename = make_catchment_weights_file(catchment_name, grid)
 
         if not filename.exists() or not weights_filename.exists():
             continue
 
-        ds = open_s2s_variable(filename, RUNOFF_VAR)
+        ds = open_s2s_variable(filename, STREAMFLOW_VAR)
 
         try:
-            da = select_event_member(ds, event, RUNOFF_VAR)
+            da = select_event_member(ds, event, STREAMFLOW_VAR)
             weights = load_weights(weights_filename, spatial_dims)
 
             da_mean = catchment_mean(
@@ -607,14 +565,14 @@ def load_runoff_timeseries_for_catchment(event, catchment_name):
             ds.close()
 
     raise FileNotFoundError(
-        f"Could not find selected {RUNOFF_VAR} catchment-mean time series "
+        f"Could not find selected {STREAMFLOW_VAR} catchment-mean time series "
         f"for {event['forecast_date']} and catchment '{catchment_name}'."
     )
 
 
-def load_runoff_hindcast_member_stats_for_catchment(event, catchment_name):
+def load_streamflow_hindcast_member_stats_for_catchment(event, catchment_name):
     """
-    Load 95% interval and median catchment-mean runoff.
+    Load the 95% interval and median of catchment-mean surface streamflow.
 
     Statistics are computed from all hindcast dates and ensemble members
     for the same forecast initialization date. The selected counterfactual
@@ -629,16 +587,16 @@ def load_runoff_hindcast_member_stats_for_catchment(event, catchment_name):
     spatial_dims = ("latitude", "longitude")
 
     for grid in grids_to_try:
-        filename = make_s2s_file(event, RUNOFF_VAR, grid)
+        filename = make_s2s_file(event, STREAMFLOW_VAR, grid)
         weights_filename = make_catchment_weights_file(catchment_name, grid)
 
         if not filename.exists() or not weights_filename.exists():
             continue
 
-        ds = open_s2s_variable(filename, RUNOFF_VAR)
+        ds = open_s2s_variable(filename, STREAMFLOW_VAR)
 
         try:
-            da = ds[RUNOFF_VAR]
+            da = ds[STREAMFLOW_VAR]
             weights = load_weights(weights_filename, spatial_dims)
 
             da_mean = catchment_mean(
@@ -848,70 +806,6 @@ def plot_msl_contours(ax, da_msl, proj_data):
     )
 
 
-def plot_snowmelt(ax, da_snowmelt, proj_data):
-    """Overlay locations where daily SWE change is negative."""
-    lon, lat = get_lon_lat(da_snowmelt)
-
-    snowmelt = np.isfinite(da_snowmelt.values)
-    snowmelt &= da_snowmelt.values < SNOWMELT_THRESHOLD
-
-    if SNOWMELT_OVERLAY == "stippling":
-        plot_snowmelt_stippling(ax, lon, lat, snowmelt, proj_data)
-
-    elif SNOWMELT_OVERLAY == "hatching":
-        plot_snowmelt_hatching(ax, lon, lat, snowmelt, proj_data)
-
-    else:
-        raise ValueError(
-            "SNOWMELT_OVERLAY must be either 'stippling' or 'hatching'."
-        )
-
-
-def plot_snowmelt_stippling(ax, lon, lat, snowmelt, proj_data):
-    """Plot snowmelt as orange stippling."""
-    iy, ix = np.where(snowmelt)
-
-    if SNOWMELT_DOT_STRIDE > 1:
-        iy = iy[::SNOWMELT_DOT_STRIDE]
-        ix = ix[::SNOWMELT_DOT_STRIDE]
-
-    ax.scatter(
-        lon.values[ix],
-        lat.values[iy],
-        s=SNOWMELT_DOT_SIZE,
-        c=SNOWMELT_DOT_COLOR,
-        alpha=SNOWMELT_DOT_ALPHA,
-        transform=proj_data,
-        zorder=SNOWMELT_ZORDER,
-        linewidths=0,
-    )
-
-
-def plot_snowmelt_hatching(ax, lon, lat, snowmelt, proj_data):
-    """Plot snowmelt as orange hatching."""
-    old_hatch_color = plt.rcParams["hatch.color"]
-    old_hatch_linewidth = plt.rcParams["hatch.linewidth"]
-
-    try:
-        plt.rcParams["hatch.color"] = SNOWMELT_HATCH_COLOR
-        plt.rcParams["hatch.linewidth"] = SNOWMELT_HATCH_LINEWIDTH
-
-        ax.contourf(
-            lon.values,
-            lat.values,
-            snowmelt.astype(int),
-            levels=[0.5, 1.5],
-            colors="none",
-            hatches=[SNOWMELT_HATCH_PATTERN],
-            transform=proj_data,
-            zorder=SNOWMELT_ZORDER,
-        )
-
-    finally:
-        plt.rcParams["hatch.color"] = old_hatch_color
-        plt.rcParams["hatch.linewidth"] = old_hatch_linewidth
-
-
 def plot_catchment_boundary(ax, geometry, proj_data, linewidth=CATCHMENT_LINEWIDTH):
     """Overlay the selected catchment boundary."""
     ax.add_geometries(
@@ -924,27 +818,25 @@ def plot_catchment_boundary(ax, geometry, proj_data, linewidth=CATCHMENT_LINEWID
     )
 
 
-def plot_event_panel(ax, event, lag, target_date, catchment_boundary, proj_data):
-    """Plot one map panel."""
+def plot_event_panel(ax, event, target_date, catchment_boundary, proj_data):
+    """Plot one event-relative map panel."""
     da_precip = load_precipitation(event, target_date)
     da_msl = load_msl(event, target_date)
-    da_snowmelt = load_snowmelt(event, lag)
 
     mesh = plot_precipitation(ax, da_precip, proj_data)
     plot_msl_contours(ax, da_msl, proj_data)
-    plot_snowmelt(ax, da_snowmelt, proj_data)
     plot_catchment_boundary(ax, catchment_boundary, proj_data)
-    # plot_drammen_city(ax, proj_data)
+    
 
     return mesh
 
 
-def plot_runoff_timeseries(ts_ax, event, event_dates, catchment_name, catchment_label):
-    """Plot selected catchment-mean runoff time series and hindcast/member statistics."""
-    da_event = load_runoff_timeseries_for_catchment(event, catchment_name)
+def plot_streamflow_timeseries(ts_ax, event, event_dates, catchment_name, catchment_label):
+    """Plot selected catchment-mean surface streamflow time series and hindcast/member statistics."""
+    da_event = load_streamflow_timeseries_for_catchment(event, catchment_name)
 
     da_lower, da_upper, da_median = (
-        load_runoff_hindcast_member_stats_for_catchment(
+        load_streamflow_hindcast_member_stats_for_catchment(
             event,
             catchment_name,
         )
@@ -956,8 +848,8 @@ def plot_runoff_timeseries(ts_ax, event, event_dates, catchment_name, catchment_
         da_lower[time_name].values,
         da_lower.values,
         da_upper.values,
-        color=RUNOFF_RANGE_FILL_COLOR,
-        alpha=RUNOFF_RANGE_FILL_ALPHA,
+        color=STREAMFLOW_RANGE_FILL_COLOR,
+        alpha=STREAMFLOW_RANGE_FILL_ALPHA,
         linewidth=0,
         label=(
             "95% interval over all years and members "
@@ -965,20 +857,20 @@ def plot_runoff_timeseries(ts_ax, event, event_dates, catchment_name, catchment_
         ),
     )
 
-    # ts_ax.plot(
-    #     da_median[time_name].values,
-    #     da_median.values,
-    #     color=RUNOFF_MEDIAN_LINE_COLOR,
-    #     linewidth=RUNOFF_MEDIAN_LINEWIDTH,
-    #     label="Median over all hindcast years and members",
-    # )
+    #ts_ax.plot(
+    #    da_median[time_name].values,
+    #    da_median.values,
+    #    color=STREAMFLOW_MEDIAN_LINE_COLOR,
+    #    linewidth=STREAMFLOW_MEDIAN_LINEWIDTH,
+    #    label="Median over all hindcast years and members",
+    #)
 
     ts_ax.plot(
         da_event[time_name].values,
         da_event.values,
-        color=RUNOFF_EVENT_LINE_COLOR,
-        linewidth=RUNOFF_EVENT_LINEWIDTH,
-        label="Counterfactual storm Hans",
+        color=STREAMFLOW_EVENT_LINE_COLOR,
+        linewidth=STREAMFLOW_EVENT_LINEWIDTH,
+        label="Counterfactual spring Storm Hans",
     )
 
     for date in event_dates:
@@ -990,18 +882,20 @@ def plot_runoff_timeseries(ts_ax, event, event_dates, catchment_name, catchment_
         ts_ax.scatter(
             value[time_name].values,
             value.values,
-            color=RUNOFF_EVENT_LINE_COLOR,
+            color=STREAMFLOW_EVENT_LINE_COLOR,
             s=35,
             zorder=5,
         )
 
+    selected_grid = da_event.attrs["selected_grid"]
+
     ts_ax.set_title(
-        "e) Drammen catchment surface runoff",
+        f"e) {catchment_label} surface streamflow",
         fontsize=TITLE_FONTSIZE,
         pad=5,
     )
 
-    ts_ax.set_ylabel("mm", fontsize=AXIS_LABELSIZE)
+    ts_ax.set_ylabel("mm/day", fontsize=AXIS_LABELSIZE)
     ts_ax.set_xlabel("Date", fontsize=AXIS_LABELSIZE)
     ts_ax.tick_params(labelsize=TICK_LABELSIZE)
 
@@ -1041,28 +935,25 @@ def plot_runoff_timeseries(ts_ax, event, event_dates, catchment_name, catchment_
 # Figure finishing
 # =============================================================================
 
-def format_panel_date(date):
-    """Format a date as 'Jun 4' for panel titles."""
-    date_object = (
-        np.datetime64(date)
-        .astype("datetime64[D]")
-        .astype(object)
-    )
-
-    return f"{date_object.strftime('%B')} {date_object.day}"
-
-
 def add_panel_titles(axes, event_dates):
-    """Add panel labels and calendar dates."""
+    """Add panel labels and event-relative dates."""
     panel_labels = ["a)", "b)", "c)", "d)"]
 
-    for ax, panel_label, date in zip(
+    for ax, panel_label, lag, date in zip(
         axes,
         panel_labels,
+        EVENT_LAGS,
         event_dates,
     ):
+        formatted_date = (
+            np.datetime64(date)
+            .astype("datetime64[D]")
+            .astype(object)
+            .strftime("%B %-d")
+        )
+
         ax.set_title(
-            f"{panel_label} {format_panel_date(date)}",
+            f"{panel_label} Day {lag:+d}: {formatted_date}",
             fontsize=TITLE_FONTSIZE,
             pad=3,
         )
@@ -1077,31 +968,10 @@ def add_colorbar(fig, mesh, cbar_ax):
     )
 
     cbar.set_label(
-        "precipitation (mm)",
+        "Daily accumulated precipitation (mm/day)",
         fontsize=AXIS_LABELSIZE,
     )
     cbar.ax.tick_params(labelsize=TICK_LABELSIZE)
-
-
-def get_snowmelt_legend_handle():
-    """Return legend handle for the selected snowmelt overlay."""
-    if SNOWMELT_OVERLAY == "hatching":
-        return Patch(
-            facecolor="white",
-            edgecolor=SNOWMELT_HATCH_COLOR,
-            hatch=SNOWMELT_HATCH_PATTERN,
-            label=r"Snowmelt ($\Delta$SWE < 0)",
-        )
-
-    return Line2D(
-        [0],
-        [0],
-        marker="o",
-        color="none",
-        markerfacecolor=SNOWMELT_DOT_COLOR,
-        markersize=5,
-        label=r"Snowmelt ($\Delta$SWE < 0)",
-    )
 
 
 def add_legend(axes, catchment_label):
@@ -1121,7 +991,6 @@ def add_legend(axes, catchment_label):
             linewidth=MSL_CONTOUR_LINEWIDTH,
             label="Mean sea level pressure (hPa)",
         ),
-        get_snowmelt_legend_handle(),
     ]
 
     legend = axes[0, 0].legend(
@@ -1179,7 +1048,7 @@ def finalize_figure(
 
     add_panel_titles(plot_axes, event_dates)
 
-    plot_runoff_timeseries(
+    plot_streamflow_timeseries(
         ts_ax,
         event,
         event_dates,
@@ -1226,15 +1095,13 @@ def main():
 
     mesh = None
 
-    for ax, lag, target_date in zip(
+    for ax, target_date in zip(
         get_plot_axes(axes),
-        EVENT_LAGS,
         event_dates,
     ):
         mesh = plot_event_panel(
             ax=ax,
             event=event,
-            lag=lag,
             target_date=target_date,
             catchment_boundary=catchment_boundary,
             proj_data=proj_data,

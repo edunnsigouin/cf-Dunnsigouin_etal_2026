@@ -21,11 +21,11 @@ from Dunnsigouin_etal_2026 import config
 # Input -------------------------------------------------
 variable            = "tp"
 x_days              = 2
-catchment           = "regine_glomma"
+catchment           = "regine_drammen"
 forecast_date_range = ["2020-01-02", "2023-06-26"]
 
-month_of_year = 8   # 1=Jan, 2=Feb, ..., 12=Dec
-n_top         = 5
+month_of_year = 5   # 1=Jan, 2=Feb, ..., 12=Dec
+n_top         = 10
 
 path_in_model = config.dirs["s2s_processed"]
 
