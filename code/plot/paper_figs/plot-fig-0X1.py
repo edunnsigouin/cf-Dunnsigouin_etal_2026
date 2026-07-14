@@ -35,7 +35,7 @@ from Dunnsigouin_etal_2026 import config
 # =============================================================================
 
 CATCHMENT_NAME = "drammen"  # options: "drammen", "glomma"
-EVENT_RANK = 5              # options: 1-5
+EVENT_RANK = 1              # options: 1-5
 
 # These offsets define which dates are plotted relative to date_of_max.
 # They are not used in the panel titles.
@@ -44,7 +44,7 @@ EVENT_LAGS = [-2, -1, 0, 1]
 PRECIP_VAR = "tp24"
 MSL_VAR = "msl"
 SNOW_VAR = "sd"
-RUNOFF_VAR = "sro24"
+RUNOFF_VAR = "ro24"
 
 WRITE_TO_FILE = False
 
