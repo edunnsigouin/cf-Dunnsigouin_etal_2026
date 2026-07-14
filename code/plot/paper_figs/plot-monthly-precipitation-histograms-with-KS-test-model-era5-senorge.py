@@ -11,13 +11,22 @@ Each calendar month is plotted in a separate panel. The three distributions
 are shown as unfilled histogram outlines so that they can be overlaid and
 compared directly.
 
+For every month, a two-sample Kolmogorov-Smirnov test compares:
+
+- ERA5 with the model distribution.
+- SeNorge or SeNorge-regrid with the model distribution.
+
+The p-values are displayed in the legend of each panel using the color of the
+corresponding reference dataset. An asterisk marks a failed test at the
+user-defined confidence level.
+
 Inputs:
 - S2S monthly extreme distribution file.
 - ERA5 monthly extreme distribution file.
 - SeNorge or SeNorge-regrid monthly extreme distribution file.
 
 Output:
-- One publication-quality 3 × 4 panel PNG figure.
+- One publication-quality 3 x 4 panel PNG figure.
 """
 
 import os
@@ -26,6 +35,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import xarray as xr
 from matplotlib.lines import Line2D
+from scipy.stats import ks_2samp
 
 from Dunnsigouin_etal_2026 import config
 
@@ -35,7 +45,7 @@ from Dunnsigouin_etal_2026 import config
 # =============================================================================
 
 # Catchment and accumulation period
-catchment = "regine_drammen"
+catchment = "regine_glomma"
 x_days = 2
 
 # Select either native-grid or regridded SeNorge data
@@ -49,18 +59,26 @@ reference_years = ["1957", "2023"]
 era5_grid = "0.5x0.5"
 
 # Number of histogram bins in every monthly panel
-number_of_bins = 30
+number_of_bins = 20
 
 # Normalize each histogram so that distributions with different sample sizes
 # can be compared directly
 plot_probability_density = True
 
+# Kolmogorov-Smirnov test settings
+ks_alternative = "two-sided"
+ks_method = "auto"
+
+# Confidence level used to decide whether a KS test fails.
+# For example, 95 means that p-values below 0.05 are marked with an asterisk.
+significance_level_percent = 95.0
+
 # Figure output
-write2file = False
+write2file = True
 filename_out = os.path.join(
     config.dirs["fig"],
     (
-        f"monthly_histograms_{x_days}dayacc_"
+        f"monthly_histograms_ks_test_{x_days}dayacc_"
         f"{catchment}_model_era5_{reference_dataset}.png"
     ),
 )
@@ -95,14 +113,14 @@ REFERENCE_LABELS = {
 # Figure settings
 # =============================================================================
 
-FIG_WIDTH_IN = 10.0
-FIG_HEIGHT_IN = 7.5
+FIG_WIDTH_IN = 13.0
+FIG_HEIGHT_IN = 8.0
 
 TITLE_FONTSIZE = 10
 SUPTITLE_FONTSIZE = 12
 AXIS_LABELSIZE = 10
 TICK_LABELSIZE = 9
-LEGEND_FONTSIZE = 9
+LEGEND_FONTSIZE = 7.5
 
 HISTOGRAM_LINEWIDTH = 1.5
 
@@ -185,7 +203,7 @@ def validate_user_settings() -> None:
     Check the user-defined settings before reading any data.
     """
 
-    if number_of_bins < 1:
+    if not isinstance(number_of_bins, int) or number_of_bins < 1:
         raise ValueError(
             "number_of_bins must be an integer greater than or equal to 1."
         )
@@ -198,6 +216,25 @@ def validate_user_settings() -> None:
     if len(forecast_date_range) != 2:
         raise ValueError(
             "forecast_date_range must contain a start date and an end date."
+        )
+
+    valid_alternatives = {"two-sided", "less", "greater"}
+
+    if ks_alternative not in valid_alternatives:
+        raise ValueError(
+            f"ks_alternative must be one of {sorted(valid_alternatives)}."
+        )
+
+    valid_methods = {"auto", "exact", "asymp"}
+
+    if ks_method not in valid_methods:
+        raise ValueError(
+            f"ks_method must be one of {sorted(valid_methods)}."
+        )
+
+    if not 0.0 < significance_level_percent < 100.0:
+        raise ValueError(
+            "significance_level_percent must be greater than 0 and less than 100."
         )
 
 
@@ -404,15 +441,90 @@ def check_monthly_samples(
     dataset_name: str,
 ) -> None:
     """
-    Check that each dataset contains at least one finite value per month.
+    Check that each dataset contains at least two finite values per month.
+
+    At least two values are required for a meaningful distribution comparison.
     """
 
     for month, values in values_by_month.items():
-        if values.size == 0:
+        if values.size < 2:
             raise ValueError(
-                f"No finite {dataset_name} values were found for "
+                f"Fewer than two finite {dataset_name} values were found for "
                 f"{MONTH_LABELS[month - 1]}."
             )
+
+
+# =============================================================================
+# Statistical-test helpers
+# =============================================================================
+
+def perform_ks_test(
+    model_values: np.ndarray,
+    reference_values: np.ndarray,
+) -> tuple[float, float]:
+    """
+    Perform a two-sample Kolmogorov-Smirnov test.
+
+    The null hypothesis is that the model and reference samples are drawn
+    from the same continuous distribution.
+
+    Returns
+    -------
+    statistic : float
+        Maximum absolute difference between the two empirical cumulative
+        distribution functions.
+    p_value : float
+        Probability of obtaining a KS statistic at least this large if the
+        null hypothesis is true.
+    """
+
+    result = ks_2samp(
+        model_values,
+        reference_values,
+        alternative=ks_alternative,
+        method=ks_method,
+    )
+
+    return float(result.statistic), float(result.pvalue)
+
+
+def get_significance_threshold() -> float:
+    """
+    Convert the user-defined confidence level to a p-value threshold.
+
+    For example:
+        95% confidence level -> alpha = 0.05
+        99% confidence level -> alpha = 0.01
+    """
+
+    return 1.0 - significance_level_percent / 100.0
+
+
+def test_failed(p_value: float) -> bool:
+    """
+    Return True when the KS test fails at the selected confidence level.
+
+    A failed test means that the null hypothesis of equal distributions is
+    rejected because the p-value is smaller than the significance threshold.
+    """
+
+    return p_value < get_significance_threshold()
+
+
+def format_p_value(p_value: float) -> str:
+    """
+    Format a p-value compactly and mark failed tests with an asterisk.
+    """
+
+    if p_value < 0.001:
+        formatted = f"{p_value:.1e}"
+    else:
+        formatted = f"{p_value:.3f}"
+
+    if test_failed(p_value):
+        formatted += "*"
+
+    return formatted
 
 
 # =============================================================================
@@ -428,8 +540,8 @@ def calculate_common_bin_edges(
     """
     Calculate common histogram bins for the three datasets in one panel.
 
-    Using common bin edges is essential because it ensures that the three
-    overlaid histograms describe precipitation values over identical intervals.
+    Common bin edges ensure that the overlaid histograms describe identical
+    precipitation intervals.
     """
 
     combined_values = np.concatenate(
@@ -466,11 +578,16 @@ def get_histogram_y_label() -> str:
     return "Number of events"
 
 
-def make_legend_handles(
+def make_panel_legend_handles(
     reference_label: str,
+    era5_p_value: float,
+    reference_p_value: float,
 ) -> list[Line2D]:
     """
-    Create line-style legend handles matching the histogram outlines.
+    Create histogram and p-value legend entries for one monthly panel.
+
+    The p-value for each reference dataset is shown in the color used for its
+    histogram.
     """
 
     return [
@@ -486,14 +603,17 @@ def make_legend_handles(
             [0],
             color=SENORGE_COLOR,
             linewidth=HISTOGRAM_LINEWIDTH,
-            label=reference_label,
+            label=(
+                f"{reference_label}: "
+                f"$p_{{KS}}$={format_p_value(reference_p_value)}"
+            ),
         ),
         Line2D(
             [0],
             [0],
             color=ERA5_COLOR,
             linewidth=HISTOGRAM_LINEWIDTH,
-            label="ERA5",
+            label=f"ERA5: $p_{{KS}}$={format_p_value(era5_p_value)}",
         ),
     ]
 
@@ -515,7 +635,7 @@ def apply_axis_formatting(
     ax.set_title(
         month_label,
         fontsize=TITLE_FONTSIZE,
-        fontweight="bold",
+        fontweight="normal",
         pad=5,
     )
 
@@ -544,14 +664,12 @@ def apply_axis_formatting(
     ax.spines["left"].set_linewidth(0.8)
     ax.spines["bottom"].set_linewidth(0.8)
 
-    # Only the bottom row receives an x-axis label.
     if row_index == 2:
         ax.set_xlabel(
             "Precipitation [mm]",
             fontsize=AXIS_LABELSIZE,
         )
 
-    # Only the first column receives a y-axis label.
     if column_index == 0:
         ax.set_ylabel(
             get_histogram_y_label(),
@@ -572,10 +690,15 @@ def plot_monthly_histograms(
     write2file: bool,
 ) -> None:
     """
-    Plot monthly model, ERA5, and SeNorge precipitation distributions.
+    Plot monthly precipitation distributions and KS-test p-values.
 
-    Each month uses bin edges calculated from the combined values of all three
-    datasets for that month. The histograms are outlines without shading.
+    For each month:
+
+    - All three histograms use common bin edges.
+    - Histograms are outlines without shading.
+    - ERA5 is compared with the model using a two-sample KS test.
+    - SeNorge or SeNorge-regrid is compared with the model using the same test.
+    - Both p-values are shown in the panel legend.
     """
 
     fig, axes = plt.subplots(
@@ -584,6 +707,42 @@ def plot_monthly_histograms(
         figsize=(FIG_WIDTH_IN, FIG_HEIGHT_IN),
         squeeze=False,
     )
+
+    # -----------------------------------------------------------------
+    # Calculate common x- and y-axis limits across all 12 months.
+    # -----------------------------------------------------------------
+
+    global_x_min = np.inf
+    global_x_max = -np.inf
+    global_y_max = 0.0
+
+    for month in MONTHS:
+
+        model_values = model_values_by_month[month]
+        era5_values = era5_values_by_month[month]
+        reference_values = reference_values_by_month[month]
+
+        bin_edges = calculate_common_bin_edges(
+            model_values=model_values,
+            era5_values=era5_values,
+            reference_values=reference_values,
+            number_of_bins=number_of_bins,
+        )
+
+        global_x_min = min(global_x_min, bin_edges[0])
+        global_x_max = max(global_x_max, bin_edges[-1])
+
+        for values in (model_values, era5_values, reference_values):
+
+            counts, _ = np.histogram(
+                values,
+                bins=bin_edges,
+                density=plot_probability_density,
+            )
+
+            global_y_max = max(global_y_max, np.nanmax(counts))
+
+    global_y_max *= 1.05
 
     for month_index, month in enumerate(MONTHS):
         row_index = month_index // 4
@@ -602,7 +761,16 @@ def plot_monthly_histograms(
             number_of_bins=number_of_bins,
         )
 
-        # Model histogram
+        _, era5_p_value = perform_ks_test(
+            model_values=model_values,
+            reference_values=era5_values,
+        )
+
+        _, reference_p_value = perform_ks_test(
+            model_values=model_values,
+            reference_values=reference_values,
+        )
+
         ax.hist(
             model_values,
             bins=bin_edges,
@@ -610,11 +778,9 @@ def plot_monthly_histograms(
             histtype="step",
             color=MODEL_COLOR,
             linewidth=HISTOGRAM_LINEWIDTH,
-            label="Model",
             zorder=3,
         )
 
-        # SeNorge histogram
         ax.hist(
             reference_values,
             bins=bin_edges,
@@ -622,11 +788,9 @@ def plot_monthly_histograms(
             histtype="step",
             color=SENORGE_COLOR,
             linewidth=HISTOGRAM_LINEWIDTH,
-            label=reference_label,
             zorder=2,
         )
 
-        # ERA5 histogram
         ax.hist(
             era5_values,
             bins=bin_edges,
@@ -634,18 +798,35 @@ def plot_monthly_histograms(
             histtype="step",
             color=ERA5_COLOR,
             linewidth=HISTOGRAM_LINEWIDTH,
-            label="ERA5",
             zorder=1,
         )
 
-        ax.set_xlim(bin_edges[0], bin_edges[-1])
-        ax.set_ylim(bottom=0)
+        ax.set_xlim(global_x_min, global_x_max)
+        ax.set_ylim(0, global_y_max)
 
         apply_axis_formatting(
             ax=ax,
             month_label=MONTH_LABELS[month - 1],
             row_index=row_index,
             column_index=column_index,
+        )
+
+        ax.legend(
+            handles=make_panel_legend_handles(
+                reference_label=reference_label,
+                era5_p_value=era5_p_value,
+                reference_p_value=reference_p_value,
+            ),
+            loc="upper right",
+            frameon=False,
+            facecolor="white",
+            edgecolor="0.8",
+            framealpha=0.9,
+            fontsize=LEGEND_FONTSIZE,
+            handlelength=1.8,
+            handletextpad=0.5,
+            borderaxespad=0.4,
+            labelspacing=0.25,
         )
 
     catchment_label = get_catchment_label(catchment)
@@ -656,26 +837,15 @@ def plot_monthly_histograms(
             f"{x_days}-day accumulated precipitation maxima"
         ),
         fontsize=SUPTITLE_FONTSIZE,
-        fontweight="bold",
+        fontweight="normal",
         y=0.985,
-    )
-
-    fig.legend(
-        handles=make_legend_handles(reference_label),
-        loc="upper center",
-        bbox_to_anchor=(0.5, 0.945),
-        ncol=3,
-        frameon=False,
-        fontsize=LEGEND_FONTSIZE,
-        handlelength=2.5,
-        columnspacing=2.0,
     )
 
     fig.subplots_adjust(
         left=0.08,
         right=0.98,
         bottom=0.08,
-        top=0.88,
+        top=0.93,
         wspace=0.28,
         hspace=0.38,
     )
@@ -769,14 +939,32 @@ if __name__ == "__main__":
         )
 
         print()
-        print("Number of values in January")
-        print("---------------------------")
-        print(f"Model:     {model_values_by_month[1].size}")
-        print(f"ERA5:      {era5_values_by_month[1].size}")
+        print("Monthly Kolmogorov-Smirnov tests")
+        print("--------------------------------")
         print(
-            f"{reference_label}: "
-            f"{reference_values_by_month[1].size}"
+            f"Failure threshold: p < {get_significance_threshold():.4f} "
+            f"({significance_level_percent:g}% confidence level)"
         )
+        print("An asterisk marks a failed test.")
+
+        for month in MONTHS:
+            era5_statistic, era5_p_value = perform_ks_test(
+                model_values=model_values_by_month[month],
+                reference_values=era5_values_by_month[month],
+            )
+
+            reference_statistic, reference_p_value = perform_ks_test(
+                model_values=model_values_by_month[month],
+                reference_values=reference_values_by_month[month],
+            )
+
+            print(
+                f"{MONTH_LABELS[month - 1]:>9s} | "
+                f"ERA5: D={era5_statistic:.3f}, "
+                f"p={era5_p_value:.4g} | "
+                f"{reference_label}: D={reference_statistic:.3f}, "
+                f"p={reference_p_value:.4g}"
+            )
 
         plot_monthly_histograms(
             model_values_by_month=model_values_by_month,
@@ -791,4 +979,3 @@ if __name__ == "__main__":
         model_ds.close()
         era5_ds.close()
         reference_ds.close()
-
