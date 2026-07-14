@@ -45,7 +45,7 @@ from Dunnsigouin_etal_2026 import config
 # =============================================================================
 
 # Catchment and accumulation period
-catchment = "regine_glomma"
+catchment = "regine_drammen"
 x_days = 2
 
 # Select either native-grid or regridded SeNorge data
