@@ -14,9 +14,9 @@ from Dunnsigouin_etal_2026 import config
 
 
 # input -----------------------------------------------------------------
-dataset    = "senorge_regrid"   # "senorge", "senorge_regrid", "era5", or "era5_land"
-variable   = "rr"               # e.g. "rr", "gwb_q", "tp24", "ro", "sro"
-years      = np.arange(1957, 2024)
+dataset    = "era5"   # "senorge", "senorge_regrid", "era5", or "era5_land"
+variable   = "tp24"               # e.g. "rr", "gwb_q", "tp24", "ro", "sro"
+years      = np.arange(1957, 2023)
 x_days     = 2
 catchment  = "regine_glomma"
 write2file = True

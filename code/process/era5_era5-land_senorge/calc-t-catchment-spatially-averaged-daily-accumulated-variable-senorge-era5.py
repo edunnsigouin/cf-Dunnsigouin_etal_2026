@@ -28,11 +28,11 @@ from Dunnsigouin_etal_2026 import config, misc
 # User settings
 # =============================================================================
 
-dataset    = "era5_land"      # "senorge", "senorge_regrid", "era5", or "era5_land"
-variable   = "ro"                  # "rr", "gwb_q", "tp24", "ro", "sro"
-years      = np.arange(1950, 2024)
+dataset    = "era5"      # "senorge", "senorge_regrid", "era5", or "era5_land"
+variable   = "tp24"                  # "rr", "gwb_q", "tp24", "ro", "sro"
+years      = np.arange(1957, 2023)
 x_days     = 2
-catchment  = "regine_drammen"
+catchment  = "regine_glomma"
 write2file = True
 
 # Optional spatial subset for ERA5 / ERA5-Land only.

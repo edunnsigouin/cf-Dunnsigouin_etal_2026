@@ -1,43 +1,24 @@
 """
-Perform a monthly UNSEEN moments-based model fidelity test.
+Perform a monthly UNSEEN moments-based fidelity test.
 
-For each calendar month, this script:
+For each month, the script:
 
-1. Extracts the full model sample of X-day accumulated precipitation maxima.
-2. Extracts the ERA5 and SeNorge observational/reference samples.
-3. Repeatedly resamples the model, with replacement, using the same sample
-   length as the reference datasets.
+1. Reads the full model sample of X-day accumulated precipitation maxima.
+2. Reads the ERA5 and SeNorge samples.
+3. Resamples the model with replacement using the same sample size as the
+   ERA5 and SeNorge samples.
 4. Calculates one selected statistic for every model resample:
       - mean
       - standard deviation
       - skewness
       - kurtosis
-5. Compares the ERA5 and SeNorge statistics with the resulting model
-   bootstrap distribution.
-6. Plots the model bootstrap distribution and the two reference values in a
-   publication-quality 3 x 4 panel figure.
+5. Compares the ERA5 and SeNorge statistic with the model bootstrap
+   distribution.
+6. Plots the model bootstrap distribution and the ERA5 and SeNorge values in
+   a publication-quality 3 x 4 panel figure.
 
-A reference dataset passes the moments test when its statistic lies inside
-the central confidence interval of the bootstrapped model distribution.
-
-Notes
------
-- The ERA5 and SeNorge monthly samples are expected to have the same length.
-  This is normally true when they cover the same years and contain no missing
-  values.
-- Standard deviation is calculated using ddof=1.
-- Skewness and kurtosis are calculated using bias-corrected estimators.
-- Kurtosis is Fisher kurtosis, so a normal distribution has kurtosis = 0.
-
-Inputs
-------
-- S2S monthly extreme distribution file.
-- ERA5 monthly extreme distribution file.
-- SeNorge or regridded SeNorge monthly extreme distribution file.
-
-Output
-------
-- One publication-quality 3 x 4 panel PNG figure for the selected statistic.
+ERA5 or SeNorge fails the moments test when its statistic lies outside the
+central confidence interval of the model bootstrap distribution.
 """
 
 import os
@@ -60,42 +41,43 @@ from Dunnsigouin_etal_2026 import config
 catchment = "regine_drammen"
 x_days = 2
 
-# Select either native-grid or regridded SeNorge data
-reference_dataset = "senorge"  # "senorge" or "senorge_regrid"
-
 # Date ranges used in the input filenames
 forecast_date_range = ["2020-01-02", "2023-06-26"]
 reference_years = ["1957", "2023"]
 
-# ERA5 grid used for the reference dataset
+# ERA5 grid
 era5_grid = "0.5x0.5"
+
+# SeNorge dataset
+senorge_dataset = "senorge"  # "senorge" or "senorge_regrid"
 
 # Statistic to test and plot:
 # "mean", "std", "skewness", or "kurtosis"
 statistic = "kurtosis"
 
-# Number of model resamples used to construct the bootstrap distribution
-number_of_bootstrap_samples = 10_000
+# Apply finite-sample bias correction to skewness and kurtosis
+bias_correct_skewness = True
+bias_correct_kurtosis = True
+
+# Number of model resamples
+number_of_bootstrap_samples = 10000
 
 # Number of histogram bins
 number_of_bins = 30
 
-# Confidence level used for the moments test.
-# At 95%, a reference value fails if it lies outside the central 95% interval
-# of the bootstrapped model statistic.
+# Confidence level for the moments test
 confidence_level_percent = 95.0
 
-# Seed makes the random resampling reproducible.
-# Set to None for a different random result every time.
+# Random seed for reproducible resampling
 random_seed = 42
 
-# Normalize the histograms to probability density
+# Normalize histograms to probability density
 plot_probability_density = True
 
-# Use identical x- and y-axis limits in all monthly panels
+# Use the same x- and y-axis limits for all months
 use_common_axis_limits = True
 
-# Add a small margin above the largest histogram value
+# Add a small margin above the highest histogram
 y_axis_margin_fraction = 0.08
 
 # Figure output
@@ -104,31 +86,28 @@ filename_out = os.path.join(
     config.dirs["fig"],
     (
         f"monthly_moments_test_{statistic}_{x_days}dayacc_"
-        f"{catchment}_model_era5_{reference_dataset}.png"
+        f"{catchment}_model_{forecast_date_range[0]}_{forecast_date_range[1]}_"
+        f"era5_senorge_{reference_years[0]}-{reference_years[1]}.png"
     ),
 )
 
 
 # =============================================================================
-# Dataset-specific settings
+# Dataset settings
 # =============================================================================
 
-# Model data
-MODEL_VARIABLE = "tp"
+MODEL_VARIABLE = "tp24"
 MODEL_EXTREME_VARIABLE = "max_value"
 MODEL_MONTH_COORDINATE = "month_of_year"
 
-# ERA5 data
-ERA5_VARIABLE = "tp"
+ERA5_VARIABLE = "tp24"
 
-# SeNorge variable names
-REFERENCE_VARIABLES = {
-    "senorge": "tp",
+SENORGE_VARIABLES = {
+    "senorge": "rr",
     "senorge_regrid": "rr",
 }
 
-# Plot labels
-REFERENCE_LABELS = {
+SENORGE_LABELS = {
     "senorge": "SeNorge",
     "senorge_regrid": "SeNorge regrid",
 }
@@ -139,7 +118,7 @@ REFERENCE_LABELS = {
 # =============================================================================
 
 FIG_WIDTH_IN = 13.0
-FIG_HEIGHT_IN = 8
+FIG_HEIGHT_IN = 8.0
 
 TITLE_FONTSIZE = 10
 SUPTITLE_FONTSIZE = 12
@@ -149,6 +128,7 @@ LEGEND_FONTSIZE = 7.5
 
 HISTOGRAM_LINEWIDTH = 1.4
 REFERENCE_LINEWIDTH = 1.6
+CONFIDENCE_LINEWIDTH = 1.2
 
 MODEL_COLOR = "black"
 SENORGE_COLOR = "tab:red"
@@ -190,42 +170,36 @@ STATISTIC_AXIS_LABELS = {
 # Configuration helpers
 # =============================================================================
 
-def get_reference_variable(reference_dataset: str) -> str:
-    """
-    Return the precipitation variable used by the selected SeNorge dataset.
-    """
+def get_senorge_variable() -> str:
+    """Return the variable name used by the selected SeNorge dataset."""
 
-    if reference_dataset not in REFERENCE_VARIABLES:
-        valid_options = ", ".join(REFERENCE_VARIABLES)
+    if senorge_dataset not in SENORGE_VARIABLES:
+        valid_options = ", ".join(SENORGE_VARIABLES)
 
         raise ValueError(
-            f"Unknown reference_dataset '{reference_dataset}'. "
+            f"Unknown senorge_dataset '{senorge_dataset}'. "
             f"Valid options are: {valid_options}."
         )
 
-    return REFERENCE_VARIABLES[reference_dataset]
+    return SENORGE_VARIABLES[senorge_dataset]
 
 
-def get_reference_label(reference_dataset: str) -> str:
-    """
-    Return a publication-friendly name for the selected SeNorge dataset.
-    """
+def get_senorge_label() -> str:
+    """Return the plot label for the selected SeNorge dataset."""
 
-    if reference_dataset not in REFERENCE_LABELS:
-        valid_options = ", ".join(REFERENCE_LABELS)
+    if senorge_dataset not in SENORGE_LABELS:
+        valid_options = ", ".join(SENORGE_LABELS)
 
         raise ValueError(
-            f"Unknown reference_dataset '{reference_dataset}'. "
+            f"Unknown senorge_dataset '{senorge_dataset}'. "
             f"Valid options are: {valid_options}."
         )
 
-    return REFERENCE_LABELS[reference_dataset]
+    return SENORGE_LABELS[senorge_dataset]
 
 
-def get_catchment_label(catchment: str) -> str:
-    """
-    Return a publication-friendly catchment name.
-    """
+def get_catchment_label() -> str:
+    """Return a readable catchment name."""
 
     labels = {
         "regine_drammen": "Drammen catchment",
@@ -238,18 +212,32 @@ def get_catchment_label(catchment: str) -> str:
     )
 
 
+def get_bias_correction_label() -> str:
+    """Describe the bias-correction setting for the selected statistic."""
+
+    if statistic == "skewness":
+        return "on" if bias_correct_skewness else "off"
+
+    if statistic == "kurtosis":
+        return "on" if bias_correct_kurtosis else "off"
+
+    return "not applicable"
+
+
 def validate_user_settings() -> None:
-    """
-    Check user-defined settings before reading or processing data.
-    """
+    """Check the user-defined settings."""
 
-    valid_statistics = set(STATISTIC_LABELS)
-
-    if statistic not in valid_statistics:
+    if statistic not in STATISTIC_LABELS:
         raise ValueError(
             f"Unknown statistic '{statistic}'. "
-            f"Valid options are: {sorted(valid_statistics)}."
+            f"Valid options are: {sorted(STATISTIC_LABELS)}."
         )
+
+    if not isinstance(bias_correct_skewness, bool):
+        raise TypeError("bias_correct_skewness must be True or False.")
+
+    if not isinstance(bias_correct_kurtosis, bool):
+        raise TypeError("bias_correct_kurtosis must be True or False.")
 
     if not isinstance(number_of_bootstrap_samples, int):
         raise TypeError("number_of_bootstrap_samples must be an integer.")
@@ -293,43 +281,36 @@ def validate_user_settings() -> None:
 # =============================================================================
 
 def make_model_filename() -> str:
-    """
-    Create the S2S forecast and hindcast input filename.
-    """
+    """Create the model input filename."""
 
     return (
         f"{config.dirs['s2s_processed']}"
         f"distribution_monthly_extremes_{MODEL_VARIABLE}_{x_days}dayacc_"
-        f"nve_catchment_{catchment}_forecast_hindcast_"
+        f"{catchment}_forecast_hindcast_"
         f"{forecast_date_range[0]}_{forecast_date_range[1]}.nc"
     )
 
 
 def make_era5_filename() -> str:
-    """
-    Create the ERA5 input filename.
-    """
+    """Create the ERA5 input filename."""
 
     return (
         f"{config.dirs['era5_processed']}"
         f"distribution_monthly_extremes_{ERA5_VARIABLE}_{x_days}dayacc_"
-        f"nve_catchment_{catchment}_era5_{era5_grid}_"
+        f"{catchment}_era5_{era5_grid}_"
         f"{reference_years[0]}-{reference_years[1]}.nc"
     )
 
 
-def make_reference_filename(
-    reference_dataset: str,
-    reference_variable: str,
+def make_senorge_filename(
+    senorge_variable: str,
 ) -> str:
-    """
-    Create the SeNorge or SeNorge-regrid input filename.
-    """
+    """Create the SeNorge or SeNorge-regrid input filename."""
 
     return (
-        f"{config.dirs[f'{reference_dataset}_processed']}"
-        f"distribution_monthly_extremes_{reference_variable}_{x_days}dayacc_"
-        f"{catchment}_{reference_dataset}_"
+        f"{config.dirs[f'{senorge_dataset}_processed']}"
+        f"distribution_monthly_extremes_{senorge_variable}_{x_days}dayacc_"
+        f"{catchment}_{senorge_dataset}_"
         f"{reference_years[0]}-{reference_years[1]}.nc"
     )
 
@@ -341,17 +322,15 @@ def make_reference_filename(
 def load_datasets(
     filename_model: str,
     filename_era5: str,
-    filename_reference: str,
+    filename_senorge: str,
 ) -> tuple[xr.Dataset, xr.Dataset, xr.Dataset]:
-    """
-    Open the model, ERA5, and SeNorge datasets.
-    """
+    """Open the model, ERA5, and SeNorge datasets."""
 
     model_ds = xr.open_dataset(filename_model)
     era5_ds = xr.open_dataset(filename_era5)
-    reference_ds = xr.open_dataset(filename_reference)
+    senorge_ds = xr.open_dataset(filename_senorge)
 
-    return model_ds, era5_ds, reference_ds
+    return model_ds, era5_ds, senorge_ds
 
 
 def check_variable_exists(
@@ -359,9 +338,7 @@ def check_variable_exists(
     variable: str,
     dataset_name: str,
 ) -> None:
-    """
-    Raise a clear error when a required variable is missing.
-    """
+    """Raise an error when a required variable is missing."""
 
     if variable not in ds:
         raise KeyError(
@@ -375,9 +352,7 @@ def check_coordinate_exists(
     coordinate: str,
     dataset_name: str,
 ) -> None:
-    """
-    Raise a clear error when a required coordinate or dimension is missing.
-    """
+    """Raise an error when a required coordinate is missing."""
 
     available_names = set(data.coords) | set(data.dims)
 
@@ -394,9 +369,7 @@ def check_coordinate_exists(
 # =============================================================================
 
 def remove_missing_values(values: np.ndarray) -> np.ndarray:
-    """
-    Flatten an array and retain only finite values.
-    """
+    """Flatten an array and keep only finite values."""
 
     values = np.asarray(values).ravel()
     return values[np.isfinite(values)]
@@ -404,31 +377,21 @@ def remove_missing_values(values: np.ndarray) -> np.ndarray:
 
 def get_model_values_by_month(
     model_ds: xr.Dataset,
-    variable: str = MODEL_EXTREME_VARIABLE,
 ) -> dict[int, np.ndarray]:
-    """
-    Extract one array of model precipitation extremes for each month.
-
-    Expected model structure:
-
-        max_value(month_of_year, index)
-
-    Additional dimensions are allowed because the selected monthly values are
-    flattened before analysis.
-    """
+    """Extract one model array for each calendar month."""
 
     check_variable_exists(
         model_ds,
-        variable,
-        dataset_name="model dataset",
+        MODEL_EXTREME_VARIABLE,
+        "model dataset",
     )
 
-    data = model_ds[variable]
+    data = model_ds[MODEL_EXTREME_VARIABLE]
 
     check_coordinate_exists(
         data,
         MODEL_MONTH_COORDINATE,
-        dataset_name="model dataset",
+        "model dataset",
     )
 
     values_by_month = {}
@@ -445,23 +408,17 @@ def get_model_values_by_month(
     return values_by_month
 
 
-def get_reference_values_by_month(
+def get_dataset_values_by_month(
     ds: xr.Dataset,
     variable: str,
     dataset_name: str,
 ) -> dict[int, np.ndarray]:
-    """
-    Extract annual monthly precipitation extremes for each calendar month.
-
-    Expected reference-data structure:
-
-        variable(year, month)
-    """
+    """Extract annual monthly extremes for each calendar month."""
 
     check_variable_exists(
         ds,
         variable,
-        dataset_name=dataset_name,
+        dataset_name,
     )
 
     data = ds[variable]
@@ -469,7 +426,7 @@ def get_reference_values_by_month(
     check_coordinate_exists(
         data,
         "month",
-        dataset_name=dataset_name,
+        dataset_name,
     )
 
     values_by_month = {}
@@ -488,45 +445,38 @@ def check_monthly_samples(
     values_by_month: dict[int, np.ndarray],
     dataset_name: str,
 ) -> None:
-    """
-    Check that each month has enough values for the selected statistic.
-    """
+    """Check that every month has enough values."""
 
-    minimum_sample_size = 4 if statistic in {"skewness", "kurtosis"} else 2
+    minimum_sample_size = (
+        4 if statistic in {"skewness", "kurtosis"} else 2
+    )
 
     for month, values in values_by_month.items():
         if values.size < minimum_sample_size:
             raise ValueError(
                 f"Only {values.size} finite {dataset_name} values were found "
                 f"for {MONTH_LABELS[month - 1]}. At least "
-                f"{minimum_sample_size} values are required for {statistic}."
+                f"{minimum_sample_size} values are required."
             )
 
 
-def check_reference_sample_sizes(
+def check_era5_senorge_sample_sizes(
     era5_values_by_month: dict[int, np.ndarray],
-    reference_values_by_month: dict[int, np.ndarray],
-    reference_label: str,
+    senorge_values_by_month: dict[int, np.ndarray],
+    senorge_label: str,
 ) -> None:
-    """
-    Require ERA5 and SeNorge to have equal sample sizes in each month.
-
-    A single model bootstrap distribution is plotted in each panel. Therefore,
-    both reference statistics must be compared with a model distribution
-    generated using the same sample size.
-    """
+    """Require ERA5 and SeNorge to have equal monthly sample sizes."""
 
     for month in MONTHS:
         era5_size = era5_values_by_month[month].size
-        reference_size = reference_values_by_month[month].size
+        senorge_size = senorge_values_by_month[month].size
 
-        if era5_size != reference_size:
+        if era5_size != senorge_size:
             raise ValueError(
-                f"ERA5 and {reference_label} have different sample sizes for "
+                f"ERA5 and {senorge_label} have different sample sizes for "
                 f"{MONTH_LABELS[month - 1]}: ERA5={era5_size}, "
-                f"{reference_label}={reference_size}. A single bootstrap "
-                "distribution cannot exactly match both reference lengths. "
-                "Check missing data or use a common period before running."
+                f"{senorge_label}={senorge_size}. "
+                "Use a common period or remove missing values consistently."
             )
 
 
@@ -534,119 +484,93 @@ def check_reference_sample_sizes(
 # Statistic and bootstrap helpers
 # =============================================================================
 
-def calculate_statistic(values: np.ndarray, statistic_name: str) -> float:
-    """
-    Calculate the selected sample statistic.
+def calculate_statistic(
+    values: np.ndarray,
+) -> float:
+    """Calculate the selected statistic."""
 
-    Parameters
-    ----------
-    values
-        One-dimensional sample.
-    statistic_name
-        One of: "mean", "std", "skewness", or "kurtosis".
-    """
-
-    if statistic_name == "mean":
+    if statistic == "mean":
         return float(np.mean(values))
 
-    if statistic_name == "std":
+    if statistic == "std":
         return float(np.std(values, ddof=1))
 
-    if statistic_name == "skewness":
-        return float(skew(values, bias=False))
+    if statistic == "skewness":
+        return float(
+            skew(
+                values,
+                bias=not bias_correct_skewness,
+            )
+        )
 
-    if statistic_name == "kurtosis":
+    if statistic == "kurtosis":
         return float(
             kurtosis(
                 values,
                 fisher=True,
-                bias=False,
+                bias=not bias_correct_kurtosis,
             )
         )
 
-    raise ValueError(f"Unsupported statistic: {statistic_name}")
+    raise ValueError(f"Unsupported statistic: {statistic}")
 
 
-def get_vectorized_statistic_function(
-    statistic_name: str,
-) -> Callable[[np.ndarray], np.ndarray]:
-    """
-    Return a function that calculates the selected statistic along axis 1.
+def get_vectorized_statistic_function() -> Callable[[np.ndarray], np.ndarray]:
+    """Return the selected statistic calculated along axis 1."""
 
-    This allows all bootstrap resamples to be processed efficiently.
-    """
-
-    if statistic_name == "mean":
+    if statistic == "mean":
         return lambda samples: np.mean(samples, axis=1)
 
-    if statistic_name == "std":
-        return lambda samples: np.std(samples, axis=1, ddof=1)
+    if statistic == "std":
+        return lambda samples: np.std(
+            samples,
+            axis=1,
+            ddof=1,
+        )
 
-    if statistic_name == "skewness":
+    if statistic == "skewness":
         return lambda samples: skew(
             samples,
             axis=1,
-            bias=False,
+            bias=not bias_correct_skewness,
         )
 
-    if statistic_name == "kurtosis":
+    if statistic == "kurtosis":
         return lambda samples: kurtosis(
             samples,
             axis=1,
             fisher=True,
-            bias=False,
+            bias=not bias_correct_kurtosis,
         )
 
-    raise ValueError(f"Unsupported statistic: {statistic_name}")
+    raise ValueError(f"Unsupported statistic: {statistic}")
 
 
 def bootstrap_model_statistic(
     model_values: np.ndarray,
     sample_size: int,
-    number_of_samples: int,
     rng: np.random.Generator,
 ) -> np.ndarray:
-    """
-    Construct a bootstrap distribution of the selected model statistic.
-
-    The model is sampled with replacement. Every resample has the same number
-    of values as the observational/reference samples.
-    """
-
-    if sample_size > model_values.size:
-        print(
-            "Warning: the reference sample is larger than the model sample. "
-            "Sampling with replacement remains valid, but this is unusual."
-        )
+    """Create the bootstrap distribution of the selected model statistic."""
 
     sample_indices = rng.integers(
         low=0,
         high=model_values.size,
-        size=(number_of_samples, sample_size),
+        size=(number_of_bootstrap_samples, sample_size),
     )
 
     resampled_values = model_values[sample_indices]
 
-    statistic_function = get_vectorized_statistic_function(statistic)
+    statistic_function = get_vectorized_statistic_function()
+    bootstrap_values = statistic_function(resampled_values)
 
-    bootstrap_statistics = statistic_function(resampled_values)
-    bootstrap_statistics = remove_missing_values(bootstrap_statistics)
-
-    if bootstrap_statistics.size != number_of_samples:
-        print(
-            f"Warning: retained {bootstrap_statistics.size} finite bootstrap "
-            f"statistics out of {number_of_samples} for {statistic}."
-        )
-
-    return bootstrap_statistics
+    return remove_missing_values(bootstrap_values)
 
 
 def calculate_confidence_interval(
     bootstrap_values: np.ndarray,
 ) -> tuple[float, float]:
-    """
-    Calculate the central bootstrap confidence interval.
-    """
+    """Calculate the central model confidence interval."""
 
     alpha_percent = 100.0 - confidence_level_percent
     lower_percentile = alpha_percent / 2.0
@@ -665,44 +589,23 @@ def calculate_confidence_interval(
     return float(lower), float(upper)
 
 
-def reference_passes_test(
-    reference_value: float,
+def value_passes_test(
+    value: float,
     confidence_interval: tuple[float, float],
 ) -> bool:
-    """
-    Return True when the reference statistic is inside the model interval.
-    """
+    """Return True when a value lies inside the model interval."""
 
     lower, upper = confidence_interval
-    return lower <= reference_value <= upper
+    return lower <= value <= upper
 
 
 def format_statistic_value(value: float) -> str:
-    """
-    Format a statistic compactly for legends and terminal output.
-    """
+    """Format a statistic for legends and terminal output."""
 
     if statistic in {"mean", "std"}:
         return f"{value:.1f}"
 
     return f"{value:.2f}"
-
-
-def format_reference_label(
-    dataset_label: str,
-    value: float,
-    passes: bool,
-) -> str:
-    """
-    Create a legend label and mark a failed moments test with an asterisk.
-    """
-
-    asterisk = "" if passes else "*"
-
-    return (
-        f"{dataset_label}: "
-        f"{format_statistic_value(value)}{asterisk}"
-    )
 
 
 # =============================================================================
@@ -712,26 +615,23 @@ def format_reference_label(
 def perform_monthly_moments_test(
     model_values_by_month: dict[int, np.ndarray],
     era5_values_by_month: dict[int, np.ndarray],
-    reference_values_by_month: dict[int, np.ndarray],
+    senorge_values_by_month: dict[int, np.ndarray],
     rng: np.random.Generator,
 ) -> dict[int, dict[str, object]]:
-    """
-    Perform the bootstrap moments test independently for every month.
-    """
+    """Perform the moments test separately for each month."""
 
     results = {}
 
     for month in MONTHS:
         model_values = model_values_by_month[month]
         era5_values = era5_values_by_month[month]
-        reference_values = reference_values_by_month[month]
+        senorge_values = senorge_values_by_month[month]
 
         sample_size = era5_values.size
 
         bootstrap_values = bootstrap_model_statistic(
             model_values=model_values,
             sample_size=sample_size,
-            number_of_samples=number_of_bootstrap_samples,
             rng=rng,
         )
 
@@ -740,23 +640,11 @@ def perform_monthly_moments_test(
         )
 
         era5_value = calculate_statistic(
-            era5_values,
-            statistic,
+            era5_values
         )
 
-        reference_value = calculate_statistic(
-            reference_values,
-            statistic,
-        )
-
-        era5_passes = reference_passes_test(
-            era5_value,
-            confidence_interval,
-        )
-
-        reference_passes = reference_passes_test(
-            reference_value,
-            confidence_interval,
+        senorge_value = calculate_statistic(
+            senorge_values
         )
 
         results[month] = {
@@ -764,9 +652,15 @@ def perform_monthly_moments_test(
             "confidence_interval": confidence_interval,
             "sample_size": sample_size,
             "era5_value": era5_value,
-            "reference_value": reference_value,
-            "era5_passes": era5_passes,
-            "reference_passes": reference_passes,
+            "senorge_value": senorge_value,
+            "era5_passes": value_passes_test(
+                era5_value,
+                confidence_interval,
+            ),
+            "senorge_passes": value_passes_test(
+                senorge_value,
+                confidence_interval,
+            ),
         }
 
     return results
@@ -779,12 +673,7 @@ def perform_monthly_moments_test(
 def calculate_global_histogram_settings(
     results: dict[int, dict[str, object]],
 ) -> tuple[np.ndarray, float]:
-    """
-    Calculate common histogram bins and a common y-axis maximum.
-
-    The x-axis covers all model bootstrap values and both reference values over
-    all 12 months. The y-axis is based on the tallest monthly histogram.
-    """
+    """Calculate common histogram bins and a common y-axis maximum."""
 
     all_values = []
 
@@ -799,7 +688,7 @@ def calculate_global_histogram_settings(
             np.asarray(
                 [
                     month_results["era5_value"],
-                    month_results["reference_value"],
+                    month_results["senorge_value"],
                 ]
             )
         )
@@ -811,12 +700,11 @@ def calculate_global_histogram_settings(
 
     if np.isclose(x_min, x_max):
         padding = max(abs(x_min) * 0.05, 0.5)
-        x_min -= padding
-        x_max += padding
     else:
         padding = 0.03 * (x_max - x_min)
-        x_min -= padding
-        x_max += padding
+
+    x_min -= padding
+    x_max += padding
 
     common_bin_edges = np.linspace(
         x_min,
@@ -833,7 +721,10 @@ def calculate_global_histogram_settings(
             density=plot_probability_density,
         )
 
-        y_max = max(y_max, float(np.max(counts)))
+        y_max = max(
+            y_max,
+            float(np.max(counts)),
+        )
 
     y_max *= 1.0 + y_axis_margin_fraction
 
@@ -843,9 +734,7 @@ def calculate_global_histogram_settings(
 def calculate_monthly_bin_edges(
     month_results: dict[str, object],
 ) -> np.ndarray:
-    """
-    Calculate panel-specific bins when common axes are not requested.
-    """
+    """Calculate bins for one month."""
 
     combined_values = np.concatenate(
         [
@@ -853,7 +742,7 @@ def calculate_monthly_bin_edges(
             np.asarray(
                 [
                     month_results["era5_value"],
-                    month_results["reference_value"],
+                    month_results["senorge_value"],
                 ]
             ),
         ]
@@ -864,24 +753,18 @@ def calculate_monthly_bin_edges(
 
     if np.isclose(x_min, x_max):
         padding = max(abs(x_min) * 0.05, 0.5)
-        x_min -= padding
-        x_max += padding
     else:
         padding = 0.03 * (x_max - x_min)
-        x_min -= padding
-        x_max += padding
 
     return np.linspace(
-        x_min,
-        x_max,
+        x_min - padding,
+        x_max + padding,
         number_of_bins + 1,
     )
 
 
 def get_histogram_y_label() -> str:
-    """
-    Return the y-axis label corresponding to histogram normalization.
-    """
+    """Return the histogram y-axis label."""
 
     if plot_probability_density:
         return "Probability density"
@@ -889,15 +772,22 @@ def get_histogram_y_label() -> str:
     return "Bootstrap samples"
 
 
-def make_panel_legend_handles(
-    reference_label: str,
+# =============================================================================
+# Legend helpers
+# =============================================================================
+
+def make_full_legend_handles(
+    senorge_label: str,
     month_results: dict[str, object],
 ) -> list[Line2D]:
     """
-    Create legend handles for one monthly panel.
+    Create the full legend used in the top-left panel.
+
+    Failure labels are appended below the main legend entries when ERA5 or
+    SeNorge fails the moments test in January.
     """
 
-    return [
+    handles = [
         Line2D(
             [0],
             [0],
@@ -909,8 +799,8 @@ def make_panel_legend_handles(
             [0],
             [0],
             color=MODEL_COLOR,
-            linewidth=1.2,
-            linestyle=":",
+            linewidth=CONFIDENCE_LINEWIDTH,
+            linestyle="--",
             label=f"{confidence_level_percent:g}% model interval",
         ),
         Line2D(
@@ -918,26 +808,101 @@ def make_panel_legend_handles(
             [0],
             color=ERA5_COLOR,
             linewidth=REFERENCE_LINEWIDTH,
-            linestyle="--",
-            label=format_reference_label(
-                dataset_label="ERA5",
-                value=float(month_results["era5_value"]),
-                passes=bool(month_results["era5_passes"]),
-            ),
+            linestyle="-",
+            label="ERA5",
         ),
         Line2D(
             [0],
             [0],
             color=SENORGE_COLOR,
             linewidth=REFERENCE_LINEWIDTH,
-            linestyle="--",
-            label=format_reference_label(
-                dataset_label=reference_label,
-                value=float(month_results["reference_value"]),
-                passes=bool(month_results["reference_passes"]),
-            ),
+            linestyle="-",
+            label=senorge_label,
         ),
     ]
+
+    if not month_results["era5_passes"]:
+        handles.append(
+            Line2D(
+                [],
+                [],
+                linestyle="",
+                linewidth=0,
+                marker="",
+                label="ERA5 fail",
+            )
+        )
+
+    if not month_results["senorge_passes"]:
+        handles.append(
+            Line2D(
+                [],
+                [],
+                linestyle="",
+                linewidth=0,
+                marker="",
+                label=f"{senorge_label} fail",
+            )
+        )
+
+    return handles
+
+
+def make_failure_legend_handles(
+    month_results: dict[str, object],
+    senorge_label: str,
+) -> list[Line2D]:
+    """
+    Create text-only legend entries for datasets that fail the test.
+
+    The handles are invisible. The corresponding legend text is colored later.
+    """
+
+    handles = []
+
+    if not month_results["era5_passes"]:
+        handles.append(
+            Line2D(
+                [],
+                [],
+                linestyle="",
+                linewidth=0,
+                marker="",
+                label="ERA5 fail",
+            )
+        )
+
+    if not month_results["senorge_passes"]:
+        handles.append(
+            Line2D(
+                [],
+                [],
+                linestyle="",
+                linewidth=0,
+                marker="",
+                label=f"{senorge_label} fail",
+            )
+        )
+
+    return handles
+
+
+def color_failure_legend_text(
+    legend,
+    senorge_label: str,
+) -> None:
+    """
+    Color failure labels without adding a symbol beside the text.
+    """
+
+    for legend_text in legend.get_texts():
+        label = legend_text.get_text()
+
+        if label == "ERA5 fail":
+            legend_text.set_color(ERA5_COLOR)
+
+        elif label == f"{senorge_label} fail":
+            legend_text.set_color(SENORGE_COLOR)
 
 
 # =============================================================================
@@ -950,9 +915,7 @@ def apply_axis_formatting(
     row_index: int,
     column_index: int,
 ) -> None:
-    """
-    Apply consistent publication-style formatting to one panel.
-    """
+    """Apply consistent formatting to one panel."""
 
     ax.set_title(
         month_label,
@@ -983,9 +946,6 @@ def apply_axis_formatting(
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
 
-    ax.spines["left"].set_linewidth(0.8)
-    ax.spines["bottom"].set_linewidth(0.8)
-
     if row_index == 2:
         ax.set_xlabel(
             STATISTIC_AXIS_LABELS[statistic],
@@ -1000,18 +960,14 @@ def apply_axis_formatting(
 
 
 # =============================================================================
-# Main plotting function
+# Plotting
 # =============================================================================
 
 def plot_monthly_moments_test(
     results: dict[int, dict[str, object]],
-    reference_label: str,
-    filename_out: str,
-    write2file: bool,
+    senorge_label: str,
 ) -> None:
-    """
-    Plot the monthly model bootstrap distributions and reference statistics.
-    """
+    """Plot the monthly model bootstrap distributions and dataset values."""
 
     fig, axes = plt.subplots(
         nrows=3,
@@ -1052,7 +1008,6 @@ def plot_monthly_moments_test(
             zorder=1,
         )
 
-        # Plot the model confidence interval.
         confidence_lower, confidence_upper = (
             month_results["confidence_interval"]
         )
@@ -1060,33 +1015,32 @@ def plot_monthly_moments_test(
         ax.axvline(
             confidence_lower,
             color=MODEL_COLOR,
-            linewidth=1.2,
-            linestyle=":",
+            linewidth=CONFIDENCE_LINEWIDTH,
+            linestyle="--",
             zorder=2,
         )
 
         ax.axvline(
             confidence_upper,
             color=MODEL_COLOR,
-            linewidth=1.2,
-            linestyle=":",
+            linewidth=CONFIDENCE_LINEWIDTH,
+            linestyle="--",
             zorder=2,
         )
 
-        # Plot the reference statistics.
         ax.axvline(
             month_results["era5_value"],
             color=ERA5_COLOR,
             linewidth=REFERENCE_LINEWIDTH,
-            linestyle="--",
+            linestyle="-",
             zorder=3,
         )
 
         ax.axvline(
-            month_results["reference_value"],
+            month_results["senorge_value"],
             color=SENORGE_COLOR,
             linewidth=REFERENCE_LINEWIDTH,
-            linestyle="--",
+            linestyle="-",
             zorder=3,
         )
 
@@ -1110,30 +1064,42 @@ def plot_monthly_moments_test(
             column_index=column_index,
         )
 
-        ax.legend(
-            handles=make_panel_legend_handles(
-                reference_label=reference_label,
+        if month_index == 0:
+            legend_handles = make_full_legend_handles(
+                senorge_label=senorge_label,
                 month_results=month_results,
-            ),
-            loc="upper right",
-            frameon=True,
-            facecolor="white",
-            edgecolor="0.8",
-            framealpha=0.9,
-            fontsize=LEGEND_FONTSIZE,
-            handlelength=1.8,
-            handletextpad=0.5,
-            borderaxespad=0.4,
-            labelspacing=0.25,
-        )
+            )
+        else:
+            legend_handles = make_failure_legend_handles(
+                month_results,
+                senorge_label,
+            )
 
-    catchment_label = get_catchment_label(catchment)
-    statistic_label = STATISTIC_LABELS[statistic]
+        if legend_handles:
+            legend = ax.legend(
+                handles=legend_handles,
+                loc="upper right",
+                frameon=True,
+                facecolor="white",
+                edgecolor="0.8",
+                framealpha=0.9,
+                fontsize=LEGEND_FONTSIZE,
+                handlelength=1.8,
+                handletextpad=0.5,
+                borderaxespad=0.4,
+                labelspacing=0.25,
+            )
+
+            color_failure_legend_text(
+                legend=legend,
+                senorge_label=senorge_label,
+            )
 
     fig.suptitle(
         (
-            f"{catchment_label}: monthly {statistic_label.lower()} "
-            f"moments test for {x_days}-day accumulated precipitation maxima"
+            f"{get_catchment_label()}: monthly "
+            f"{STATISTIC_LABELS[statistic].lower()} moments test for "
+            f"{x_days}-day accumulated precipitation maxima"
         ),
         fontsize=SUPTITLE_FONTSIZE,
         fontweight="normal",
@@ -1177,18 +1143,20 @@ def plot_monthly_moments_test(
 
 def print_test_results(
     results: dict[int, dict[str, object]],
-    reference_label: str,
+    senorge_label: str,
 ) -> None:
-    """
-    Print a concise table of monthly moments-test results.
-    """
+    """Print monthly moments-test results."""
 
     print()
     print("Monthly moments-test results")
     print("----------------------------")
     print(f"Statistic: {STATISTIC_LABELS[statistic]}")
     print(
-        f"Model bootstrap samples: {number_of_bootstrap_samples:,}"
+        f"Bias correction for selected statistic: "
+        f"{get_bias_correction_label()}"
+    )
+    print(
+        f"Model bootstrap samples: {number_of_bootstrap_samples}"
     )
     print(
         f"Confidence level: {confidence_level_percent:g}%"
@@ -1206,9 +1174,9 @@ def print_test_results(
             else "*"
         )
 
-        reference_marker = (
+        senorge_marker = (
             ""
-            if month_results["reference_passes"]
+            if month_results["senorge_passes"]
             else "*"
         )
 
@@ -1219,9 +1187,9 @@ def print_test_results(
             f"{format_statistic_value(upper)}] | "
             f"ERA5={format_statistic_value(month_results['era5_value'])}"
             f"{era5_marker} | "
-            f"{reference_label}="
-            f"{format_statistic_value(month_results['reference_value'])}"
-            f"{reference_marker}"
+            f"{senorge_label}="
+            f"{format_statistic_value(month_results['senorge_value'])}"
+            f"{senorge_marker}"
         )
 
 
@@ -1233,71 +1201,63 @@ if __name__ == "__main__":
 
     validate_user_settings()
 
-    reference_variable = get_reference_variable(
-        reference_dataset
-    )
-
-    reference_label = get_reference_label(
-        reference_dataset
-    )
+    senorge_variable = get_senorge_variable()
+    senorge_label = get_senorge_label()
 
     filename_model = make_model_filename()
     filename_era5 = make_era5_filename()
-
-    filename_reference = make_reference_filename(
-        reference_dataset=reference_dataset,
-        reference_variable=reference_variable,
+    filename_senorge = make_senorge_filename(
+        senorge_variable
     )
 
     print("Reading input datasets")
     print("----------------------")
-    print(f"Model:       {filename_model}")
-    print(f"ERA5:        {filename_era5}")
-    print(f"{reference_label}: {filename_reference}")
+    print(f"Model:   {filename_model}")
+    print(f"ERA5:    {filename_era5}")
+    print(f"{senorge_label}: {filename_senorge}")
 
-    model_ds, era5_ds, reference_ds = load_datasets(
+    model_ds, era5_ds, senorge_ds = load_datasets(
         filename_model=filename_model,
         filename_era5=filename_era5,
-        filename_reference=filename_reference,
+        filename_senorge=filename_senorge,
     )
 
     try:
         model_values_by_month = get_model_values_by_month(
-            model_ds=model_ds,
-            variable=MODEL_EXTREME_VARIABLE,
+            model_ds
         )
 
-        era5_values_by_month = get_reference_values_by_month(
+        era5_values_by_month = get_dataset_values_by_month(
             ds=era5_ds,
             variable=ERA5_VARIABLE,
             dataset_name="ERA5 dataset",
         )
 
-        reference_values_by_month = get_reference_values_by_month(
-            ds=reference_ds,
-            variable=reference_variable,
-            dataset_name=f"{reference_label} dataset",
+        senorge_values_by_month = get_dataset_values_by_month(
+            ds=senorge_ds,
+            variable=senorge_variable,
+            dataset_name=f"{senorge_label} dataset",
         )
 
         check_monthly_samples(
-            values_by_month=model_values_by_month,
-            dataset_name="model",
+            model_values_by_month,
+            "model",
         )
 
         check_monthly_samples(
-            values_by_month=era5_values_by_month,
-            dataset_name="ERA5",
+            era5_values_by_month,
+            "ERA5",
         )
 
         check_monthly_samples(
-            values_by_month=reference_values_by_month,
-            dataset_name=reference_label,
+            senorge_values_by_month,
+            senorge_label,
         )
 
-        check_reference_sample_sizes(
+        check_era5_senorge_sample_sizes(
             era5_values_by_month=era5_values_by_month,
-            reference_values_by_month=reference_values_by_month,
-            reference_label=reference_label,
+            senorge_values_by_month=senorge_values_by_month,
+            senorge_label=senorge_label,
         )
 
         rng = np.random.default_rng(
@@ -1307,23 +1267,21 @@ if __name__ == "__main__":
         results = perform_monthly_moments_test(
             model_values_by_month=model_values_by_month,
             era5_values_by_month=era5_values_by_month,
-            reference_values_by_month=reference_values_by_month,
+            senorge_values_by_month=senorge_values_by_month,
             rng=rng,
         )
 
         print_test_results(
             results=results,
-            reference_label=reference_label,
+            senorge_label=senorge_label,
         )
 
         plot_monthly_moments_test(
             results=results,
-            reference_label=reference_label,
-            filename_out=filename_out,
-            write2file=write2file,
+            senorge_label=senorge_label,
         )
 
     finally:
         model_ds.close()
         era5_ds.close()
-        reference_ds.close()
+        senorge_ds.close()

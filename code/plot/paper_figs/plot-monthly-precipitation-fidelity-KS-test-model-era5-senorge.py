@@ -53,7 +53,7 @@ reference_dataset = "senorge"  # "senorge" or "senorge_regrid"
 
 # Date ranges used in the input filenames
 forecast_date_range = ["2020-01-02", "2023-06-26"]
-reference_years = ["1957", "2023"]
+reference_years = ["1957", "2022"]
 
 # ERA5 grid used for the reference dataset
 era5_grid = "0.5x0.5"
@@ -78,8 +78,9 @@ write2file = True
 filename_out = os.path.join(
     config.dirs["fig"],
     (
-        f"monthly_histograms_ks_test_{x_days}dayacc_"
-        f"{catchment}_model_era5_{reference_dataset}.png"
+        f"month_KS_test_{x_days}dayacc_{catchment}_"
+        f"forecast_hindcast_{forecast_date_range[0]}_{forecast_date_range[1]}_"
+        f"era5_{reference_dataset}_{reference_years[0]}-{reference_years[1]}.png"
     ),
 )
 
@@ -89,16 +90,16 @@ filename_out = os.path.join(
 # =============================================================================
 
 # Model data
-MODEL_VARIABLE = "tp"
+MODEL_VARIABLE = "tp24"
 MODEL_EXTREME_VARIABLE = "max_value"
 MODEL_MONTH_COORDINATE = "month_of_year"
 
 # ERA5 data
-ERA5_VARIABLE = "tp"
+ERA5_VARIABLE = "tp24"
 
 # SeNorge variable names
 REFERENCE_VARIABLES = {
-    "senorge": "tp",
+    "senorge": "rr",
     "senorge_regrid": "rr",
 }
 
@@ -250,7 +251,7 @@ def make_model_filename() -> str:
     return (
         f"{config.dirs['s2s_processed']}"
         f"distribution_monthly_extremes_{MODEL_VARIABLE}_{x_days}dayacc_"
-        f"nve_catchment_{catchment}_forecast_hindcast_"
+        f"{catchment}_forecast_hindcast_"
         f"{forecast_date_range[0]}_{forecast_date_range[1]}.nc"
     )
 
@@ -263,7 +264,7 @@ def make_era5_filename() -> str:
     return (
         f"{config.dirs['era5_processed']}"
         f"distribution_monthly_extremes_{ERA5_VARIABLE}_{x_days}dayacc_"
-        f"nve_catchment_{catchment}_era5_{era5_grid}_"
+        f"{catchment}_era5_{era5_grid}_"
         f"{reference_years[0]}-{reference_years[1]}.nc"
     )
 
@@ -605,7 +606,7 @@ def make_panel_legend_handles(
             linewidth=HISTOGRAM_LINEWIDTH,
             label=(
                 f"{reference_label}: "
-                f"$p_{{KS}}$={format_p_value(reference_p_value)}"
+                f"$p$={format_p_value(reference_p_value)}"
             ),
         ),
         Line2D(
@@ -613,7 +614,7 @@ def make_panel_legend_handles(
             [0],
             color=ERA5_COLOR,
             linewidth=HISTOGRAM_LINEWIDTH,
-            label=f"ERA5: $p_{{KS}}$={format_p_value(era5_p_value)}",
+            label=f"ERA5: $p$={format_p_value(era5_p_value)}",
         ),
     ]
 
@@ -958,12 +959,15 @@ if __name__ == "__main__":
                 reference_values=reference_values_by_month[month],
             )
 
+            era5_marker = "*" if test_failed(era5_p_value) else ""
+            reference_marker = "*" if test_failed(reference_p_value) else ""
+
             print(
                 f"{MONTH_LABELS[month - 1]:>9s} | "
                 f"ERA5: D={era5_statistic:.3f}, "
-                f"p={era5_p_value:.4g} | "
+                f"p={era5_p_value:.4g}{era5_marker} | "
                 f"{reference_label}: D={reference_statistic:.3f}, "
-                f"p={reference_p_value:.4g}"
+                f"p={reference_p_value:.4g}{reference_marker}"
             )
 
         plot_monthly_histograms(
