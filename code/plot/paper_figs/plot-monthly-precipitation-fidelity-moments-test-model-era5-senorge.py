@@ -38,7 +38,7 @@ from Dunnsigouin_etal_2026 import config
 # =============================================================================
 
 # Catchment and accumulation period
-catchment = "regine_drammen"
+catchment = "regine_glomma"
 x_days = 2
 
 # Date ranges used in the input filenames
