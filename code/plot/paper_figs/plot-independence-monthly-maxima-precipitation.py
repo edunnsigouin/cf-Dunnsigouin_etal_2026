@@ -1,31 +1,34 @@
 """
-Plot combined ECMWF S2S ensemble-member independence results.
+Plot ensemble-member independence for monthly maximum N-day precipitation.
 
-The script reads pairwise Spearman correlations calculated separately for
-forecast and hindcast ensemble members, combines the two distributions, and
-plots one box-and-whisker distribution for each forecast lead time.
+This script reads the NetCDF output from:
 
-The plotted variable is described in the title using the user settings for:
+    calculate_s2s_independence_monthly_maxima.py
 
-    - variable;
-    - accumulation length;
-    - catchment; and
-    - temporal grouping.
+Forecast and hindcast pairwise Spearman correlations are pooled into one
+distribution for each assigned calendar month. The figure therefore contains
+12 boxplots, one for January through December.
+
+Each monthly distribution contains:
+
+    - 1275 forecast member-pair correlations, when 51 forecast members exist;
+    - 55 hindcast member-pair correlations, when 11 hindcast members exist.
 
 Optional significance testing
 -----------------------------
-When ``show_significance = True``, a two-sided Wilcoxon signed-rank test is
-calculated at every lead time and significance asterisks are added above the
-boxplots. P-values may be corrected for multiple lead-time tests.
+When show_significance = True, a two-sided Wilcoxon signed-rank test is
+calculated for each monthly distribution to assess whether its centre differs
+from zero. P-values can be corrected across the 12 calendar months.
 
-The pairwise correlations are not fully independent because different pairs
-can share an ensemble member. The Wilcoxon results should therefore be treated
-as a diagnostic indication rather than a fully rigorous formal test.
+Important:
+The pairwise correlations are not fully independent because many pairs share
+an ensemble member. The Wilcoxon test should therefore be interpreted as a
+diagnostic rather than a fully rigorous formal test.
 
 Required input variables
 ------------------------
-forecast_spearman_rho(valid_month, lead_time, forecast_pair)
-hindcast_spearman_rho(valid_month, lead_time, hindcast_pair)
+forecast_spearman_rho(assigned_month, forecast_pair)
+hindcast_spearman_rho(assigned_month, hindcast_pair)
 """
 
 import os
@@ -43,71 +46,64 @@ from Dunnsigouin_etal_2026 import config
 # =============================================================================
 
 # Data settings ---------------------------------------------------------------
+
 variable = "tp24"
 x_days = 2
-catchment = "nve_catchment_regine_drammen"
+
+# Use the same catchment name as in the calculation script.
+catchment = "regine_drammen"
 
 forecast_date_range = (
     "2020-01-02",
     "2023-06-26",
 )
 
-# Available calculation groupings:
-#     "all"         = all valid dates are combined
-#     "valid_month" = results are grouped by valid calendar month
-#
-# This setting must match the grouping used by the calculation script.
-grouping = "valid_month"
-
-# Select the group to plot:
-#     0     when grouping = "all"
-#     1-12  when grouping = "valid_month"
-valid_month_selection = 1
-
+# Daily lead times available in the original files.
 first_input_lead = 16
 last_input_lead = 46
 
-# The first valid lead of an N-day accumulation is later than the first input
-# lead because the accumulation needs N complete days.
-first_valid_accumulation_lead = first_input_lead + x_days - 1
+# The first usable ending lead for an N-day accumulation.
+first_usable_accumulation_lead = (
+    first_input_lead + x_days - 1
+)
 
 
 # Significance settings -------------------------------------------------------
-# Set to False to skip both the statistical calculation and the asterisks.
+
+# Set to False to skip both the statistical test and significance asterisks.
 show_significance = False
 
 significance_level = 0.05
 
-# Correction for testing multiple lead times:
-#     "holm"       = Holm step-down correction; recommended
-#     "bonferroni" = Bonferroni correction; more conservative
-#     "none"       = no correction
+# Correction for testing 12 calendar months:
+#
+# "holm"       : Holm step-down correction; recommended
+# "bonferroni" : Bonferroni correction; more conservative
+# "none"       : no correction
 multiple_testing_correction = "holm"
 
 
 # Figure settings -------------------------------------------------------------
-figure_width = 11.0
+
+figure_width = 10.5
 figure_height = 5.5
 figure_dpi = 300
 
-box_width = 0.65
+box_width = 0.62
 show_outliers = True
 
-# User-defined text sizes
 label_fontsize = 11
 title_fontsize = 12
 tick_fontsize = 10
 significance_fontsize = 8
 
-# Show one x-axis label for every N lead times.
-label_every_n_leads = 2
-
 
 # Save settings ---------------------------------------------------------------
+
 path_out = config.dirs["fig"]
 
 save_pdf = False
-save_png = False
+save_png = True
 show_figure = True
 
 
@@ -116,34 +112,20 @@ show_figure = True
 # =============================================================================
 
 MONTH_ABBREVIATIONS = {
-    1: "jan",
-    2: "feb",
-    3: "mar",
-    4: "apr",
-    5: "may",
-    6: "jun",
-    7: "jul",
-    8: "aug",
-    9: "sep",
-    10: "oct",
-    11: "nov",
-    12: "dec",
+    1: "Jan",
+    2: "Feb",
+    3: "Mar",
+    4: "Apr",
+    5: "May",
+    6: "Jun",
+    7: "Jul",
+    8: "Aug",
+    9: "Sep",
+    10: "Oct",
+    11: "Nov",
+    12: "Dec",
 }
 
-MONTH_NAMES = {
-    1: "January",
-    2: "February",
-    3: "March",
-    4: "April",
-    5: "May",
-    6: "June",
-    7: "July",
-    8: "August",
-    9: "September",
-    10: "October",
-    11: "November",
-    12: "December",
-}
 
 VARIABLE_LABELS = {
     "tp": "precipitation",
@@ -184,40 +166,16 @@ def variable_description(variable_name):
     )
 
 
-def grouping_descriptions(grouping_name, selected_month):
-    """Return grouping text for the title and output filename."""
-
-    if grouping_name == "all":
-        return "all valid dates", "all-valid-dates"
-
-    if grouping_name == "valid_month":
-        month_name = MONTH_NAMES[selected_month]
-        month_abbreviation = MONTH_ABBREVIATIONS[selected_month]
-
-        return (
-            f"{month_name} valid dates",
-            f"valid-month-{month_abbreviation}",
-        )
-
-    raise ValueError(
-        "grouping must be either 'all' or 'valid_month'."
-    )
-
-
 def build_plot_title():
-    """Construct a title that describes the plotted variable and grouping."""
+    """Construct a publication-style title."""
 
     catchment_label = readable_catchment_name(catchment)
     variable_label = variable_description(variable)
-    grouping_title, _ = grouping_descriptions(
-        grouping,
-        valid_month_selection,
-    )
 
     return (
-        f"Ensemble-member independence for {x_days}-day accumulated "
-        f"{variable_label} over {catchment_label} catchment "
-        f"({grouping_title})"
+        f"Ensemble-member independence of monthly maximum "
+        f"{x_days}-day accumulated {variable_label} "
+        f"over the {catchment_label} catchment"
     )
 
 
@@ -226,24 +184,18 @@ def build_input_filename():
 
     return (
         config.dirs["s2s_processed"]
-        + f"independence_spearman_{variable}_"
+        + f"independence_spearman_monthly_max_{variable}_"
         + f"{x_days}dayacc_"
-        + f"{catchment}_"
-        + f"lead{first_valid_accumulation_lead}-"
+        + f"nve_catchment_{catchment}_"
+        + f"lead{first_usable_accumulation_lead}-"
         + f"{last_input_lead}_"
-        + f"{grouping}_"
         + f"{forecast_date_range[0]}_"
         + f"{forecast_date_range[1]}.nc"
     )
 
 
 def build_output_filename_stem():
-    """Construct a descriptive filename from all important user settings."""
-
-    _, grouping_filename = grouping_descriptions(
-        grouping,
-        valid_month_selection,
-    )
+    """Construct a descriptive output filename stem."""
 
     significance_text = (
         f"significance-{multiple_testing_correction}"
@@ -252,13 +204,11 @@ def build_output_filename_stem():
     )
 
     return (
-        f"ensemble-member-independence_boxplots_"
-        f"spearman-correlation_"
+        f"independence_test_monthly_maxima_"
         f"{variable}_"
         f"{x_days}day-accumulation_"
         f"{catchment}_"
-        f"lead{first_valid_accumulation_lead}-{last_input_lead}_"
-        f"{grouping_filename}_"
+        f"lead{first_usable_accumulation_lead}-{last_input_lead}_"
         f"{forecast_date_range[0]}-to-{forecast_date_range[1]}"
     )
 
@@ -272,38 +222,29 @@ plot_title = build_plot_title()
 # Validation and loading
 # =============================================================================
 
-
 def validate_user_settings():
-    """Check user settings before reading and plotting the data."""
-
-    if grouping not in {"all", "valid_month"}:
-        raise ValueError(
-            "grouping must be either 'all' or 'valid_month'."
-        )
-
-    if grouping == "all" and valid_month_selection != 0:
-        raise ValueError(
-            "valid_month_selection must be 0 when grouping='all'."
-        )
-
-    if grouping == "valid_month" and valid_month_selection not in range(1, 13):
-        raise ValueError(
-            "valid_month_selection must be an integer from 1 to 12 "
-            "when grouping='valid_month'."
-        )
+    """Check settings before reading and plotting the data."""
 
     if x_days < 1:
         raise ValueError("x_days must be at least 1.")
 
-    if label_every_n_leads < 1:
+    if first_input_lead > last_input_lead:
         raise ValueError(
-            "label_every_n_leads must be at least 1."
+            "first_input_lead must not exceed last_input_lead."
         )
 
-    if min(label_fontsize, title_fontsize, tick_fontsize) <= 0:
-        raise ValueError("All font sizes must be greater than zero.")
+    if min(
+        label_fontsize,
+        title_fontsize,
+        tick_fontsize,
+        significance_fontsize,
+    ) <= 0:
+        raise ValueError(
+            "All font sizes must be greater than zero."
+        )
 
     if show_significance:
+
         if not 0 < significance_level < 1:
             raise ValueError(
                 "significance_level must be between 0 and 1."
@@ -323,17 +264,14 @@ def validate_user_settings():
 
 
 def load_independence_results(filename):
-    """Load forecast and hindcast pairwise Spearman correlations."""
+    """Load monthly forecast and hindcast correlation distributions."""
 
     if not os.path.exists(filename):
         raise FileNotFoundError(
             f"Input file does not exist:\n{filename}"
         )
 
-    dataset = xr.open_dataset(
-        filename,
-        decode_timedelta=False,
-    )
+    dataset = xr.open_dataset(filename)
 
     required_variables = {
         "forecast_spearman_rho",
@@ -346,66 +284,32 @@ def load_independence_results(filename):
 
     if missing_variables:
         dataset.close()
+
         raise KeyError(
             "The input file is missing these required variables: "
             f"{sorted(missing_variables)}"
         )
 
-    if "lead_time" not in dataset.coords:
+    if "assigned_month" not in dataset.coords:
         dataset.close()
+
         raise KeyError(
-            "The input file does not contain a lead_time coordinate."
+            "The input file does not contain the assigned_month coordinate."
         )
 
     return dataset
-
-
-def select_valid_month(data_array, valid_month):
-    """Select one valid-month group when that dimension is present."""
-
-    if "valid_month" not in data_array.dims:
-        return data_array
-
-    available_months = data_array["valid_month"].values.astype(int)
-
-    if valid_month not in available_months:
-        raise ValueError(
-            f"valid_month_selection={valid_month} is unavailable. "
-            f"Available values are {available_months.tolist()}."
-        )
-
-    return data_array.sel(valid_month=valid_month)
-
-
-def normalize_lead_time_coordinate(data_array):
-    """Ensure that lead time is stored as integer day numbers."""
-
-    lead_time = data_array["lead_time"]
-
-    if np.issubdtype(lead_time.dtype, np.timedelta64):
-        lead_time_days = (
-            lead_time.values / np.timedelta64(1, "D")
-        ).astype("int16")
-    else:
-        lead_time_days = lead_time.values.astype("int16")
-
-    data_array = data_array.assign_coords(
-        lead_time=("lead_time", lead_time_days)
-    )
-
-    data_array["lead_time"].attrs = {
-        "long_name": "forecast lead day",
-        "units": "days",
-    }
-
-    return data_array
 
 
 def combine_forecast_and_hindcast(
     forecast_correlations,
     hindcast_correlations,
 ):
-    """Combine forecast and hindcast pair distributions."""
+    """
+    Pool forecast and hindcast pair distributions for every month.
+
+    The forecast_pair and hindcast_pair dimensions are renamed to a common
+    dimension called pair before concatenation.
+    """
 
     forecast = forecast_correlations.rename(
         {"forecast_pair": "pair"}
@@ -415,8 +319,7 @@ def combine_forecast_and_hindcast(
         {"hindcast_pair": "pair"}
     )
 
-    # Replace the pair coordinates so that forecast and hindcast pairs do not
-    # share coordinate values when concatenated.
+    # Give the two sets of pairs non-overlapping coordinate values.
     forecast = forecast.assign_coords(
         pair=np.arange(
             forecast.sizes["pair"],
@@ -447,9 +350,8 @@ def combine_forecast_and_hindcast(
 # Optional statistical testing
 # =============================================================================
 
-
 def one_sample_wilcoxon(values):
-    """Test whether a correlation distribution is centred on zero."""
+    """Test whether one monthly correlation distribution is centred on zero."""
 
     values = np.asarray(values, dtype=float)
     values = values[np.isfinite(values)]
@@ -471,7 +373,7 @@ def one_sample_wilcoxon(values):
 
 
 def adjust_p_values(p_values, method):
-    """Correct p-values for multiple lead-time tests."""
+    """Correct p-values for multiple monthly tests."""
 
     p_values = np.asarray(p_values, dtype=float)
     adjusted = np.full_like(p_values, np.nan)
@@ -506,8 +408,14 @@ def adjust_p_values(p_values, method):
             number_of_tests - rank
         ) * p_value
 
-    adjusted_sorted = np.maximum.accumulate(adjusted_sorted)
-    adjusted_sorted = np.minimum(adjusted_sorted, 1.0)
+    adjusted_sorted = np.maximum.accumulate(
+        adjusted_sorted
+    )
+
+    adjusted_sorted = np.minimum(
+        adjusted_sorted,
+        1.0,
+    )
 
     restored_order = np.empty_like(adjusted_sorted)
     restored_order[order] = adjusted_sorted
@@ -518,16 +426,17 @@ def adjust_p_values(p_values, method):
 
 
 def calculate_test_results(correlations):
-    """Calculate one Wilcoxon test for every forecast lead time."""
+    """Calculate one Wilcoxon test for each assigned calendar month."""
 
-    lead_times = correlations["lead_time"].values.astype(int)
+    months = correlations["assigned_month"].values.astype(int)
 
     medians = []
     raw_p_values = []
 
-    for lead_time in lead_times:
+    for month in months:
+
         values = correlations.sel(
-            lead_time=lead_time
+            assigned_month=month
         ).values.ravel()
 
         values = values[np.isfinite(values)]
@@ -541,7 +450,10 @@ def calculate_test_results(correlations):
         _, p_value = one_sample_wilcoxon(values)
         raw_p_values.append(p_value)
 
-    raw_p_values = np.asarray(raw_p_values, dtype=float)
+    raw_p_values = np.asarray(
+        raw_p_values,
+        dtype=float,
+    )
 
     adjusted_p_values = adjust_p_values(
         raw_p_values,
@@ -549,34 +461,42 @@ def calculate_test_results(correlations):
     )
 
     return {
-        "lead_time": lead_times,
-        "median_rho": np.asarray(medians, dtype=float),
+        "assigned_month": months,
+        "median_rho": np.asarray(
+            medians,
+            dtype=float,
+        ),
         "raw_p_value": raw_p_values,
         "adjusted_p_value": adjusted_p_values,
-        "significant": adjusted_p_values < significance_level,
+        "significant": (
+            adjusted_p_values < significance_level
+        ),
     }
 
 
 def print_test_results(test_results):
-    """Print the optional lead-time significance results."""
+    """Print monthly significance-test results."""
 
     print()
-    print("Lead-time test results")
-    print("----------------------")
+    print("Monthly test results")
+    print("--------------------")
 
     for (
-        lead_time,
+        month,
         median_rho,
         raw_p_value,
         adjusted_p_value,
     ) in zip(
-        test_results["lead_time"],
+        test_results["assigned_month"],
         test_results["median_rho"],
         test_results["raw_p_value"],
         test_results["adjusted_p_value"],
     ):
+
+        month_label = MONTH_ABBREVIATIONS[int(month)]
+
         print(
-            f"Lead {lead_time:2d}: "
+            f"{month_label}: "
             f"median rho={median_rho: .4f}, "
             f"raw p={raw_p_value:.4g}, "
             f"adjusted p={adjusted_p_value:.4g}"
@@ -586,7 +506,6 @@ def print_test_results(test_results):
 # =============================================================================
 # Plotting
 # =============================================================================
-
 
 def significance_label(p_value):
     """Return the conventional asterisk label for a p-value."""
@@ -607,24 +526,25 @@ def significance_label(p_value):
 
 
 def prepare_boxplot_values(correlations):
-    """Return one finite correlation array for each lead time."""
+    """Return one finite correlation array for each calendar month."""
 
-    lead_times = correlations["lead_time"].values.astype(int)
-    values_by_lead = []
+    months = correlations["assigned_month"].values.astype(int)
+    values_by_month = []
 
-    for lead_time in lead_times:
+    for month in months:
+
         values = correlations.sel(
-            lead_time=lead_time
+            assigned_month=month
         ).values.ravel()
 
         values = values[np.isfinite(values)]
-        values_by_lead.append(values)
+        values_by_month.append(values)
 
-    return lead_times, values_by_lead
+    return months, values_by_month
 
 
 def style_boxplot(boxplot):
-    """Apply clear, publication-style formatting to the boxplots."""
+    """Apply clear publication-style formatting."""
 
     for box in boxplot["boxes"]:
         box.set_linewidth(1.0)
@@ -635,12 +555,10 @@ def style_boxplot(boxplot):
     for cap in boxplot["caps"]:
         cap.set_linewidth(0.9)
 
-    # Explicitly draw the median line in black.
     for median in boxplot["medians"]:
         median.set_color("black")
         median.set_linewidth(1.4)
 
-    # Explicitly draw all outliers in grey (0.6).
     for outliers in boxplot["fliers"]:
         outliers.set_markeredgecolor("0.6")
         outliers.set_markerfacecolor("none")
@@ -649,13 +567,13 @@ def style_boxplot(boxplot):
 def add_significance_markers(
     axis,
     adjusted_p_values,
-    values_by_lead,
+    values_by_month,
 ):
-    """Add adjusted-p-value significance asterisks above the boxplots."""
+    """Add adjusted-p-value significance asterisks above boxplots."""
 
     nonempty_values = [
         values
-        for values in values_by_lead
+        for values in values_by_month
         if values.size > 0
     ]
 
@@ -677,6 +595,7 @@ def add_significance_markers(
         adjusted_p_values,
         start=1,
     ):
+
         label = significance_label(p_value)
 
         if label:
@@ -700,14 +619,20 @@ def add_significance_markers(
     )
 
 
-def create_figure(combined_correlations, test_results=None):
-    """Create the combined box-and-whisker figure."""
+def create_figure(
+    combined_correlations,
+    test_results=None,
+):
+    """Create the monthly box-and-whisker figure."""
 
-    lead_times, values_by_lead = prepare_boxplot_values(
+    months, values_by_month = prepare_boxplot_values(
         combined_correlations
     )
 
-    positions = np.arange(1, len(lead_times) + 1)
+    positions = np.arange(
+        1,
+        len(months) + 1,
+    )
 
     figure, axis = plt.subplots(
         figsize=(figure_width, figure_height),
@@ -715,7 +640,7 @@ def create_figure(combined_correlations, test_results=None):
     )
 
     boxplot = axis.boxplot(
-        values_by_lead,
+        values_by_month,
         positions=positions,
         widths=box_width,
         patch_artist=False,
@@ -727,7 +652,7 @@ def create_figure(combined_correlations, test_results=None):
         },
         flierprops={
             "marker": "o",
-            "markerfacecolor": "0.6",
+            "markerfacecolor": "none",
             "markeredgecolor": "0.6",
             "markersize": 3.5,
             "linestyle": "none",
@@ -736,7 +661,6 @@ def create_figure(combined_correlations, test_results=None):
 
     style_boxplot(boxplot)
 
-    # Solid black zero-correlation reference line.
     axis.axhline(
         0.0,
         color="black",
@@ -745,21 +669,19 @@ def create_figure(combined_correlations, test_results=None):
         zorder=0,
     )
 
-    visible_labels = [
-        str(lead_time)
-        if index % label_every_n_leads == 0
-        else ""
-        for index, lead_time in enumerate(lead_times)
+    month_labels = [
+        MONTH_ABBREVIATIONS[int(month)]
+        for month in months
     ]
 
     axis.set_xticks(positions)
     axis.set_xticklabels(
-        visible_labels,
+        month_labels,
         fontsize=tick_fontsize,
     )
 
     axis.set_xlabel(
-        "Lead time (days)",
+        "Month",
         fontsize=label_fontsize,
     )
 
@@ -768,7 +690,6 @@ def create_figure(combined_correlations, test_results=None):
         fontsize=label_fontsize,
     )
 
-    # The title uses normal font weight rather than bold.
     axis.set_title(
         plot_title,
         fontsize=title_fontsize,
@@ -787,14 +708,16 @@ def create_figure(combined_correlations, test_results=None):
 
     axis.set_xlim(
         0.3,
-        len(lead_times) + 0.7,
+        len(months) + 0.7,
     )
 
     if show_significance and test_results is not None:
         add_significance_markers(
             axis=axis,
-            adjusted_p_values=test_results["adjusted_p_value"],
-            values_by_lead=values_by_lead,
+            adjusted_p_values=test_results[
+                "adjusted_p_value"
+            ],
+            values_by_month=values_by_month,
         )
 
     return figure
@@ -804,13 +727,16 @@ def create_figure(combined_correlations, test_results=None):
 # Output
 # =============================================================================
 
-
 def save_figure(figure):
-    """Save the figure as PDF and/or PNG using a descriptive filename."""
+    """Save the figure as PDF and/or PNG."""
 
-    os.makedirs(path_out, exist_ok=True)
+    os.makedirs(
+        path_out,
+        exist_ok=True,
+    )
 
     if save_pdf:
+
         filename_pdf = os.path.join(
             path_out,
             f"{filename_stem}.pdf",
@@ -824,6 +750,7 @@ def save_figure(figure):
         print("Wrote:", filename_pdf)
 
     if save_png:
+
         filename_png = os.path.join(
             path_out,
             f"{filename_stem}.png",
@@ -842,16 +769,17 @@ def save_figure(figure):
 # Main script
 # =============================================================================
 
-
 if __name__ == "__main__":
 
     validate_user_settings()
 
     print("Input file:")
     print(filename_in)
+
     print()
     print("Figure title:")
     print(plot_title)
+
     print()
     print("Output filename stem:")
     print(filename_stem)
@@ -861,19 +789,13 @@ if __name__ == "__main__":
     )
 
     try:
-        forecast_correlations = normalize_lead_time_coordinate(
-            select_valid_month(
-                dataset["forecast_spearman_rho"],
-                valid_month=valid_month_selection,
-            )
-        ).load()
+        forecast_correlations = dataset[
+            "forecast_spearman_rho"
+        ].load()
 
-        hindcast_correlations = normalize_lead_time_coordinate(
-            select_valid_month(
-                dataset["hindcast_spearman_rho"],
-                valid_month=valid_month_selection,
-            )
-        ).load()
+        hindcast_correlations = dataset[
+            "hindcast_spearman_rho"
+        ].load()
 
     finally:
         dataset.close()
@@ -886,13 +808,19 @@ if __name__ == "__main__":
     test_results = None
 
     if show_significance:
+
         test_results = calculate_test_results(
             correlations=combined_correlations
         )
+
         print_test_results(test_results)
+
     else:
+
         print()
-        print("Significance calculation and asterisks are disabled.")
+        print(
+            "Significance calculation and asterisks are disabled."
+        )
 
     figure = create_figure(
         combined_correlations=combined_correlations,
