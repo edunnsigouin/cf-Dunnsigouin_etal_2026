@@ -1,31 +1,26 @@
 """
 Plot combined ECMWF S2S ensemble-member independence results.
 
-This script reads the NetCDF output produced by the independence-calculation
-script and combines forecast and hindcast pairwise Spearman correlations.
+The script reads pairwise Spearman correlations calculated separately for
+forecast and hindcast ensemble members, combines the two distributions, and
+plots one box-and-whisker distribution for each forecast lead time.
 
-At each lead time, the plotted distribution contains:
+The plotted variable is described in the title using the user settings for:
 
-    - all 1275 forecast member-pair correlations;
-    - all 55 hindcast member-pair correlations.
+    - variable;
+    - accumulation length;
+    - catchment; and
+    - temporal grouping.
 
-The result is one combined box-and-whisker distribution at every lead time.
+Optional significance testing
+-----------------------------
+When ``show_significance = True``, a two-sided Wilcoxon signed-rank test is
+calculated at every lead time and significance asterisks are added above the
+boxplots. P-values may be corrected for multiple lead-time tests.
 
-A two-sided Wilcoxon signed-rank test is applied at each lead time to assess
-whether the centre of the combined correlation distribution differs from zero.
-P-values can be corrected for testing multiple lead times.
-
-IMPORTANT STATISTICAL NOTE
---------------------------
-The pairwise correlations are not fully independent because many pairs share
-an ensemble member. For example, pairs (1, 2) and (1, 3) both contain member 1.
-
-The Wilcoxon test should therefore be interpreted as a diagnostic indication,
-rather than as a fully rigorous formal test of ensemble independence.
-
-Output
-------
-The script writes a publication-quality PDF and/or high-resolution PNG figure.
+The pairwise correlations are not fully independent because different pairs
+can share an ensemble member. The Wilcoxon results should therefore be treated
+as a diagnostic indication rather than a fully rigorous formal test.
 
 Required input variables
 ------------------------
@@ -47,84 +42,283 @@ from Dunnsigouin_etal_2026 import config
 # User settings
 # =============================================================================
 
-# Input independence-test file
-filename_in = (
-    config.dirs["s2s_processed"]
-    + "independence_spearman_tp24_2dayacc_"
-    + "nve_catchment_regine_drammen_"
-    + "lead17-46_all_2020-01-02_2020-01-30.nc"
+# Data settings ---------------------------------------------------------------
+variable = "tp24"
+x_days = 2
+catchment = "nve_catchment_regine_drammen"
+
+forecast_date_range = (
+    "2020-01-02",
+    "2023-06-26",
 )
 
-# Output directory and filename stem
-path_out = config.dirs["fig"]
-
-filename_stem = (
-    "independence_spearman_combined_tp24_2dayacc_"
-    "nve_catchment_regine_drammen"
-)
-
-# Select which valid-month group to plot.
+# Available calculation groupings:
+#     "all"         = all valid dates are combined
+#     "valid_month" = results are grouped by valid calendar month
 #
-# Use:
-#     0    when the calculation script used grouping = "all"
-#     1–12 when the calculation script used grouping = "valid_month"
-valid_month_selection = 0
+# This setting must match the grouping used by the calculation script.
+grouping = "valid_month"
 
-# Statistical significance level
+# Select the group to plot:
+#     0     when grouping = "all"
+#     1-12  when grouping = "valid_month"
+valid_month_selection = 12
+
+first_input_lead = 16
+last_input_lead = 46
+
+# The first valid lead of an N-day accumulation is later than the first input
+# lead because the accumulation needs N complete days.
+first_valid_accumulation_lead = first_input_lead + x_days - 1
+
+
+# Significance settings -------------------------------------------------------
+# Set to False to skip both the statistical calculation and the asterisks.
+show_significance = False
+
 significance_level = 0.05
 
 # Correction for testing multiple lead times:
-#
-# "holm"       : recommended
-# "bonferroni" : more conservative
-# "none"       : no correction
-multiple_testing_correction = "none"
+#     "holm"       = Holm step-down correction; recommended
+#     "bonferroni" = Bonferroni correction; more conservative
+#     "none"       = no correction
+multiple_testing_correction = "holm"
 
-# Figure settings
+
+# Figure settings -------------------------------------------------------------
 figure_width = 11.0
 figure_height = 5.5
 figure_dpi = 300
 
 box_width = 0.65
-show_outliers = False
+show_outliers = True
 
-# Show one x-axis label for every N lead times
+# User-defined text sizes
+label_fontsize = 11
+title_fontsize = 12
+tick_fontsize = 10
+significance_fontsize = 8
+
+# Show one x-axis label for every N lead times.
 label_every_n_leads = 2
 
-# Save options
+
+# Save settings ---------------------------------------------------------------
+path_out = config.dirs["fig"]
+
 save_pdf = False
-save_png = False
+save_png = True
 show_figure = True
+
+
+# =============================================================================
+# Descriptive labels and filenames
+# =============================================================================
+
+MONTH_ABBREVIATIONS = {
+    1: "jan",
+    2: "feb",
+    3: "mar",
+    4: "apr",
+    5: "may",
+    6: "jun",
+    7: "jul",
+    8: "aug",
+    9: "sep",
+    10: "oct",
+    11: "nov",
+    12: "dec",
+}
+
+MONTH_NAMES = {
+    1: "January",
+    2: "February",
+    3: "March",
+    4: "April",
+    5: "May",
+    6: "June",
+    7: "July",
+    8: "August",
+    9: "September",
+    10: "October",
+    11: "November",
+    12: "December",
+}
+
+VARIABLE_LABELS = {
+    "tp": "precipitation",
+    "tp24": "precipitation",
+    "rr": "precipitation",
+    "sro": "surface runoff",
+    "gwb_q": "surface runoff",
+    "ro": "total runoff",
+    "sd": "snow water equivalent",
+}
+
+
+def readable_catchment_name(catchment_name):
+    """Convert a technical catchment identifier into a readable name."""
+
+    name = catchment_name
+
+    prefixes = (
+        "nve_catchment_regine_",
+        "nve_catchment_",
+        "regine_",
+    )
+
+    for prefix in prefixes:
+        if name.startswith(prefix):
+            name = name[len(prefix):]
+            break
+
+    return name.replace("_", " ").title()
+
+
+def variable_description(variable_name):
+    """Return a readable physical-variable description."""
+
+    return VARIABLE_LABELS.get(
+        variable_name,
+        variable_name.replace("_", " "),
+    )
+
+
+def grouping_descriptions(grouping_name, selected_month):
+    """Return grouping text for the title and output filename."""
+
+    if grouping_name == "all":
+        return "all valid dates", "all-valid-dates"
+
+    if grouping_name == "valid_month":
+        month_name = MONTH_NAMES[selected_month]
+        month_abbreviation = MONTH_ABBREVIATIONS[selected_month]
+
+        return (
+            f"{month_name} valid dates",
+            f"valid-month-{month_abbreviation}",
+        )
+
+    raise ValueError(
+        "grouping must be either 'all' or 'valid_month'."
+    )
+
+
+def build_plot_title():
+    """Construct a title that describes the plotted variable and grouping."""
+
+    catchment_label = readable_catchment_name(catchment)
+    variable_label = variable_description(variable)
+    grouping_title, _ = grouping_descriptions(
+        grouping,
+        valid_month_selection,
+    )
+
+    return (
+        f"Ensemble-member independence for {x_days}-day accumulated "
+        f"{variable_label} over {catchment_label} catchment "
+        f"({grouping_title})"
+    )
+
+
+def build_input_filename():
+    """Construct the NetCDF filename produced by the calculation script."""
+
+    return (
+        config.dirs["s2s_processed"]
+        + f"independence_spearman_{variable}_"
+        + f"{x_days}dayacc_"
+        + f"{catchment}_"
+        + f"lead{first_valid_accumulation_lead}-"
+        + f"{last_input_lead}_"
+        + f"{grouping}_"
+        + f"{forecast_date_range[0]}_"
+        + f"{forecast_date_range[1]}.nc"
+    )
+
+
+def build_output_filename_stem():
+    """Construct a descriptive filename from all important user settings."""
+
+    _, grouping_filename = grouping_descriptions(
+        grouping,
+        valid_month_selection,
+    )
+
+    significance_text = (
+        f"significance-{multiple_testing_correction}"
+        if show_significance
+        else "no-significance"
+    )
+
+    return (
+        f"independence_test_by_lead-time_"
+        f"{variable}_"
+        f"{x_days}day-accumulation_"
+        f"{catchment}_"
+        f"lead{first_valid_accumulation_lead}-{last_input_lead}_"
+        f"{grouping_filename}_"
+        f"{forecast_date_range[0]}-to-{forecast_date_range[1]}"
+    )
+
+
+filename_in = build_input_filename()
+filename_stem = build_output_filename_stem()
+plot_title = build_plot_title()
 
 
 # =============================================================================
 # Validation and loading
 # =============================================================================
 
+
 def validate_user_settings():
-    """Check plotting settings before reading the data."""
+    """Check user settings before reading and plotting the data."""
 
-    if not 0 < significance_level < 1:
+    if grouping not in {"all", "valid_month"}:
         raise ValueError(
-            "significance_level must be between 0 and 1."
+            "grouping must be either 'all' or 'valid_month'."
         )
 
-    valid_corrections = {
-        "holm",
-        "bonferroni",
-        "none",
-    }
-
-    if multiple_testing_correction not in valid_corrections:
+    if grouping == "all" and valid_month_selection != 0:
         raise ValueError(
-            "multiple_testing_correction must be one of "
-            f"{sorted(valid_corrections)}."
+            "valid_month_selection must be 0 when grouping='all'."
         )
+
+    if grouping == "valid_month" and valid_month_selection not in range(1, 13):
+        raise ValueError(
+            "valid_month_selection must be an integer from 1 to 12 "
+            "when grouping='valid_month'."
+        )
+
+    if x_days < 1:
+        raise ValueError("x_days must be at least 1.")
 
     if label_every_n_leads < 1:
         raise ValueError(
             "label_every_n_leads must be at least 1."
         )
+
+    if min(label_fontsize, title_fontsize, tick_fontsize) <= 0:
+        raise ValueError("All font sizes must be greater than zero.")
+
+    if show_significance:
+        if not 0 < significance_level < 1:
+            raise ValueError(
+                "significance_level must be between 0 and 1."
+            )
+
+        valid_corrections = {
+            "holm",
+            "bonferroni",
+            "none",
+        }
+
+        if multiple_testing_correction not in valid_corrections:
+            raise ValueError(
+                "multiple_testing_correction must be one of "
+                f"{sorted(valid_corrections)}."
+            )
 
 
 def load_independence_results(filename):
@@ -151,7 +345,6 @@ def load_independence_results(filename):
 
     if missing_variables:
         dataset.close()
-
         raise KeyError(
             "The input file is missing these required variables: "
             f"{sorted(missing_variables)}"
@@ -159,7 +352,6 @@ def load_independence_results(filename):
 
     if "lead_time" not in dataset.coords:
         dataset.close()
-
         raise KeyError(
             "The input file does not contain a lead_time coordinate."
         )
@@ -168,11 +360,7 @@ def load_independence_results(filename):
 
 
 def select_valid_month(data_array, valid_month):
-    """
-    Select one valid-month group.
-
-    If the DataArray has no valid_month dimension, it is returned unchanged.
-    """
+    """Select one valid-month group when that dimension is present."""
 
     if "valid_month" not in data_array.dims:
         return data_array
@@ -189,13 +377,7 @@ def select_valid_month(data_array, valid_month):
 
 
 def normalize_lead_time_coordinate(data_array):
-    """
-    Ensure lead_time is stored as integer day numbers.
-
-    Some xarray versions decode a coordinate with units='days' into
-    timedelta64 values. This plotting script needs lead times such as
-    17, 18, 19, ..., so timedelta values are converted back to integer days.
-    """
+    """Ensure that lead time is stored as integer day numbers."""
 
     lead_time = data_array["lead_time"]
 
@@ -203,7 +385,6 @@ def normalize_lead_time_coordinate(data_array):
         lead_time_days = (
             lead_time.values / np.timedelta64(1, "D")
         ).astype("int16")
-
     else:
         lead_time_days = lead_time.values.astype("int16")
 
@@ -223,18 +404,7 @@ def combine_forecast_and_hindcast(
     forecast_correlations,
     hindcast_correlations,
 ):
-    """
-    Combine forecast and hindcast correlation distributions.
-
-    The original forecast_pair and hindcast_pair dimensions are both renamed
-    to a common dimension called pair before concatenation.
-
-    Returns
-    -------
-    xarray.DataArray
-        Dimensions:
-            lead_time, pair
-    """
+    """Combine forecast and hindcast pair distributions."""
 
     forecast = forecast_correlations.rename(
         {"forecast_pair": "pair"}
@@ -244,7 +414,8 @@ def combine_forecast_and_hindcast(
         {"hindcast_pair": "pair"}
     )
 
-    # Replace the original pair coordinates so they do not overlap.
+    # Replace the pair coordinates so that forecast and hindcast pairs do not
+    # share coordinate values when concatenated.
     forecast = forecast.assign_coords(
         pair=np.arange(
             forecast.sizes["pair"],
@@ -272,21 +443,17 @@ def combine_forecast_and_hindcast(
 
 
 # =============================================================================
-# Statistical testing
+# Optional statistical testing
 # =============================================================================
 
-def one_sample_wilcoxon(values):
-    """
-    Test whether a correlation distribution is centred on zero.
 
-    The two-sided Wilcoxon signed-rank test evaluates the null hypothesis
-    that the distribution is symmetric around zero.
-    """
+def one_sample_wilcoxon(values):
+    """Test whether a correlation distribution is centred on zero."""
 
     values = np.asarray(values, dtype=float)
     values = values[np.isfinite(values)]
 
-    # Exact zeros carry no information for the signed-rank test.
+    # Exact zeros do not contribute information to the signed-rank test.
     values = values[values != 0.0]
 
     if values.size == 0:
@@ -325,10 +492,9 @@ def adjust_p_values(p_values, method):
             valid_p_values * number_of_tests,
             1.0,
         )
-
         return adjusted
 
-    # Holm step-down correction
+    # Holm step-down correction.
     order = np.argsort(valid_p_values)
     sorted_p_values = valid_p_values[order]
 
@@ -339,14 +505,8 @@ def adjust_p_values(p_values, method):
             number_of_tests - rank
         ) * p_value
 
-    adjusted_sorted = np.maximum.accumulate(
-        adjusted_sorted
-    )
-
-    adjusted_sorted = np.minimum(
-        adjusted_sorted,
-        1.0,
-    )
+    adjusted_sorted = np.maximum.accumulate(adjusted_sorted)
+    adjusted_sorted = np.minimum(adjusted_sorted, 1.0)
 
     restored_order = np.empty_like(adjusted_sorted)
     restored_order[order] = adjusted_sorted
@@ -357,15 +517,7 @@ def adjust_p_values(p_values, method):
 
 
 def calculate_test_results(correlations):
-    """
-    Calculate one Wilcoxon test for each lead time.
-
-    Returns
-    -------
-    dict
-        Arrays containing lead times, medians, raw p-values, adjusted
-        p-values, and significance flags.
-    """
+    """Calculate one Wilcoxon test for every forecast lead time."""
 
     lead_times = correlations["lead_time"].values.astype(int)
 
@@ -373,7 +525,6 @@ def calculate_test_results(correlations):
     raw_p_values = []
 
     for lead_time in lead_times:
-
         values = correlations.sel(
             lead_time=lead_time
         ).values.ravel()
@@ -389,10 +540,7 @@ def calculate_test_results(correlations):
         _, p_value = one_sample_wilcoxon(values)
         raw_p_values.append(p_value)
 
-    raw_p_values = np.asarray(
-        raw_p_values,
-        dtype=float,
-    )
+    raw_p_values = np.asarray(raw_p_values, dtype=float)
 
     adjusted_p_values = adjust_p_values(
         raw_p_values,
@@ -404,18 +552,43 @@ def calculate_test_results(correlations):
         "median_rho": np.asarray(medians, dtype=float),
         "raw_p_value": raw_p_values,
         "adjusted_p_value": adjusted_p_values,
-        "significant": (
-            adjusted_p_values < significance_level
-        ),
+        "significant": adjusted_p_values < significance_level,
     }
+
+
+def print_test_results(test_results):
+    """Print the optional lead-time significance results."""
+
+    print()
+    print("Lead-time test results")
+    print("----------------------")
+
+    for (
+        lead_time,
+        median_rho,
+        raw_p_value,
+        adjusted_p_value,
+    ) in zip(
+        test_results["lead_time"],
+        test_results["median_rho"],
+        test_results["raw_p_value"],
+        test_results["adjusted_p_value"],
+    ):
+        print(
+            f"Lead {lead_time:2d}: "
+            f"median rho={median_rho: .4f}, "
+            f"raw p={raw_p_value:.4g}, "
+            f"adjusted p={adjusted_p_value:.4g}"
+        )
 
 
 # =============================================================================
 # Plotting
 # =============================================================================
 
+
 def significance_label(p_value):
-    """Return a conventional significance label."""
+    """Return the conventional asterisk label for a p-value."""
 
     if not np.isfinite(p_value):
         return ""
@@ -433,27 +606,24 @@ def significance_label(p_value):
 
 
 def prepare_boxplot_values(correlations):
-    """Return one finite correlation array per lead time."""
+    """Return one finite correlation array for each lead time."""
 
     lead_times = correlations["lead_time"].values.astype(int)
-
     values_by_lead = []
 
     for lead_time in lead_times:
-
         values = correlations.sel(
             lead_time=lead_time
         ).values.ravel()
 
         values = values[np.isfinite(values)]
-
         values_by_lead.append(values)
 
     return lead_times, values_by_lead
 
 
 def style_boxplot(boxplot):
-    """Apply restrained publication-style boxplot formatting."""
+    """Apply clear, publication-style formatting to the boxplots."""
 
     for box in boxplot["boxes"]:
         box.set_linewidth(1.0)
@@ -464,8 +634,15 @@ def style_boxplot(boxplot):
     for cap in boxplot["caps"]:
         cap.set_linewidth(0.9)
 
+    # Explicitly draw the median line in black.
     for median in boxplot["medians"]:
+        median.set_color("black")
         median.set_linewidth(1.4)
+
+    # Explicitly draw all outliers in grey (0.6).
+    for outliers in boxplot["fliers"]:
+        outliers.set_markeredgecolor("0.6")
+        outliers.set_markerfacecolor("none")
 
 
 def add_significance_markers(
@@ -473,7 +650,7 @@ def add_significance_markers(
     adjusted_p_values,
     values_by_lead,
 ):
-    """Add adjusted-p-value significance symbols above the boxplots."""
+    """Add adjusted-p-value significance asterisks above the boxplots."""
 
     nonempty_values = [
         values
@@ -499,7 +676,6 @@ def add_significance_markers(
         adjusted_p_values,
         start=1,
     ):
-
         label = significance_label(p_value)
 
         if label:
@@ -509,7 +685,7 @@ def add_significance_markers(
                 label,
                 horizontalalignment="center",
                 verticalalignment="bottom",
-                fontsize=8,
+                fontsize=significance_fontsize,
             )
 
     current_lower, current_upper = axis.get_ylim()
@@ -523,20 +699,14 @@ def add_significance_markers(
     )
 
 
-def create_figure(
-    combined_correlations,
-    test_results,
-):
-    """Create the publication-quality combined boxplot figure."""
+def create_figure(combined_correlations, test_results=None):
+    """Create the combined box-and-whisker figure."""
 
     lead_times, values_by_lead = prepare_boxplot_values(
         combined_correlations
     )
 
-    positions = np.arange(
-        1,
-        len(lead_times) + 1,
-    )
+    positions = np.arange(1, len(lead_times) + 1)
 
     figure, axis = plt.subplots(
         figsize=(figure_width, figure_height),
@@ -550,14 +720,27 @@ def create_figure(
         patch_artist=False,
         showfliers=show_outliers,
         whis=1.5,
+        medianprops={
+            "color": "black",
+            "linewidth": 1.4,
+        },
+        flierprops={
+            "marker": "o",
+            "markerfacecolor": "0.6",
+            "markeredgecolor": "0.6",
+            "markersize": 3.5,
+            "linestyle": "none",
+        },
     )
 
     style_boxplot(boxplot)
 
+    # Solid black zero-correlation reference line.
     axis.axhline(
         0.0,
+        color="black",
         linewidth=0.9,
-        linestyle="--",
+        linestyle="-",
         zorder=0,
     )
 
@@ -569,14 +752,26 @@ def create_figure(
     ]
 
     axis.set_xticks(positions)
-    axis.set_xticklabels(visible_labels)
+    axis.set_xticklabels(
+        visible_labels,
+        fontsize=tick_fontsize,
+    )
 
-    axis.set_xlabel("Lead time (days)")
-    axis.set_ylabel("Spearman rank correlation")
+    axis.set_xlabel(
+        "Lead time (days)",
+        fontsize=label_fontsize,
+    )
 
+    axis.set_ylabel(
+        "Spearman rank correlation",
+        fontsize=label_fontsize,
+    )
+
+    # The title uses normal font weight rather than bold.
     axis.set_title(
-        "Ensemble-member independence by forecast lead time",
-        fontweight="bold",
+        plot_title,
+        fontsize=title_fontsize,
+        fontweight="normal",
     )
 
     axis.spines["top"].set_visible(False)
@@ -586,6 +781,7 @@ def create_figure(
         axis="both",
         which="major",
         direction="out",
+        labelsize=tick_fontsize,
     )
 
     axis.set_xlim(
@@ -593,34 +789,12 @@ def create_figure(
         len(lead_times) + 0.7,
     )
 
-    add_significance_markers(
-        axis=axis,
-        adjusted_p_values=test_results[
-            "adjusted_p_value"
-        ],
-        values_by_lead=values_by_lead,
-    )
-
-    correction_text = {
-        "holm": "Holm-adjusted",
-        "bonferroni": "Bonferroni-adjusted",
-        "none": "Unadjusted",
-    }[multiple_testing_correction]
-
-    figure.text(
-        0.5,
-        0.005,
-        (
-            "Forecast and hindcast pairwise correlations are pooled. "
-            "Boxes show the interquartile range, centre lines show medians, "
-            "and whiskers extend to 1.5 × IQR. "
-            f"Asterisks indicate {correction_text} two-sided Wilcoxon "
-            f"p-values: * p<0.05, ** p<0.01, *** p<0.001."
-        ),
-        horizontalalignment="center",
-        verticalalignment="bottom",
-        fontsize=8,
-    )
+    if show_significance and test_results is not None:
+        add_significance_markers(
+            axis=axis,
+            adjusted_p_values=test_results["adjusted_p_value"],
+            values_by_lead=values_by_lead,
+        )
 
     return figure
 
@@ -629,8 +803,9 @@ def create_figure(
 # Output
 # =============================================================================
 
+
 def save_figure(figure):
-    """Save the figure as PDF and/or PNG."""
+    """Save the figure as PDF and/or PNG using a descriptive filename."""
 
     os.makedirs(path_out, exist_ok=True)
 
@@ -666,9 +841,19 @@ def save_figure(figure):
 # Main script
 # =============================================================================
 
+
 if __name__ == "__main__":
 
     validate_user_settings()
+
+    print("Input file:")
+    print(filename_in)
+    print()
+    print("Figure title:")
+    print(plot_title)
+    print()
+    print("Output filename stem:")
+    print(filename_stem)
 
     dataset = load_independence_results(
         filename=filename_in
@@ -697,31 +882,16 @@ if __name__ == "__main__":
         hindcast_correlations=hindcast_correlations,
     )
 
-    test_results = calculate_test_results(
-        correlations=combined_correlations
-    )
+    test_results = None
 
-    print()
-    print("Lead-time test results")
-    print("----------------------")
-
-    for (
-        lead_time,
-        median_rho,
-        raw_p_value,
-        adjusted_p_value,
-    ) in zip(
-        test_results["lead_time"],
-        test_results["median_rho"],
-        test_results["raw_p_value"],
-        test_results["adjusted_p_value"],
-    ):
-        print(
-            f"Lead {lead_time:2d}: "
-            f"median rho={median_rho: .4f}, "
-            f"raw p={raw_p_value:.4g}, "
-            f"adjusted p={adjusted_p_value:.4g}"
+    if show_significance:
+        test_results = calculate_test_results(
+            correlations=combined_correlations
         )
+        print_test_results(test_results)
+    else:
+        print()
+        print("Significance calculation and asterisks are disabled.")
 
     figure = create_figure(
         combined_correlations=combined_correlations,

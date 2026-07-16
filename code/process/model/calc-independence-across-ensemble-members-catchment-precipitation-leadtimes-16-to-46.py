@@ -8,7 +8,7 @@ For each lead time, this script:
 3. Calculates trailing N-day accumulated precipitation.
 4. Builds one time series for each ensemble member across initialization dates.
 5. Calculates the Spearman rank correlation for every unique pair of members.
-6. Saves forecast and hindcast correlations with explicit lead-time dimensions.
+6. Saves the forecast and hindcast pairwise correlations to NetCDF.
 
 Forecast and hindcast ensembles are handled separately:
 
@@ -18,25 +18,14 @@ Forecast:
 Hindcast:
     Each hdate is one separate initialization with 11 ensemble members.
 
-Output structure
-----------------
+Output data variables
+---------------------
 forecast_spearman_rho(valid_month, lead_time, forecast_pair)
 hindcast_spearman_rho(valid_month, lead_time, hindcast_pair)
 
-The member identities belonging to each pair are stored as:
-
-forecast_member_1(forecast_pair)
-forecast_member_2(forecast_pair)
-
-hindcast_member_1(hindcast_pair)
-hindcast_member_2(hindcast_pair)
-
-The number of valid samples used for each correlation is stored in:
-
-forecast_n_samples(valid_month, lead_time, forecast_pair)
-hindcast_n_samples(valid_month, lead_time, hindcast_pair)
-
-Summary statistics are also stored for each valid month and lead time.
+Only these two data variables are written to the output file. Coordinates such
+as valid_month, lead_time, forecast_pair, and hindcast_pair are retained so
+that the correlation arrays can be selected and plotted easily.
 
 Notes
 -----
@@ -73,7 +62,7 @@ x_days = 2
 catchment = "regine_drammen"
 
 # Forecast initialization dates to include
-forecast_date_range = ["2020-01-02", "2020-01-30"] #["2020-01-02", "2023-06-26"]
+forecast_date_range = ["2020-01-02", "2023-06-26"]
 
 # ECMWF files are normally available on Mondays and Thursdays.
 forecast_date_option = "mt"  # "mt" or "all"
@@ -92,15 +81,6 @@ last_input_lead = 46
 #     Pool all calendar months at each lead time.
 grouping = "valid_month"
 
-# Detrending method
-#
-# "first_difference":
-#     Replace each member time series with differences between consecutive
-#     initialization values. This reduces artificial dependence from trends.
-#
-# "none":
-#     Use the original accumulated precipitation values.
-detrend_method = "none"
 
 # Minimum number of paired values needed to calculate a correlation
 minimum_samples = 10
@@ -234,11 +214,6 @@ def validate_user_settings():
             "grouping must be either 'all' or 'valid_month'."
         )
 
-    if detrend_method not in {"none", "first_difference"}:
-        raise ValueError(
-            "detrend_method must be either 'none' or "
-            "'first_difference'."
-        )
 
     if minimum_samples < 3:
         raise ValueError(
@@ -824,32 +799,15 @@ def collect_processed_data(forecast_dates, weights):
 # Spearman rank correlations
 # =============================================================================
 
-def make_member_pairs(member_labels):
+def make_member_pairs(number_of_members):
     """
-    Return all unique ensemble-member pairs.
+    Return all unique pairs of ensemble-member column indices.
 
-    Returns
-    -------
-    member_1 : numpy.ndarray
-    member_2 : numpy.ndarray
-    pair_indices : list of tuple
-        Integer column indices used to access the data array.
+    For 51 forecast members, this returns 1275 pairs.
+    For 11 hindcast members, this returns 55 pairs.
     """
 
-    member_labels = np.asarray(member_labels)
-    pair_indices = list(combinations(range(len(member_labels)), 2))
-
-    member_1 = np.array(
-        [member_labels[index_1] for index_1, _ in pair_indices],
-        dtype="int16",
-    )
-
-    member_2 = np.array(
-        [member_labels[index_2] for _, index_2 in pair_indices],
-        dtype="int16",
-    )
-
-    return member_1, member_2, pair_indices
+    return list(combinations(range(number_of_members), 2))
 
 
 def select_group_values(data, lead_time, month=None):
@@ -870,12 +828,7 @@ def select_group_values(data, lead_time, month=None):
         "number",
     )
 
-    values = lead_data.values.astype("float64")
-
-    if detrend_method == "first_difference":
-        values = np.diff(values, axis=0)
-
-    return values
+    return lead_data.values.astype("float64")
 
 
 def spearman_correlation(x, y, minimum_valid_samples):
@@ -912,24 +865,27 @@ def calculate_pairwise_correlations(data, model_type):
     """
     Calculate all unique pairwise correlations for one ensemble system.
 
+    Parameters
+    ----------
+    data : xarray.DataArray or None
+        Processed forecast or hindcast archive with dimensions:
+        initialization, number, lead_time.
+
+    model_type : str
+        Either "forecast" or "hindcast". Used only for printed progress.
+
     Returns
     -------
-    correlations : xarray.DataArray
+    xarray.DataArray or None
         Dimensions:
             valid_month, lead_time, pair
-
-    sample_counts : xarray.DataArray
-        Number of paired samples used for each correlation.
-
-    member_1 : numpy.ndarray
-    member_2 : numpy.ndarray
     """
 
     if data is None:
-        return None, None, None, None
+        return None
 
-    member_1, member_2, pair_indices = make_member_pairs(
-        data["number"].values
+    pair_indices = make_member_pairs(
+        number_of_members=data.sizes["number"]
     )
 
     lead_times = data["lead_time"].values.astype("int16")
@@ -947,11 +903,6 @@ def calculate_pairwise_correlations(data, model_type):
         (number_of_months, number_of_leads, number_of_pairs),
         np.nan,
         dtype="float32",
-    )
-
-    sample_counts = np.zeros(
-        (number_of_months, number_of_leads, number_of_pairs),
-        dtype="int32",
     )
 
     total_groups = number_of_months * number_of_leads
@@ -984,7 +935,7 @@ def calculate_pairwise_correlations(data, model_type):
                 member_index_2,
             ) in enumerate(pair_indices):
 
-                rho, number_of_valid_samples = spearman_correlation(
+                rho, _ = spearman_correlation(
                     x=values[:, member_index_1],
                     y=values[:, member_index_2],
                     minimum_valid_samples=minimum_samples,
@@ -996,13 +947,7 @@ def calculate_pairwise_correlations(data, model_type):
                     pair_index,
                 ] = rho
 
-                sample_counts[
-                    month_index,
-                    lead_index,
-                    pair_index,
-                ] = number_of_valid_samples
-
-    correlation_array = xr.DataArray(
+    return xr.DataArray(
         correlations,
         dims=("valid_month", "lead_time", "pair"),
         coords={
@@ -1013,123 +958,6 @@ def calculate_pairwise_correlations(data, model_type):
         name=f"{model_type}_spearman_rho",
     )
 
-    sample_count_array = xr.DataArray(
-        sample_counts,
-        dims=("valid_month", "lead_time", "pair"),
-        coords=correlation_array.coords,
-        name=f"{model_type}_n_samples",
-    )
-
-    return (
-        correlation_array,
-        sample_count_array,
-        member_1,
-        member_2,
-    )
-
-
-# =============================================================================
-# Summary statistics
-# =============================================================================
-
-def calculate_summary_statistics(correlations, prefix):
-    """
-    Calculate summary statistics across the pair dimension.
-
-    The function works whether the pair dimension is still called "pair"
-    or has already been renamed to "forecast_pair" or "hindcast_pair".
-    """
-
-    if correlations is None:
-        return {}
-
-    possible_pair_dimensions = [
-        f"{prefix}_pair",
-        "pair",
-    ]
-
-    pair_dimension = next(
-        (
-            dimension
-            for dimension in possible_pair_dimensions
-            if dimension in correlations.dims
-        ),
-        None,
-    )
-
-    if pair_dimension is None:
-        raise ValueError(
-            "Could not identify the pair dimension. "
-            f"Array dimensions are {correlations.dims}; expected one of "
-            f"{possible_pair_dimensions}."
-        )
-
-    def remove_quantile_coordinate(data_array):
-        """Remove the scalar coordinate added by xarray.quantile()."""
-
-        if "quantile" in data_array.coords:
-            data_array = data_array.drop_vars("quantile")
-
-        return data_array
-
-    q05 = remove_quantile_coordinate(
-        correlations.quantile(
-            0.05,
-            dim=pair_dimension,
-            skipna=True,
-        )
-    )
-
-    q25 = remove_quantile_coordinate(
-        correlations.quantile(
-            0.25,
-            dim=pair_dimension,
-            skipna=True,
-        )
-    )
-
-    q75 = remove_quantile_coordinate(
-        correlations.quantile(
-            0.75,
-            dim=pair_dimension,
-            skipna=True,
-        )
-    )
-
-    q95 = remove_quantile_coordinate(
-        correlations.quantile(
-            0.95,
-            dim=pair_dimension,
-            skipna=True,
-        )
-    )
-
-    return {
-        f"{prefix}_mean_rho": correlations.mean(
-            dim=pair_dimension,
-            skipna=True,
-        ),
-        f"{prefix}_median_rho": correlations.median(
-            dim=pair_dimension,
-            skipna=True,
-        ),
-        f"{prefix}_q05_rho": q05,
-        f"{prefix}_q25_rho": q25,
-        f"{prefix}_q75_rho": q75,
-        f"{prefix}_q95_rho": q95,
-        f"{prefix}_minimum_rho": correlations.min(
-            dim=pair_dimension,
-            skipna=True,
-        ),
-        f"{prefix}_maximum_rho": correlations.max(
-            dim=pair_dimension,
-            skipna=True,
-        ),
-        f"{prefix}_n_valid_pairs": correlations.notnull().sum(
-            dim=pair_dimension,
-        ).astype("int32"),
-    }
-
 
 # =============================================================================
 # Build output dataset
@@ -1137,89 +965,30 @@ def calculate_summary_statistics(correlations, prefix):
 
 def build_output_dataset(
     forecast_correlations,
-    forecast_sample_counts,
-    forecast_member_1,
-    forecast_member_2,
     hindcast_correlations,
-    hindcast_sample_counts,
-    hindcast_member_1,
-    hindcast_member_2,
 ):
     """
-    Build the final output Dataset with explicit lead-time dimensions.
+    Build the final output Dataset.
+
+    Only two data variables are included:
+
+        forecast_spearman_rho
+        hindcast_spearman_rho
     """
 
     data_variables = {}
 
     if forecast_correlations is not None:
-
-        forecast_correlations = forecast_correlations.rename(
-            {"pair": "forecast_pair"}
-        )
-
-        forecast_sample_counts = forecast_sample_counts.rename(
-            {"pair": "forecast_pair"}
-        )
-
-        data_variables["forecast_spearman_rho"] = forecast_correlations
-        data_variables["forecast_n_samples"] = forecast_sample_counts
-
-        data_variables["forecast_member_1"] = xr.DataArray(
-            forecast_member_1,
-            dims="forecast_pair",
-            coords={
-                "forecast_pair": forecast_correlations["forecast_pair"]
-            },
-        )
-
-        data_variables["forecast_member_2"] = xr.DataArray(
-            forecast_member_2,
-            dims="forecast_pair",
-            coords={
-                "forecast_pair": forecast_correlations["forecast_pair"]
-            },
-        )
-
-        data_variables.update(
-            calculate_summary_statistics(
-                forecast_correlations,
-                prefix="forecast",
+        data_variables["forecast_spearman_rho"] = (
+            forecast_correlations.rename(
+                {"pair": "forecast_pair"}
             )
         )
 
     if hindcast_correlations is not None:
-
-        hindcast_correlations = hindcast_correlations.rename(
-            {"pair": "hindcast_pair"}
-        )
-
-        hindcast_sample_counts = hindcast_sample_counts.rename(
-            {"pair": "hindcast_pair"}
-        )
-
-        data_variables["hindcast_spearman_rho"] = hindcast_correlations
-        data_variables["hindcast_n_samples"] = hindcast_sample_counts
-
-        data_variables["hindcast_member_1"] = xr.DataArray(
-            hindcast_member_1,
-            dims="hindcast_pair",
-            coords={
-                "hindcast_pair": hindcast_correlations["hindcast_pair"]
-            },
-        )
-
-        data_variables["hindcast_member_2"] = xr.DataArray(
-            hindcast_member_2,
-            dims="hindcast_pair",
-            coords={
-                "hindcast_pair": hindcast_correlations["hindcast_pair"]
-            },
-        )
-
-        data_variables.update(
-            calculate_summary_statistics(
-                hindcast_correlations,
-                prefix="hindcast",
+        data_variables["hindcast_spearman_rho"] = (
+            hindcast_correlations.rename(
+                {"pair": "hindcast_pair"}
             )
         )
 
@@ -1236,7 +1005,7 @@ def build_output_dataset(
 
 
 def add_output_metadata(dataset):
-    """Add descriptions and processing information to the output Dataset."""
+    """Add concise metadata to the output Dataset."""
 
     if "forecast_spearman_rho" in dataset:
         dataset["forecast_spearman_rho"].attrs = {
@@ -1245,23 +1014,9 @@ def add_output_metadata(dataset):
             ),
             "description": (
                 "Calculated across operational forecast initialization dates "
-                "at a fixed valid month and lead time"
+                "at a fixed lead time and, when requested, valid month"
             ),
         }
-
-        dataset["forecast_n_samples"].attrs = {
-            "long_name": (
-                "number of valid paired forecast samples used in correlation"
-            )
-        }
-
-        dataset["forecast_member_1"].attrs["long_name"] = (
-            "first forecast ensemble member in pair"
-        )
-
-        dataset["forecast_member_2"].attrs["long_name"] = (
-            "second forecast ensemble member in pair"
-        )
 
     if "hindcast_spearman_rho" in dataset:
         dataset["hindcast_spearman_rho"].attrs = {
@@ -1270,23 +1025,9 @@ def add_output_metadata(dataset):
             ),
             "description": (
                 "Calculated across hindcast hdate initializations at a fixed "
-                "valid month and lead time"
+                "lead time and, when requested, valid month"
             ),
         }
-
-        dataset["hindcast_n_samples"].attrs = {
-            "long_name": (
-                "number of valid paired hindcast samples used in correlation"
-            )
-        }
-
-        dataset["hindcast_member_1"].attrs["long_name"] = (
-            "first hindcast ensemble member in pair"
-        )
-
-        dataset["hindcast_member_2"].attrs["long_name"] = (
-            "second hindcast ensemble member in pair"
-        )
 
     dataset["lead_time"].attrs = {
         "long_name": "forecast lead day",
@@ -1302,9 +1043,7 @@ def add_output_metadata(dataset):
     }
 
     dataset.attrs = {
-        "title": (
-            "ECMWF S2S ensemble-member independence test"
-        ),
+        "title": "ECMWF S2S ensemble-member independence test",
         "variable": variable,
         "catchment": catchment,
         "accumulation_days": int(x_days),
@@ -1316,7 +1055,6 @@ def add_output_metadata(dataset):
         "forecast_date_start": forecast_date_range[0],
         "forecast_date_end": forecast_date_range[1],
         "grouping": grouping,
-        "detrend_method": detrend_method,
         "minimum_samples": int(minimum_samples),
         "forecast_interpretation": (
             "Each operational forecast date is one 51-member initialization"
@@ -1338,22 +1076,14 @@ def write_output(dataset):
 
     filename_out = make_output_filename()
 
-    encoding = {}
-
-    for variable_name in dataset.data_vars:
-
-        if np.issubdtype(dataset[variable_name].dtype, np.floating):
-            encoding[variable_name] = {
-                "dtype": "float32",
-                "zlib": True,
-                "complevel": 4,
-            }
-
-        elif np.issubdtype(dataset[variable_name].dtype, np.integer):
-            encoding[variable_name] = {
-                "zlib": True,
-                "complevel": 4,
-            }
+    encoding = {
+        variable_name: {
+            "dtype": "float32",
+            "zlib": True,
+            "complevel": 4,
+        }
+        for variable_name in dataset.data_vars
+    }
 
     dataset.to_netcdf(
         filename_out,
@@ -1392,7 +1122,6 @@ if __name__ == "__main__":
         f"{first_input_lead + x_days - 1}–{last_input_lead}"
     )
     print(f"Grouping:             {grouping}")
-    print(f"Detrending:           {detrend_method}")
     print(f"Forecast dates:       {len(forecast_dates)}")
     print(f"Minimum samples:      {minimum_samples}")
 
@@ -1403,35 +1132,19 @@ if __name__ == "__main__":
         weights=weights,
     )
 
-    (
-        forecast_correlations,
-        forecast_sample_counts,
-        forecast_member_1,
-        forecast_member_2,
-    ) = calculate_pairwise_correlations(
+    forecast_correlations = calculate_pairwise_correlations(
         data=forecast_archive,
         model_type="forecast",
     )
 
-    (
-        hindcast_correlations,
-        hindcast_sample_counts,
-        hindcast_member_1,
-        hindcast_member_2,
-    ) = calculate_pairwise_correlations(
+    hindcast_correlations = calculate_pairwise_correlations(
         data=hindcast_archive,
         model_type="hindcast",
     )
 
     output_dataset = build_output_dataset(
         forecast_correlations=forecast_correlations,
-        forecast_sample_counts=forecast_sample_counts,
-        forecast_member_1=forecast_member_1,
-        forecast_member_2=forecast_member_2,
         hindcast_correlations=hindcast_correlations,
-        hindcast_sample_counts=hindcast_sample_counts,
-        hindcast_member_1=hindcast_member_1,
-        hindcast_member_2=hindcast_member_2,
     )
 
     print()
