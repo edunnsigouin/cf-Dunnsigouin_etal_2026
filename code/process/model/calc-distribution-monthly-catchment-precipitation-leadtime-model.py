@@ -42,14 +42,20 @@ variable = "tp24"
 # Number of consecutive days included in each accumulation.
 x_days = 2
 
+# Daily values in each input file represent lead days 16 through 46.
+# These explicit lead days are used instead of the decoded NetCDF time
+# coordinate because time units are incorrect in some files.
+first_lead_day = 16
+last_lead_day = 46
+
 catchment = "regine_drammen"
 
 # Valid calendar month to retain:
 # 1 = January, 2 = February, ..., 12 = December.
-valid_month = 1
+valid_month = 12
 
 # Forecast initialization dates to consider.
-forecast_date_range = ["2023-03-16","2023-03-16"]#["2020-01-02","2023-06-26"]
+forecast_date_range = ["2020-01-02","2023-06-26"]
 
 # Forecast initializations are normally available on Mondays and Thursdays.
 forecast_date_option = "mt"  # "mt" or "all"
@@ -87,6 +93,14 @@ def validate_user_settings():
     if forecast_date_option not in {"mt", "all"}:
         raise ValueError(
             "forecast_date_option must be either 'mt' or 'all'."
+        )
+
+    if first_lead_day < 0:
+        raise ValueError("first_lead_day must be non-negative.")
+
+    if last_lead_day < first_lead_day:
+        raise ValueError(
+            "last_lead_day must be greater than or equal to first_lead_day."
         )
 
 
@@ -162,61 +176,53 @@ def make_output_filename():
 
 
 # =============================================================================
-# Lightweight coordinate checks
+# Lead times and lightweight file checks
 # =============================================================================
 
-def get_complete_accumulation_times(time_values):
+def get_input_lead_times(number_of_time_steps):
     """
-    Return dates representing complete trailing N-day accumulations.
+    Return the lead day represented by every daily value in an input file.
 
-    The first `x_days - 1` daily dates are removed because a complete
-    accumulation cannot yet be calculated.
-    """
-
-    times = pd.DatetimeIndex(pd.to_datetime(time_values)).normalize()
-
-    if len(times) < x_days:
-        return pd.DatetimeIndex([])
-
-    return times[x_days - 1:]
-
-
-def calculate_lead_times(valid_times, forecast_date):
-    """
-    Calculate lead times in whole days.
-
-    Lead time is defined as:
-
-        accumulation end date - archive forecast initialization date
-
-    Returns
-    -------
-    numpy.ndarray
-        Lead times as integer days.
+    The files are expected to contain daily values for lead days 16 through 46.
+    Lead times are generated explicitly and do not depend on the decoded
+    NetCDF time coordinate.
     """
 
-    initialization_date = pd.Timestamp(forecast_date).normalize()
+    expected_time_steps = last_lead_day - first_lead_day + 1
 
-    valid_times = pd.DatetimeIndex(valid_times).normalize()
+    if number_of_time_steps != expected_time_steps:
+        raise ValueError(
+            f"Expected {expected_time_steps} daily time steps representing "
+            f"lead days {first_lead_day}–{last_lead_day}, but found "
+            f"{number_of_time_steps}."
+        )
 
-    lead_times = np.asarray(
-        (valid_times - initialization_date).days,
+    return np.arange(
+        first_lead_day,
+        last_lead_day + 1,
         dtype="int32",
     )
 
-    if np.any(lead_times < 0):
-        raise ValueError(
-            f"Negative lead times were found for initialization "
-            f"{forecast_date}."
-        )
 
-    return lead_times
+def get_accumulation_lead_times(number_of_time_steps):
+    """
+    Return lead times for complete trailing N-day accumulations.
+
+    The accumulation is labelled by its final lead day. For example, with
+    x_days = 2, daily lead days 16 and 17 form the first complete accumulation,
+    which is labelled lead day 17.
+    """
+
+    input_lead_times = get_input_lead_times(number_of_time_steps)
+
+    if number_of_time_steps < x_days:
+        return np.asarray([], dtype="int32")
+
+    return input_lead_times[x_days - 1:]
 
 
 def hdate_values_to_timestamps(hdate_values):
-    """
-    Convert hindcast initialization dates to normalized pandas timestamps.
-    """
+    """Convert hindcast initialization dates to normalized timestamps."""
 
     values = np.asarray(hdate_values)
 
@@ -234,42 +240,27 @@ def hdate_values_to_timestamps(hdate_values):
 def file_has_requested_month(filename, forecast_date):
     """
     Check whether a forecast or hindcast file can contribute to the requested
-    valid month.
-
-    Only coordinates are read. The precipitation variable is not loaded.
-
-    Forecast files:
-        valid date = time coordinate
-
-    Hindcast files:
-        valid date = hdate + lead time
+    valid month without loading the precipitation variable.
     """
 
     if not filename.exists():
         raise FileNotFoundError(f"Input file not found:\n{filename}")
 
-    with xr.open_dataset(filename) as dataset:
+    with xr.open_dataset(filename, decode_times=False) as dataset:
 
-        if "time" not in dataset.coords:
+        if "time" not in dataset.dims:
             raise KeyError(
-                f"The input file has no 'time' coordinate:\n{filename}"
+                f"The input file has no 'time' dimension:\n{filename}"
             )
 
-        accumulation_times = get_complete_accumulation_times(
-            dataset["time"].values
+        lead_times = get_accumulation_lead_times(
+            dataset.sizes["time"]
         )
 
-        if len(accumulation_times) == 0:
+        if lead_times.size == 0:
             return False
 
-        # Hindcasts contain an hdate coordinate. Forecasts do not.
         if "hdate" in dataset.coords:
-
-            lead_times = calculate_lead_times(
-                accumulation_times,
-                forecast_date,
-            )
-
             hdates = hdate_values_to_timestamps(
                 dataset["hdate"].values
             )
@@ -284,7 +275,17 @@ def file_has_requested_month(filename, forecast_date):
             ).month
 
         else:
-            valid_months = accumulation_times.month
+            initialization_date = np.datetime64(
+                pd.Timestamp(forecast_date).normalize(),
+                "D",
+            )
+
+            valid_dates = (
+                initialization_date
+                + lead_times.astype("timedelta64[D]")
+            )
+
+            valid_months = pd.DatetimeIndex(valid_dates).month
 
     return np.any(valid_months == valid_month)
 
@@ -375,7 +376,7 @@ def load_input_data(filename):
     Load and standardize one forecast or hindcast variable.
     """
 
-    with xr.open_dataset(filename) as dataset:
+    with xr.open_dataset(filename, decode_times=False) as dataset:
         data = dataset[variable].load()
 
     data = convert_precipitation_to_mm(data)
@@ -447,23 +448,35 @@ def calculate_nday_accumulation(data):
     """
     Calculate trailing N-day accumulated precipitation.
 
-    Each value is labelled by the final day of its accumulation period.
+    Input time positions represent lead days 16 through 46. Each accumulated
+    value is labelled by the final lead day of its accumulation period.
     """
 
-    if data.sizes["time"] < x_days:
+    number_of_time_steps = data.sizes["time"]
+
+    if number_of_time_steps < x_days:
         raise ValueError(
-            f"The input contains only {data.sizes['time']} time steps, "
+            f"The input contains only {number_of_time_steps} time steps, "
             f"which is insufficient for a {x_days}-day accumulation."
         )
+
+    accumulation_lead_times = get_accumulation_lead_times(
+        number_of_time_steps
+    )
 
     accumulated = data.rolling(
         time=x_days,
         min_periods=x_days,
     ).sum()
 
-    # Remove dates without a complete N-day accumulation.
     accumulated = accumulated.isel(
         time=slice(x_days - 1, None)
+    )
+
+    accumulated = (
+        accumulated
+        .rename({"time": "lead_time"})
+        .assign_coords(lead_time=accumulation_lead_times)
     )
 
     accumulated.name = "accumulated_value"
@@ -493,37 +506,23 @@ def collect_values(
 ):
     """
     Store forecast or hindcast values valid in the selected month.
-
-    Forecast data have dimensions:
-        time, number
-
-    Hindcast data have dimensions:
-        time, hdate, number
-
-    Both are stored in the same output distribution. The presence of the
-    `hdate` dimension determines how valid dates are calculated.
     """
 
-    accumulation_times = pd.DatetimeIndex(
-        pd.to_datetime(accumulated_data["time"].values)
-    ).normalize()
-
-    lead_times = calculate_lead_times(
-        accumulation_times,
-        forecast_date,
-    )
-
+    lead_times = accumulated_data["lead_time"].values.astype("int32")
     is_hindcast = "hdate" in accumulated_data.dims
 
     if is_hindcast:
         hdates = hdate_values_to_timestamps(
             accumulated_data["hdate"].values
         )
+    else:
+        initialization_date = pd.Timestamp(
+            forecast_date
+        ).normalize()
 
-    for time_index, lead_time in enumerate(lead_times):
+    for lead_time in lead_times:
 
         if is_hindcast:
-
             valid_dates = (
                 hdates
                 + pd.to_timedelta(int(lead_time), unit="D")
@@ -538,24 +537,24 @@ def collect_values(
 
             values = (
                 accumulated_data
-                .isel(
-                    time=time_index,
-                    hdate=matching_hdates,
-                )
+                .sel(lead_time=lead_time)
+                .isel(hdate=matching_hdates)
                 .values
                 .ravel()
             )
 
         else:
-
-            valid_date = accumulation_times[time_index]
+            valid_date = (
+                initialization_date
+                + pd.Timedelta(days=int(lead_time))
+            )
 
             if valid_date.month != valid_month:
                 continue
 
             values = (
                 accumulated_data
-                .isel(time=time_index)
+                .sel(lead_time=lead_time)
                 .values
                 .ravel()
             )
@@ -656,13 +655,15 @@ def add_output_metadata(output):
     output.attrs["variable"] = variable
     output.attrs["catchment"] = catchment
     output.attrs["accumulation_days"] = np.int32(x_days)
+    output.attrs["input_first_lead_day"] = np.int32(first_lead_day)
+    output.attrs["input_last_lead_day"] = np.int32(last_lead_day)
     output.attrs["valid_month"] = np.int32(valid_month)
     output.attrs["valid_month_name"] = month_name
     output.attrs["forecast_date_start"] = forecast_date_range[0]
     output.attrs["forecast_date_end"] = forecast_date_range[1]
 
     output["lead_time"].attrs["description"] = (
-        "Days from initialization to the final day of the N-day accumulation"
+        "Lead day of the final day of the N-day accumulation"
     )
     output["lead_time"].attrs["units"] = "days"
 
@@ -689,7 +690,7 @@ def print_output_summary(output, file_counts):
         1,
     ).strftime("%B")
 
-    print("====================================================")
+    print("\n====================================================")
     print("Output summary")
     print("====================================================")
     print(f"Valid month:                {valid_month:02d} ({month_name})")

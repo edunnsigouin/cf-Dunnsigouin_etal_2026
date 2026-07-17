@@ -13,9 +13,10 @@ For an N-day accumulation, the first available accumulated lead is:
 
     first_input_lead + x_days - 1
 
-The plotting style follows the ensemble-independence plotting script used in
-this project: unfilled boxes, black median lines, grey outliers, outward ticks,
-and hidden top and right spines.
+The figure contains two panels. The top panel shows the pooled and individual
+lead-time data distributions. The bottom panel shows leave-one-out bootstrap
+distributions of the two-sample KS statistic. The plotting style follows the
+ensemble-independence plotting script used in this project.
 """
 
 import os
@@ -23,6 +24,7 @@ import os
 import matplotlib.pyplot as plt
 import numpy as np
 import xarray as xr
+from scipy.stats import ks_2samp
 
 from Dunnsigouin_etal_2026 import config
 
@@ -38,7 +40,7 @@ x_days = 2
 
 catchment = "regine_drammen"
 
-valid_month = 1
+valid_month = 5
 
 forecast_date_range = (
     "2020-01-02",
@@ -55,7 +57,7 @@ first_valid_accumulation_lead = first_input_lead + x_days - 1
 # Figure settings -------------------------------------------------------------
 
 figure_width = 11.0
-figure_height = 5.5
+figure_height = 8.0
 figure_dpi = 300
 
 box_width = 0.65
@@ -71,6 +73,19 @@ label_every_n_leads = 2
 # Optional y-axis limits. Use None for automatic limits.
 y_axis_min = None
 y_axis_max = None
+
+# KS resampling settings ------------------------------------------------------
+
+# For each lead time, draw this many equal-size bootstrap samples from the
+# leave-one-out pool and calculate one two-sample KS statistic per draw.
+number_of_ks_resamples = 1000
+
+# Fixed seed makes the resampling results reproducible.
+random_seed = 42
+
+# Optional lower-panel y-axis limits. KS statistics are bounded by 0 and 1.
+ks_y_axis_min = 0.0
+ks_y_axis_max = None
 
 
 # Save settings ---------------------------------------------------------------
@@ -259,6 +274,18 @@ def validate_user_settings():
     ):
         raise ValueError("y_axis_min must be smaller than y_axis_max.")
 
+    if number_of_ks_resamples < 1:
+        raise ValueError("number_of_ks_resamples must be at least 1.")
+
+    if (
+        ks_y_axis_min is not None
+        and ks_y_axis_max is not None
+        and ks_y_axis_min >= ks_y_axis_max
+    ):
+        raise ValueError(
+            "ks_y_axis_min must be smaller than ks_y_axis_max."
+        )
+
 
 def load_distribution(filename):
     """
@@ -427,6 +454,93 @@ def print_distribution_summary(
 
 
 # =============================================================================
+# Leave-one-out KS resampling
+# =============================================================================
+
+def calculate_ks_distributions(values_by_lead):
+    """
+    Calculate a resampled KS-statistic distribution for every lead time.
+
+    For each lead time:
+
+    1. Its samples are removed from the pooled reference distribution.
+    2. A reference sample is drawn with replacement from the remaining values.
+    3. The reference sample has the same size as the lead-time sample.
+    4. A two-sample KS statistic is calculated.
+    5. Steps 2–4 are repeated `number_of_ks_resamples` times.
+
+    Returns
+    -------
+    list of numpy.ndarray
+        One KS-statistic distribution for each lead time.
+    """
+
+    random_generator = np.random.default_rng(random_seed)
+    ks_distributions = []
+
+    for lead_index, lead_values in enumerate(values_by_lead):
+
+        leave_one_out_values = np.concatenate(
+            [
+                values
+                for other_index, values in enumerate(values_by_lead)
+                if other_index != lead_index
+            ]
+        )
+
+        if leave_one_out_values.size == 0:
+            raise ValueError(
+                "The leave-one-out pool is empty. At least two lead-time "
+                "distributions are required."
+            )
+
+        sample_size = lead_values.size
+
+        ks_statistics = np.empty(
+            number_of_ks_resamples,
+            dtype="float32",
+        )
+
+        for resample_index in range(number_of_ks_resamples):
+
+            reference_sample = random_generator.choice(
+                leave_one_out_values,
+                size=sample_size,
+                replace=True,
+            )
+
+            ks_statistics[resample_index] = ks_2samp(
+                lead_values,
+                reference_sample,
+                alternative="two-sided",
+                method="auto",
+            ).statistic
+
+        ks_distributions.append(ks_statistics)
+
+    return ks_distributions
+
+
+def print_ks_summary(lead_times, ks_distributions):
+    """Print summary statistics for the resampled KS distributions."""
+
+    print()
+    print("Leave-one-out KS summary")
+    print("------------------------")
+
+    for lead_time, ks_values in zip(
+        lead_times,
+        ks_distributions,
+    ):
+        print(
+            f"Lead {lead_time:2d}: "
+            f"median={np.median(ks_values):7.4f}, "
+            f"q05={np.percentile(ks_values, 5):7.4f}, "
+            f"q95={np.percentile(ks_values, 95):7.4f}"
+        )
+
+
+# =============================================================================
 # Plotting
 # =============================================================================
 
@@ -452,20 +566,49 @@ def style_boxplot(boxplot):
 
 
 def create_figure(data):
-    """Create the pooled and lead-time box-and-whisker figure."""
+    """
+    Create a two-panel figure.
+
+    Top:
+        Pooled distribution followed by one data distribution per lead time.
+
+    Bottom:
+        Leave-one-out resampled KS-statistic distribution for each lead time.
+    """
 
     lead_times, plot_labels, plot_values = prepare_boxplot_values(data)
 
-    positions = np.arange(1, len(plot_values) + 1)
+    pooled_values = plot_values[0]
+    values_by_lead = plot_values[1:]
 
-    figure, axis = plt.subplots(
-        figsize=(figure_width, figure_height),
-        constrained_layout=True,
+    ks_distributions = calculate_ks_distributions(
+        values_by_lead=values_by_lead
     )
 
-    boxplot = axis.boxplot(
+    number_of_categories = len(plot_values)
+    all_positions = np.arange(1, number_of_categories + 1)
+
+    # The first position is reserved for the pooled "All" data boxplot.
+    lead_positions = all_positions[1:]
+
+    figure, (top_axis, bottom_axis) = plt.subplots(
+        nrows=2,
+        ncols=1,
+        figsize=(figure_width, figure_height),
+        sharex=True,
+        constrained_layout=True,
+        gridspec_kw={
+            "height_ratios": [2.0, 1.0],
+        },
+    )
+
+    # -------------------------------------------------------------------------
+    # Top panel: accumulated-value distributions
+    # -------------------------------------------------------------------------
+
+    top_boxplot = top_axis.boxplot(
         plot_values,
-        positions=positions,
+        positions=all_positions,
         widths=box_width,
         patch_artist=False,
         showfliers=show_outliers,
@@ -483,7 +626,92 @@ def create_figure(data):
         },
     )
 
-    style_boxplot(boxplot)
+    style_boxplot(top_boxplot)
+
+    units = variable_units(variable)
+
+    top_y_label = (
+        f"{x_days}-day accumulated "
+        f"{variable_description(variable).capitalize()}"
+    )
+
+    if units:
+        top_y_label += f" ({units})"
+
+    top_axis.set_ylabel(
+        top_y_label,
+        fontsize=label_fontsize,
+    )
+
+    top_axis.set_title(
+        plot_title,
+        fontsize=title_fontsize,
+        fontweight="normal",
+    )
+
+    if y_axis_min is not None or y_axis_max is not None:
+        current_min, current_max = top_axis.get_ylim()
+
+        top_axis.set_ylim(
+            y_axis_min if y_axis_min is not None else current_min,
+            y_axis_max if y_axis_max is not None else current_max,
+        )
+
+    # -------------------------------------------------------------------------
+    # Bottom panel: KS-statistic distributions
+    # -------------------------------------------------------------------------
+
+    bottom_boxplot = bottom_axis.boxplot(
+        ks_distributions,
+        positions=lead_positions,
+        widths=box_width,
+        patch_artist=False,
+        showfliers=show_outliers,
+        whis=1.5,
+        medianprops={
+            "color": "black",
+            "linewidth": 1.4,
+        },
+        flierprops={
+            "marker": "o",
+            "markerfacecolor": "none",
+            "markeredgecolor": "0.6",
+            "markersize": 3.5,
+            "linestyle": "none",
+        },
+    )
+
+    style_boxplot(bottom_boxplot)
+
+    bottom_axis.set_ylabel(
+        "KS statistic",
+        fontsize=label_fontsize,
+    )
+
+    bottom_axis.set_xlabel(
+        "Lead time (days)",
+        fontsize=label_fontsize,
+    )
+
+    if ks_y_axis_min is not None or ks_y_axis_max is not None:
+        current_min, current_max = bottom_axis.get_ylim()
+
+        bottom_axis.set_ylim(
+            (
+                ks_y_axis_min
+                if ks_y_axis_min is not None
+                else current_min
+            ),
+            (
+                ks_y_axis_max
+                if ks_y_axis_max is not None
+                else current_max
+            ),
+        )
+
+    # -------------------------------------------------------------------------
+    # Shared formatting
+    # -------------------------------------------------------------------------
 
     visible_labels = ["All"]
 
@@ -495,64 +723,47 @@ def create_figure(data):
         )
         visible_labels.append(label)
 
-    axis.set_xticks(positions)
-    axis.set_xticklabels(
+    bottom_axis.set_xticks(all_positions)
+    bottom_axis.set_xticklabels(
         visible_labels,
         fontsize=tick_fontsize,
     )
 
-    axis.set_xlabel(
-        "Lead time (days)",
-        fontsize=label_fontsize,
-    )
+    for axis in (top_axis, bottom_axis):
 
-    units = variable_units(variable)
+        axis.spines["top"].set_visible(False)
+        axis.spines["right"].set_visible(False)
 
-    y_label = (
-        f"{x_days}-day accumulated "
-        f"{variable_description(variable).capitalize()}"
-    )
-
-    if units:
-        y_label += f" ({units})"
-
-    axis.set_ylabel(
-        y_label,
-        fontsize=label_fontsize,
-    )
-
-    axis.set_title(
-        plot_title,
-        fontsize=title_fontsize,
-        fontweight="normal",
-    )
-
-    axis.spines["top"].set_visible(False)
-    axis.spines["right"].set_visible(False)
-
-    axis.tick_params(
-        axis="both",
-        which="major",
-        direction="out",
-        labelsize=tick_fontsize,
-    )
-
-    axis.set_xlim(
-        0.3,
-        len(plot_values) + 0.7,
-    )
-
-    if y_axis_min is not None or y_axis_max is not None:
-        current_min, current_max = axis.get_ylim()
-
-        axis.set_ylim(
-            y_axis_min if y_axis_min is not None else current_min,
-            y_axis_max if y_axis_max is not None else current_max,
+        axis.tick_params(
+            axis="both",
+            which="major",
+            direction="out",
+            labelsize=tick_fontsize,
         )
+
+        axis.set_xlim(
+            0.3,
+            number_of_categories + 0.7,
+        )
+
+    # No KS distribution exists for the pooled "All" category.
+    bottom_axis.text(
+        all_positions[0],
+        bottom_axis.get_ylim()[0],
+        "—",
+        horizontalalignment="center",
+        verticalalignment="bottom",
+        fontsize=tick_fontsize,
+    )
 
     print_distribution_summary(
         lead_times=lead_times,
         plot_values=plot_values,
+    )
+
+    print_ks_summary(
+        lead_times=lead_times,
+        ks_distributions=ks_distributions,
     )
 
     return figure
