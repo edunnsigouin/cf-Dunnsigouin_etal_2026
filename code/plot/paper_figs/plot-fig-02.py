@@ -8,18 +8,21 @@ The figure compares:
 4. Storm Hans 2023 in ERA5 and SeNorge / SeNorge-regrid.
 5. The largest May S2S event, interpreted as a counterfactual spring Hans.
 
-Inputs:
-- S2S monthly extreme distribution file.
-- ERA5 monthly extreme distribution file.
-- SeNorge or SeNorge-regrid monthly extreme distribution file.
+The S2S model input is expected to be a lead-split file produced by the
+lead-bin sample-building script. A single user setting selects whether to plot
+the complete lead range or one of the individual lead-time splits.
 
-Output:
-- One publication-quality PNG figure.
+Example for x_days=2 and number_of_lead_bins=2:
+    model_sampling_group = "full"   -> max_value_lead17_46
+    model_sampling_group = "split1" -> max_value_lead17_30
+    model_sampling_group = "split2" -> max_value_lead31_46
 """
 
+import os
+
+import matplotlib.pyplot as plt
 import numpy as np
 import xarray as xr
-import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
 
 from Dunnsigouin_etal_2026 import config
@@ -29,7 +32,7 @@ from Dunnsigouin_etal_2026 import config
 # User settings
 # =============================================================================
 
-catchment = "regine_glomma"
+catchment = "regine_drammen"
 x_days = 2
 
 reference_dataset = "senorge"  # "senorge" or "senorge_regrid"
@@ -39,22 +42,38 @@ reference_years = ["1957", "2023"]
 
 era5_grid = "0.5x0.5"
 
-write2file = True
+# Daily lead range used when creating the model sample.
+first_input_lead = 16
+last_input_lead = 46
 
-filename_out = config.dirs["fig"] + "fig-02.png"
+# Must match the number of lead bins used by the sample-building script.
+number_of_lead_bins = 2
+
+# Model sample to plot:
+#     "full"   -> complete usable lead range
+#     "split1" -> first lead-time subset
+#     "split2" -> second lead-time subset
+#     ...
+model_sampling_group = "full"
+
+write2file = True
+if model_sampling_group == "full":
+    filename_out = config.dirs["fig"] + f"fig-02.png"
+else:
+    filename_out = config.dirs["fig"] + f"fig-02-{model_sampling_group}.png"
 
 
 # =============================================================================
 # Dataset-specific settings
 # =============================================================================
 
-MODEL_VARIABLE = "tp"
-MODEL_EXTREME_VARIABLE = "max_value"
+# Model files produced by the lead-bin sample-building script.
+MODEL_VARIABLE = "tp24"
 
-ERA5_VARIABLE = "tp"
+ERA5_VARIABLE = "tp24"
 
 REFERENCE_VARIABLES = {
-    "senorge": "tp",
+    "senorge": "rr",
     "senorge_regrid": "rr",
 }
 
@@ -90,6 +109,196 @@ MONTH_LABELS = [
     "Jan", "Feb", "Mar", "Apr", "May", "Jun",
     "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
 ]
+
+
+# =============================================================================
+# Lead-time helpers
+# =============================================================================
+
+def validate_model_sampling_settings() -> None:
+    """Check the model lead-time sampling settings."""
+
+    if x_days < 1:
+        raise ValueError("x_days must be at least 1.")
+
+    if first_input_lead > last_input_lead:
+        raise ValueError(
+            "first_input_lead must not exceed last_input_lead."
+        )
+
+    if not isinstance(number_of_lead_bins, int):
+        raise TypeError(
+            "number_of_lead_bins must be an integer."
+        )
+
+    if number_of_lead_bins < 1:
+        raise ValueError(
+            "number_of_lead_bins must be at least 1."
+        )
+
+    number_of_input_leads = (
+        last_input_lead - first_input_lead + 1
+    )
+
+    if number_of_lead_bins > number_of_input_leads:
+        raise ValueError(
+            "number_of_lead_bins cannot exceed the number of "
+            "available input lead days."
+        )
+
+    valid_groups = {
+        "full",
+        *{
+            f"split{index}"
+            for index in range(1, number_of_lead_bins + 1)
+        },
+    }
+
+    if model_sampling_group not in valid_groups:
+        raise ValueError(
+            f"Unknown model_sampling_group '{model_sampling_group}'. "
+            f"Valid options are: {sorted(valid_groups)}."
+        )
+
+
+def split_input_leads(
+    first_lead: int,
+    last_lead: int,
+    number_of_bins: int,
+) -> list[tuple[int, int]]:
+    """
+    Split an inclusive input lead interval into approximately equal bins.
+
+    Extra days are assigned to the later bins, matching the sample-building
+    script. Thus 16-46 split into two bins becomes 16-30 and 31-46.
+    """
+
+    number_of_leads = last_lead - first_lead + 1
+
+    base_size = number_of_leads // number_of_bins
+    remainder = number_of_leads % number_of_bins
+
+    bin_sizes = [
+        base_size
+        + int(
+            bin_index >= number_of_bins - remainder
+        )
+        for bin_index in range(number_of_bins)
+    ]
+
+    bins = []
+    current_start = first_lead
+
+    for bin_size in bin_sizes:
+        current_end = current_start + bin_size - 1
+        bins.append((current_start, current_end))
+        current_start = current_end + 1
+
+    return bins
+
+
+def build_accumulated_lead_ranges() -> list[tuple[int, int]]:
+    """
+    Return the full usable accumulated range followed by all split ranges.
+
+    Example for 2-day accumulation over input leads 16-46 with two bins:
+        [(17, 46), (17, 30), (31, 46)]
+    """
+
+    first_usable_lead = first_input_lead + x_days - 1
+
+    input_bins = split_input_leads(
+        first_lead=first_input_lead,
+        last_lead=last_input_lead,
+        number_of_bins=number_of_lead_bins,
+    )
+
+    split_ranges = []
+
+    for bin_index, (bin_start, bin_end) in enumerate(input_bins):
+
+        if bin_index == 0:
+            accumulated_start = max(
+                bin_start,
+                first_usable_lead,
+            )
+        else:
+            accumulated_start = bin_start
+
+        if accumulated_start > bin_end:
+            raise ValueError(
+                "A split contains no usable accumulated leads. "
+                "Reduce x_days or number_of_lead_bins."
+            )
+
+        split_ranges.append(
+            (accumulated_start, bin_end)
+        )
+
+    return [
+        (first_usable_lead, last_input_lead),
+        *split_ranges,
+    ]
+
+
+def get_selected_model_lead_range() -> tuple[int, int]:
+    """Return the lead range selected by model_sampling_group."""
+
+    lead_ranges = build_accumulated_lead_ranges()
+
+    if model_sampling_group == "full":
+        return lead_ranges[0]
+
+    split_number = int(
+        model_sampling_group.replace("split", "")
+    )
+
+    return lead_ranges[split_number]
+
+
+def get_selected_model_variable() -> str:
+    """Return the max-value variable for the selected lead range."""
+
+    lead_start, lead_end = get_selected_model_lead_range()
+
+    return f"max_value_lead{lead_start}_{lead_end}"
+
+
+def lead_split_filename_label() -> str:
+    """Return the lead-split label used by the model sample filename."""
+
+    lead_ranges = build_accumulated_lead_ranges()
+
+    full_start, full_end = lead_ranges[0]
+
+    split_text = "_".join(
+        f"{lead_start}-{lead_end}"
+        for lead_start, lead_end in lead_ranges[1:]
+    )
+
+    return (
+        f"lead{full_start}-{full_end}_"
+        f"split{number_of_lead_bins}_"
+        f"{split_text}"
+    )
+
+
+def get_model_sampling_label() -> str:
+    """Return a readable label for the selected model sampling group."""
+
+    lead_start, lead_end = get_selected_model_lead_range()
+
+    if model_sampling_group == "full":
+        return f"model leads {lead_start}-{lead_end}"
+
+    split_number = int(
+        model_sampling_group.replace("split", "")
+    )
+
+    return (
+        f"model split {split_number}: "
+        f"leads {lead_start}-{lead_end}"
+    )
 
 
 # =============================================================================
@@ -138,13 +347,25 @@ def get_catchment_label(catchment: str) -> str:
 # =============================================================================
 
 def make_model_filename() -> str:
-    """Create the S2S input filename."""
+    """
+    Create the S2S lead-split input filename.
 
-    return (
-        f"{config.dirs['s2s_processed']}"
-        f"distribution_monthly_extremes_{MODEL_VARIABLE}_{x_days}dayacc_"
-        f"nve_catchment_{catchment}_forecast_hindcast_"
-        f"{forecast_date_range[0]}_{forecast_date_range[1]}.nc"
+    This follows the filename convention used by the lead-bin sample builder.
+    """
+
+    lead_label = lead_split_filename_label()
+
+    return os.path.join(
+        config.dirs["s2s_processed"],
+        (
+            f"distribution_monthly_extremes_"
+            f"{MODEL_VARIABLE}_{x_days}dayacc_"
+            f"nve_catchment_{catchment}_"
+            f"{lead_label}_"
+            f"forecast_hindcast_"
+            f"{forecast_date_range[0]}_"
+            f"{forecast_date_range[1]}.nc"
+        ),
     )
 
 
@@ -154,7 +375,7 @@ def make_era5_filename() -> str:
     return (
         f"{config.dirs['era5_processed']}"
         f"distribution_monthly_extremes_{ERA5_VARIABLE}_{x_days}dayacc_"
-        f"nve_catchment_{catchment}_era5_{era5_grid}_"
+        f"{catchment}_era5_{era5_grid}_"
         f"{reference_years[0]}-{reference_years[1]}.nc"
     )
 
@@ -191,7 +412,11 @@ def load_datasets(
     return model_ds, era5_ds, reference_ds
 
 
-def check_variable_exists(ds: xr.Dataset, variable: str, dataset_name: str) -> None:
+def check_variable_exists(
+    ds: xr.Dataset,
+    variable: str,
+    dataset_name: str,
+) -> None:
     """Raise a clear error if a required variable is missing."""
 
     if variable not in ds:
@@ -207,21 +432,28 @@ def check_variable_exists(ds: xr.Dataset, variable: str, dataset_name: str) -> N
 
 def get_model_values_by_month(
     model_ds: xr.Dataset,
-    variable: str = MODEL_EXTREME_VARIABLE,
+    variable: str,
 ) -> list[np.ndarray]:
     """
-    Convert S2S extremes into one array per month.
+    Convert the selected S2S lead-range sample into one array per month.
 
-    Expected input:
+    Expected variable structure:
         model_ds[variable](month_of_year, index)
     """
 
-    check_variable_exists(model_ds, variable, "model dataset")
+    check_variable_exists(
+        model_ds,
+        variable,
+        "model dataset",
+    )
 
     values_by_month = []
 
     for month in MONTHS:
-        values = model_ds[variable].sel(month_of_year=month).values
+        values = model_ds[variable].sel(
+            month_of_year=month
+        ).values
+
         values = values[np.isfinite(values)]
         values_by_month.append(values)
 
@@ -235,15 +467,20 @@ def get_monthly_records_before_hans(
     """
     Get monthly records before Storm Hans.
 
-    Uses 1957–2022, so Storm Hans in 2023 is excluded.
+    Uses 1957-2022, so Storm Hans in 2023 is excluded.
     """
 
-    check_variable_exists(ds, variable, "reference dataset")
+    check_variable_exists(
+        ds,
+        variable,
+        "reference dataset",
+    )
 
-    before_hans = ds[variable].sel(year=slice(1957, 2022))
-    records = before_hans.max(dim="year")
+    before_hans = ds[variable].sel(
+        year=slice(1957, 2022)
+    )
 
-    return records
+    return before_hans.max(dim="year")
 
 
 def get_storm_hans_event(
@@ -254,37 +491,50 @@ def get_storm_hans_event(
     Get the largest 2023 event.
 
     This assumes the largest 2023 value corresponds to Storm Hans.
-    Returns:
-        month, value
     """
 
-    check_variable_exists(ds, variable, "reference dataset")
+    check_variable_exists(
+        ds,
+        variable,
+        "reference dataset",
+    )
 
-    values_2023 = ds[variable].sel(year=2023)
+    values_2023 = ds[variable].sel(
+        year=2023
+    )
 
-    flat = values_2023.stack(z=("month",))
+    flat = values_2023.stack(
+        z=("month",)
+    )
+
     max_index = flat.argmax("z")
-
     max_value = flat.isel(z=max_index)
     max_month = flat["month"].isel(z=max_index)
 
-    return int(max_month.values), float(max_value.values)
+    return (
+        int(max_month.values),
+        float(max_value.values),
+    )
 
 
 def get_highest_may_model_event(
     model_ds: xr.Dataset,
-    variable: str = MODEL_EXTREME_VARIABLE,
+    variable: str,
 ) -> tuple[int, float]:
     """
-    Get the largest May event in the S2S archive.
-
-    Returns:
-        month, value
+    Get the largest May event from the selected S2S sampling group.
     """
 
-    check_variable_exists(model_ds, variable, "model dataset")
+    check_variable_exists(
+        model_ds,
+        variable,
+        "model dataset",
+    )
 
-    may_values = model_ds[variable].sel(month_of_year=5)
+    may_values = model_ds[variable].sel(
+        month_of_year=5
+    )
+
     may_max = may_values.max()
 
     return 5, float(may_max.values)
@@ -294,7 +544,9 @@ def get_highest_may_model_event(
 # Plotting helpers
 # =============================================================================
 
-def make_legend_handles(reference_label: str) -> list[Line2D]:
+def make_legend_handles(
+    reference_label: str,
+) -> list[Line2D]:
     """Create legend handles for the plot."""
 
     return [
@@ -346,7 +598,7 @@ def make_legend_handles(reference_label: str) -> list[Line2D]:
             markeredgecolor="0.6",
             markeredgewidth=0.8,
             markersize=5,
-            label="Model extremes",
+            label=get_model_sampling_label(),
         ),
         Line2D(
             [0], [0],
@@ -365,15 +617,27 @@ def apply_axis_formatting(ax) -> None:
     """Apply consistent axis formatting."""
 
     catchment_label = get_catchment_label(catchment)
+    lead_start, lead_end = get_selected_model_lead_range()
 
     ax.set_title(
-        f"{catchment_label}, monthly {x_days}-day accumulated precipitation maxima",
+        (
+            f"{catchment_label}, monthly {x_days}-day accumulated "
+            f"precipitation maxima\n"
+            f"S2S ending leads {lead_start}-{lead_end}"
+        ),
         fontsize=TITLE_FONTSIZE,
         pad=8,
     )
 
-    ax.set_ylabel("Precipitation [mm]", fontsize=AXIS_LABELSIZE)
-    ax.set_xlabel("Month", fontsize=AXIS_LABELSIZE)
+    ax.set_ylabel(
+        "Precipitation [mm]",
+        fontsize=AXIS_LABELSIZE,
+    )
+
+    ax.set_xlabel(
+        "Month",
+        fontsize=AXIS_LABELSIZE,
+    )
 
     ax.set_xlim(0.4, 12.6)
     ax.set_ylim(YMIN, YMAX)
@@ -381,7 +645,10 @@ def apply_axis_formatting(ax) -> None:
     ax.set_xticks(MONTHS)
     ax.set_xticklabels(MONTH_LABELS)
 
-    ax.tick_params(axis="both", labelsize=TICK_LABELSIZE)
+    ax.tick_params(
+        axis="both",
+        labelsize=TICK_LABELSIZE,
+    )
 
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
@@ -396,6 +663,7 @@ def plot_monthly_extreme_distributions(
     era5_ds: xr.Dataset,
     reference_ds: xr.Dataset,
     model_ds: xr.Dataset,
+    model_variable: str,
     reference_variable: str,
     reference_label: str,
     filename_out: str,
@@ -418,14 +686,20 @@ def plot_monthly_extreme_distributions(
         variable=ERA5_VARIABLE,
     )
 
-    reference_hans_month, reference_hans_value = get_storm_hans_event(
+    (
+        reference_hans_month,
+        reference_hans_value,
+    ) = get_storm_hans_event(
         reference_ds,
         variable=reference_variable,
     )
 
-    counterfactual_month, counterfactual_value = get_highest_may_model_event(
+    (
+        counterfactual_month,
+        counterfactual_value,
+    ) = get_highest_may_model_event(
         model_ds,
-        variable=MODEL_EXTREME_VARIABLE,
+        variable=model_variable,
     )
 
     fig, ax = plt.subplots(
@@ -448,10 +722,22 @@ def plot_monthly_extreme_distributions(
             linestyle="none",
             markeredgewidth=0.8,
         ),
-        boxprops=dict(color="0.25", linewidth=1.0),
-        whiskerprops=dict(color="0.25", linewidth=1.0),
-        capprops=dict(color="0.25", linewidth=1.0),
-        medianprops=dict(color="black", linewidth=1.4),
+        boxprops=dict(
+            color="0.25",
+            linewidth=1.0,
+        ),
+        whiskerprops=dict(
+            color="0.25",
+            linewidth=1.0,
+        ),
+        capprops=dict(
+            color="0.25",
+            linewidth=1.0,
+        ),
+        medianprops=dict(
+            color="black",
+            linewidth=1.4,
+        ),
     )
 
     ax.scatter(
@@ -510,7 +796,9 @@ def plot_monthly_extreme_distributions(
     apply_axis_formatting(ax)
 
     ax.legend(
-        handles=make_legend_handles(reference_label),
+        handles=make_legend_handles(
+            reference_label
+        ),
         loc="upper left",
         frameon=False,
         fontsize=LEGEND_FONTSIZE,
@@ -520,7 +808,12 @@ def plot_monthly_extreme_distributions(
     fig.tight_layout()
 
     if write2file:
-        fig.savefig(filename_out, dpi=300, bbox_inches="tight")
+        fig.savefig(
+            filename_out,
+            dpi=300,
+            bbox_inches="tight",
+        )
+
         print("Wrote:", filename_out)
 
     plt.show()
@@ -532,21 +825,44 @@ def plot_monthly_extreme_distributions(
 
 if __name__ == "__main__":
 
-    reference_variable = get_reference_variable(reference_dataset)
-    reference_label = get_reference_label(reference_dataset)
+    validate_model_sampling_settings()
+
+    reference_variable = get_reference_variable(
+        reference_dataset
+    )
+
+    reference_label = get_reference_label(
+        reference_dataset
+    )
+
+    model_extreme_variable = get_selected_model_variable()
 
     filename_model = make_model_filename()
     filename_era5 = make_era5_filename()
+
     filename_reference = make_reference_filename(
         reference_dataset=reference_dataset,
         reference_variable=reference_variable,
     )
 
+    lead_start, lead_end = get_selected_model_lead_range()
+
+    print("Selected model sampling group")
+    print("-----------------------------")
+    print(f"Group:    {model_sampling_group}")
+    print(f"Leads:    {lead_start}-{lead_end}")
+    print(f"Variable: {model_extreme_variable}")
+
+    print()
     print("Reading model file:    ", filename_model)
     print("Reading ERA5 file:     ", filename_era5)
     print("Reading reference file:", filename_reference)
 
-    model_ds, era5_ds, reference_ds = load_datasets(
+    (
+        model_ds,
+        era5_ds,
+        reference_ds,
+    ) = load_datasets(
         filename_model=filename_model,
         filename_era5=filename_era5,
         filename_reference=filename_reference,
@@ -555,7 +871,7 @@ if __name__ == "__main__":
     try:
         model_values_by_month = get_model_values_by_month(
             model_ds,
-            variable=MODEL_EXTREME_VARIABLE,
+            variable=model_extreme_variable,
         )
 
         plot_monthly_extreme_distributions(
@@ -563,6 +879,7 @@ if __name__ == "__main__":
             era5_ds=era5_ds,
             reference_ds=reference_ds,
             model_ds=model_ds,
+            model_variable=model_extreme_variable,
             reference_variable=reference_variable,
             reference_label=reference_label,
             filename_out=filename_out,

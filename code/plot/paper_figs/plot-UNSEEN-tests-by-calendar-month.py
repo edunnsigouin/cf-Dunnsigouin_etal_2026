@@ -52,7 +52,7 @@ from Dunnsigouin_etal_2026 import config
 # =============================================================================
 
 # Calendar month to plot: 1=January, ..., 12=December.
-selected_month = 6
+selected_month = 1
 
 # Accumulation period.
 x_days = 2
