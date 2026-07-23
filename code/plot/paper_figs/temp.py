@@ -24,17 +24,14 @@ For each moment, the model is resampled with replacement using the same sample
 size as ERA5/SeNorge. The model bootstrap distribution, its central confidence
 interval, and the ERA5/SeNorge values are plotted.
 
-The data-selection layer is kept separate from the analysis. This makes it
-straightforward to add alternative model inputs later, for example:
-    - leads 17-30;
-    - leads 31-46;
-    - bias-corrected model data.
+Panels (b)-(f) read the split-sampling NetCDF produced by script 2. The user
+selects whether those panels use the full lead window or one of the lead-time
+splits. Panel (a) keeps its independence input separate.
 
-Only the current input-file conventions from scripts 1 and 2 are configured below.
-The same catchment is used for all datasets.
+The selected sampling range is written into the figure title, terminal output,
+and output filename. The same catchment is used for all datasets.
 """
 
-from dataclasses import dataclass
 import os
 from typing import Callable
 
@@ -52,7 +49,7 @@ from Dunnsigouin_etal_2026 import config
 # =============================================================================
 
 # Calendar month to plot: 1=January, ..., 12=December.
-selected_month = 12
+selected_month = 8
 
 # Accumulation period.
 x_days = 2
@@ -73,9 +70,28 @@ reference_years = (
 era5_grid = "0.5x0.5"
 senorge_dataset = "senorge"  # "senorge" or "senorge_regrid"
 
-# Select which model input configuration to use.
-# Add future lead-window or bias-corrected datasets in MODEL_INPUT_VARIANTS.
-model_input_variant = "current_raw"
+# Lead-time sampling configuration used by the split-sample builder (script 2).
+# These must match the settings used when that NetCDF file was created.
+first_input_lead = 16
+last_input_lead = 46
+number_of_lead_bins = 2
+
+# Sampling used in fidelity panels (b)-(f):
+#   "full"    -> complete usable accumulated lead range
+#   "split_1" -> first lead-time split
+#   "split_2" -> second lead-time split
+#   ...
+fidelity_sampling = "full"
+
+# Optional explicit file overrides. Leave as None to use the filename builders.
+# This is useful if files were renamed or stored elsewhere.
+moments_model_filename_override = None
+independence_filename_override = None
+
+# Panel (a) independence input is configured separately because script 2 only
+# creates the extreme samples used by panels (b)-(f).
+independence_first_input_lead = 16
+independence_last_input_lead = 46
 
 # Bootstrap settings.
 number_of_bootstrap_samples = 10000
@@ -110,7 +126,6 @@ show_figure = True
 # =============================================================================
 
 MODEL_VARIABLE = "tp24"
-MODEL_EXTREME_VARIABLE = "max_value"
 MODEL_MONTH_COORDINATE = "month_of_year"
 
 ERA5_VARIABLE = "tp24"
@@ -123,56 +138,6 @@ SENORGE_VARIABLES = {
 SENORGE_LABELS = {
     "senorge": "SeNorge",
     "senorge_regrid": "SeNorge regrid",
-}
-
-
-@dataclass(frozen=True)
-class ModelInputVariant:
-    """
-    Describe one pair of model input files.
-
-    For the current dataset, filenames are built exactly as in scripts 1 and 2.
-    For future datasets, set explicit filename overrides without changing any
-    of the loading, analysis, bootstrap, or plotting functions.
-    """
-
-    label: str
-
-    # Settings used by the current independence filename convention.
-    first_input_lead: int = 16
-    last_input_lead: int = 46
-
-    # Optional full-path overrides for future datasets.
-    independence_filename: str | None = None
-    moments_filename: str | None = None
-
-
-MODEL_INPUT_VARIANTS = {
-    "current_raw": ModelInputVariant(
-        label="Current raw model input",
-        first_input_lead=16,
-        last_input_lead=46,
-    ),
-
-    # Future examples:
-    #
-    # "raw_lead17_30": ModelInputVariant(
-    #     label="Raw model, leads 17-30",
-    #     independence_filename="/path/to/independence_17_30.nc",
-    #     moments_filename="/path/to/monthly_extremes_17_30.nc",
-    # ),
-    #
-    # "raw_lead31_46": ModelInputVariant(
-    #     label="Raw model, leads 31-46",
-    #     independence_filename="/path/to/independence_31_46.nc",
-    #     moments_filename="/path/to/monthly_extremes_31_46.nc",
-    # ),
-    #
-    # "bias_corrected_lead17_46": ModelInputVariant(
-    #     label="Bias-corrected model, leads 17-46",
-    #     independence_filename="/path/to/bc_independence_17_46.nc",
-    #     moments_filename="/path/to/bc_monthly_extremes_17_46.nc",
-    # ),
 }
 
 
@@ -292,10 +257,41 @@ def validate_user_settings() -> None:
     if x_days < 1:
         raise ValueError("x_days must be at least 1.")
 
-    if model_input_variant not in MODEL_INPUT_VARIANTS:
+    if first_input_lead > last_input_lead:
         raise ValueError(
-            f"Unknown model_input_variant '{model_input_variant}'. "
-            f"Choose from {sorted(MODEL_INPUT_VARIANTS)}."
+            "first_input_lead must not exceed last_input_lead."
+        )
+
+    number_of_input_leads = last_input_lead - first_input_lead + 1
+
+    if not isinstance(number_of_lead_bins, int):
+        raise TypeError("number_of_lead_bins must be an integer.")
+
+    if number_of_lead_bins < 1:
+        raise ValueError("number_of_lead_bins must be at least 1.")
+
+    if number_of_lead_bins > number_of_input_leads:
+        raise ValueError(
+            "number_of_lead_bins cannot exceed the number of input lead days."
+        )
+
+    if first_input_lead + x_days - 1 > last_input_lead:
+        raise ValueError(
+            "x_days is too large for the available input lead window."
+        )
+
+    valid_sampling_names = {
+        "full",
+        *{
+            f"split_{i}"
+            for i in range(1, number_of_lead_bins + 1)
+        },
+    }
+
+    if fidelity_sampling not in valid_sampling_names:
+        raise ValueError(
+            f"Unknown fidelity_sampling '{fidelity_sampling}'. "
+            f"Choose from {sorted(valid_sampling_names)}."
         )
 
     if number_of_bootstrap_samples < 1:
@@ -336,13 +332,146 @@ def validate_user_settings() -> None:
 # Filename helpers
 # =============================================================================
 
-def build_current_independence_filename(
-    variant: ModelInputVariant,
+def split_input_leads(
+    first_lead: int,
+    last_lead: int,
+    number_of_bins: int,
+) -> list[tuple[int, int]]:
+    """
+    Split inclusive daily input leads exactly as in script 2.
+
+    Extra days are assigned to the later bins.
+    """
+
+    number_of_leads = last_lead - first_lead + 1
+    base_size = number_of_leads // number_of_bins
+    remainder = number_of_leads % number_of_bins
+
+    bin_sizes = [
+        base_size + int(i >= number_of_bins - remainder)
+        for i in range(number_of_bins)
+    ]
+
+    bins = []
+    current_start = first_lead
+
+    for bin_size in bin_sizes:
+        current_end = current_start + bin_size - 1
+        bins.append((current_start, current_end))
+        current_start = current_end + 1
+
+    return bins
+
+
+def build_accumulated_lead_ranges() -> list[tuple[int, int]]:
+    """
+    Reproduce the full and split accumulated lead ranges from script 2.
+    """
+
+    first_usable_lead = first_input_lead + x_days - 1
+
+    input_bins = split_input_leads(
+        first_lead=first_input_lead,
+        last_lead=last_input_lead,
+        number_of_bins=number_of_lead_bins,
+    )
+
+    split_ranges = []
+
+    for bin_index, (bin_start, bin_end) in enumerate(input_bins):
+        accumulated_start = (
+            max(bin_start, first_usable_lead)
+            if bin_index == 0
+            else bin_start
+        )
+
+        if accumulated_start > bin_end:
+            raise ValueError(
+                "A lead-time bin contains no usable accumulated leads. "
+                "Reduce number_of_lead_bins or x_days."
+            )
+
+        split_ranges.append((accumulated_start, bin_end))
+
+    return [(first_usable_lead, last_input_lead)] + split_ranges
+
+
+def get_selected_fidelity_lead_range() -> tuple[int, int]:
+    """Return the accumulated lead range selected for panels (b)-(f)."""
+
+    lead_ranges = build_accumulated_lead_ranges()
+
+    if fidelity_sampling == "full":
+        return lead_ranges[0]
+
+    split_index = int(fidelity_sampling.split("_")[1])
+    return lead_ranges[split_index]
+
+
+def get_selected_model_extreme_variable() -> str:
+    """Return the script-2 NetCDF variable used in panels (b)-(f)."""
+
+    lead_start, lead_end = get_selected_fidelity_lead_range()
+    return f"max_value_lead{lead_start}_{lead_end}"
+
+
+def get_sampling_label() -> str:
+    """Return a readable label for the selected fidelity sampling."""
+
+    lead_start, lead_end = get_selected_fidelity_lead_range()
+
+    if fidelity_sampling == "full":
+        return f"full sampling, leads {lead_start}-{lead_end}"
+
+    split_index = int(fidelity_sampling.split("_")[1])
+    return (
+        f"split sampling {split_index}/{number_of_lead_bins}, "
+        f"leads {lead_start}-{lead_end}"
+    )
+
+
+def get_sampling_filename_label() -> str:
+    """Return a compact sampling label suitable for output filenames."""
+
+    lead_start, lead_end = get_selected_fidelity_lead_range()
+
+    if fidelity_sampling == "full":
+        return f"full_lead{lead_start}-{lead_end}"
+
+    split_index = int(fidelity_sampling.split("_")[1])
+    return (
+        f"split{split_index}of{number_of_lead_bins}_"
+        f"lead{lead_start}-{lead_end}"
+    )
+
+
+def lead_split_filename_label(
+    lead_ranges: list[tuple[int, int]],
 ) -> str:
-    """Build the independence filename exactly as in script 1."""
+    """Reproduce the split-sample filename label written by script 2."""
+
+    full_start, full_end = lead_ranges[0]
+
+    split_text = "_".join(
+        f"{lead_start}-{lead_end}"
+        for lead_start, lead_end in lead_ranges[1:]
+    )
+
+    return (
+        f"lead{full_start}-{full_end}_"
+        f"split{number_of_lead_bins}_"
+        f"{split_text}"
+    )
+
+
+def build_independence_filename() -> str:
+    """Build the panel-(a) independence filename."""
+
+    if independence_filename_override is not None:
+        return independence_filename_override
 
     first_usable_accumulation_lead = (
-        variant.first_input_lead + x_days - 1
+        independence_first_input_lead + x_days - 1
     )
 
     return (
@@ -351,46 +480,35 @@ def build_current_independence_filename(
         + f"{x_days}dayacc_"
         + f"nve_catchment_{catchment}_"
         + f"lead{first_usable_accumulation_lead}-"
-        + f"{variant.last_input_lead}_"
+        + f"{independence_last_input_lead}_"
         + f"{forecast_date_range[0]}_"
         + f"{forecast_date_range[1]}.nc"
     )
 
 
-def build_current_moments_model_filename() -> str:
-    """Build the model-extremes filename exactly as in script 2."""
-
-    return (
-        f"{config.dirs['s2s_processed']}"
-        f"distribution_monthly_extremes_{MODEL_VARIABLE}_{x_days}dayacc_"
-        f"{catchment}_forecast_hindcast_"
-        f"{forecast_date_range[0]}_{forecast_date_range[1]}.nc"
-    )
-
-
-def resolve_model_input_filenames() -> tuple[str, str]:
+def build_split_moments_model_filename() -> str:
     """
-    Return independence and moments files for the selected model variant.
-
-    Future variants can provide explicit paths in MODEL_INPUT_VARIANTS.
-    The rest of the script does not need to know which variant is active.
+    Build the model-extremes filename exactly as written by script 2.
     """
 
-    variant = MODEL_INPUT_VARIANTS[model_input_variant]
+    if moments_model_filename_override is not None:
+        return moments_model_filename_override
 
-    independence_filename = (
-        variant.independence_filename
-        if variant.independence_filename is not None
-        else build_current_independence_filename(variant)
+    lead_ranges = build_accumulated_lead_ranges()
+    lead_label = lead_split_filename_label(lead_ranges)
+
+    return os.path.join(
+        config.dirs["s2s_processed"],
+        (
+            f"distribution_monthly_extremes_"
+            f"{MODEL_VARIABLE}_{x_days}dayacc_"
+            f"nve_catchment_{catchment}_"
+            f"{lead_label}_"
+            f"forecast_hindcast_"
+            f"{forecast_date_range[0]}_"
+            f"{forecast_date_range[1]}.nc"
+        ),
     )
-
-    moments_filename = (
-        variant.moments_filename
-        if variant.moments_filename is not None
-        else build_current_moments_model_filename()
-    )
-
-    return independence_filename, moments_filename
 
 
 def build_era5_filename() -> str:
@@ -424,7 +542,7 @@ def build_output_filename() -> str:
         config.dirs["fig"],
         (
             f"UNSEEN_independence_fidelity_tests_{month_name}_"
-            f"{x_days}dayacc_"
+            f"{x_days}dayacc_{get_sampling_filename_label()}_"
             f"{catchment}.png"
         ),
     )
@@ -526,13 +644,15 @@ def get_model_values_for_selected_month(
 ) -> np.ndarray:
     """Extract model monthly maxima for the selected month."""
 
+    model_extreme_variable = get_selected_model_extreme_variable()
+
     check_variable_exists(
         model_ds,
-        MODEL_EXTREME_VARIABLE,
+        model_extreme_variable,
         "model dataset",
     )
 
-    data = model_ds[MODEL_EXTREME_VARIABLE]
+    data = model_ds[model_extreme_variable]
 
     check_coordinate_exists(
         data,
@@ -1301,11 +1421,11 @@ def build_figure_title() -> str:
 
     catchment_name = readable_catchment_name(catchment)
     month_name = MONTH_LABELS[selected_month]
-    variant_label = MODEL_INPUT_VARIANTS[model_input_variant].label
+    sampling_label = get_sampling_label()
 
     return (
         f"{month_name}: {x_days}-day accumulated precipitation maxima\n"
-        f"{catchment_name} catchment | {variant_label}"
+        f"{catchment_name} catchment | panels (b)-(f): {sampling_label}"
     )
 
 
@@ -1508,10 +1628,8 @@ if __name__ == "__main__":
     senorge_variable = get_senorge_variable()
     senorge_label = get_senorge_label()
 
-    (
-        independence_filename,
-        moments_model_filename,
-    ) = resolve_model_input_filenames()
+    independence_filename = build_independence_filename()
+    moments_model_filename = build_split_moments_model_filename()
 
     era5_filename = build_era5_filename()
     senorge_filename = build_senorge_filename(
@@ -1522,6 +1640,12 @@ if __name__ == "__main__":
     print("Selected month")
     print("--------------")
     print(MONTH_LABELS[selected_month])
+
+    print()
+    print("Fidelity sampling for panels (b)-(f)")
+    print("------------------------------------")
+    print(get_sampling_label())
+    print(f"Model variable: {get_selected_model_extreme_variable()}")
 
     print()
     print("Input files")
