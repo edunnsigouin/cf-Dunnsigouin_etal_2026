@@ -23,7 +23,11 @@ times are 17-46. With five lead times per group, the six groups are:
 
     17-21, 22-26, 27-31, 32-36, 37-41, and 42-46.
 
-No GEV, Gumbel, or other theoretical distribution is fitted.
+Note about the empirical return period estimate:
+Empirical return values were estimated directly from the sample quantiles, 
+with return period T related to non-exceedance probability as p=1−1/T. 
+Quantiles were calculated using linear interpolation (Type 7), 
+without fitting a theoretical extreme-value distribution.
 """
 
 import os
@@ -47,7 +51,7 @@ x_days = 2
 
 # Catchment and valid month used in the input filename.
 catchment = "regine_drammen"
-valid_month = 5
+valid_month = 12
 
 # Date range used in the input filename.
 forecast_date_range = (
