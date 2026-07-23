@@ -12,9 +12,11 @@ What this script does
 3. Pools all finite values within each group.
 4. Calculates one empirical return-value curve for each group.
 5. Calculates a bootstrap confidence interval using all selected lead times.
-6. Plots grouped probability-density functions in panel 1.
-7. Plots grouped return-period curves in panel 2.
-8. Uses the same six Matplotlib ``tab:`` colors in both panels.
+6. Uses that same confidence interval for both the grey return-period band
+   and the inset boxplot whiskers.
+7. Plots grouped probability-density functions in panel 1.
+8. Plots grouped return-period curves in panel 2.
+9. Uses the same six Matplotlib ``tab:`` colors in both panels.
 
 For a 2-day accumulation with input leads 16-46, the valid accumulated lead
 times are 17-46. With five lead times per group, the six groups are:
@@ -27,6 +29,7 @@ No GEV, Gumbel, or other theoretical distribution is fitted.
 import os
 
 import matplotlib.pyplot as plt
+from matplotlib.lines import Line2D
 from mpl_toolkits.axes_grid1.inset_locator import inset_axes
 import numpy as np
 import xarray as xr
@@ -44,7 +47,7 @@ x_days = 2
 
 # Catchment and valid month used in the input filename.
 catchment = "regine_drammen"
-valid_month = 8
+valid_month = 5
 
 # Date range used in the input filename.
 forecast_date_range = (
@@ -124,7 +127,7 @@ density_y_max = None
 
 path_out = config.dirs["fig"]
 save_pdf = False
-save_png = False
+save_png = True
 show_figure = True
 
 
@@ -246,9 +249,8 @@ def build_output_filename_stem():
     """Construct the output figure filename without an extension."""
 
     return (
-        f"grouped-empirical-extreme-value-distribution_"
+        f"stability-return-period-boostrap_"
         f"{variable}_{x_days}day-accumulation_{catchment}_"
-        f"lead{first_valid_accumulation_lead}-{last_input_lead}_"
         f"{lead_times_per_group}-leads-per-group_"
         f"valid-month-{MONTH_ABBREVIATIONS[valid_month]}_"
         f"{forecast_date_range[0]}-to-{forecast_date_range[1]}"
@@ -624,7 +626,7 @@ def create_figure(
         }
     )
 
-    figure, (return_axis, density_axis) = plt.subplots(
+    figure, (density_axis, return_axis) = plt.subplots(
         nrows=1,
         ncols=2,
         figsize=(figure_width, figure_height),
@@ -661,11 +663,56 @@ def create_figure(
             density_y_max if density_y_max is not None else current_max,
         )
 
+    # Use simple colored line handles in the legend rather than the
+    # rectangular handles returned by the step histograms.
+    # Build compact line-style legend entries. For single-lead groups,
+    # use "Lead 17" rather than the redundant "Leads 17-17".
+    density_legend_handles = []
+
+    for lead_group, color in zip(lead_groups, group_colors):
+
+        if len(lead_group) == 1:
+            group_label = f"Lead {lead_group[0]}"
+        else:
+            group_label = f"Leads {lead_group[0]}-{lead_group[-1]}"
+
+        density_legend_handles.append(
+            Line2D(
+                [0],
+                [0],
+                color=color,
+                linewidth=1.5,
+                label=group_label,
+            )
+        )
+
+    # Adapt the legend layout to the number of lead-time groups so that
+    # large legends remain inside the left-hand panel.
+    number_of_groups = len(lead_groups)
+
+    if number_of_groups <= 6:
+        legend_ncol = 1
+        legend_fontsize_adaptive = legend_fontsize
+    elif number_of_groups <= 12:
+        legend_ncol = 2
+        legend_fontsize_adaptive = legend_fontsize - 1
+    elif number_of_groups <= 20:
+        legend_ncol = 3
+        legend_fontsize_adaptive = legend_fontsize - 1
+    else:
+        legend_ncol = 4
+        legend_fontsize_adaptive = legend_fontsize - 2
+
     density_axis.legend(
+        handles=density_legend_handles,
         frameon=False,
         loc="upper right",
-        ncol=1,
-        handlelength=2.4,
+        ncol=legend_ncol,
+        fontsize=legend_fontsize_adaptive,
+        handlelength=1.8,
+        columnspacing=1.0,
+        handletextpad=0.5,
+        labelspacing=0.4,
     )
 
     # -------------------------------------------------------------------------
@@ -682,14 +729,14 @@ def create_figure(
         zorder=1,
     )
 
-    return_axis.plot(
-        return_periods,
-        all_lead_curve,
-        color="black",
-        linewidth=2.4,
-        label="All selected lead times",
-        zorder=3,
-    )
+    #return_axis.plot(
+    #    return_periods,
+    #    all_lead_curve,
+    #    color="black",
+    #    linewidth=2.4,
+    #    label="All selected lead times",
+    #    zorder=3,
+    #)
 
     for lead_group, group_curve, color in zip(
         lead_groups,
@@ -709,7 +756,7 @@ def create_figure(
 
     return_axis.set_xscale("log")
     return_axis.set_xlim(minimum_return_period, maximum_return_period)
-    return_axis.set_xlabel("Return period")
+    return_axis.set_xlabel("Return period (years)")
     return_axis.set_ylabel(value_label)
 
     if return_value_y_min is not None or return_value_y_max is not None:
@@ -732,7 +779,7 @@ def create_figure(
         width="42%",
         height="42%",
         loc="upper left",
-        bbox_to_anchor=(0.05, 0.02, 0.93, 0.93),
+        bbox_to_anchor=(0.12, 0.02, 0.86, 0.93),
         bbox_transform=return_axis.transAxes,
     )
 
@@ -746,13 +793,23 @@ def create_figure(
     )
     all_lead_value_at_inset = all_lead_curve[inset_index]
 
+    # Use the same percentile limits for the inset whiskers as for the
+    # grey bootstrap confidence interval in the full return-period plot.
+    #
+    # For confidence_interval_percent = 95, this gives whiskers at the
+    # 2.5th and 97.5th percentiles. Therefore, at the inset return period,
+    # the whisker endpoints correspond exactly to the lower and upper
+    # edges of the grey confidence band.
+    tail = (100.0 - confidence_interval_percent) / 2.0
+
     inset.boxplot(
         bootstrap_values_at_inset,
         positions=[1.0],
         widths=0.42,
         patch_artist=True,
         showfliers=False,
-        boxprops={"facecolor": "0.85", "edgecolor": "black", "linewidth": 1.0},
+        whis=[tail, 100.0 - tail],
+        boxprops={"facecolor": "none", "edgecolor": "black", "linewidth": 1.0},
         whiskerprops={"color": "black", "linewidth": 1.0},
         capprops={"color": "black", "linewidth": 1.0},
         medianprops={"color": "black", "linewidth": 1.5},
@@ -774,31 +831,31 @@ def create_figure(
             zorder=3,
         )
 
-    inset.scatter(
-        1.0,
-        all_lead_value_at_inset,
-        color="black",
-        marker="D",
-        s=30,
-        zorder=4,
-    )
+    #inset.scatter(
+    #    1.0,
+    #    all_lead_value_at_inset,
+    #    color="black",
+    #    marker="D",
+    #    s=30,
+    #    zorder=4,
+    #)
 
     inset.set_xlim(0.55, 1.45)
     inset.set_xticks([1.0])
-    inset.set_xticklabels([f"{inset_return_period:g}-year"])
-    inset.set_ylabel(value_label, fontsize=tick_fontsize - 1)
+    inset.set_xticklabels([f"{int(round(inset_return_period))}-year return period"])
+    inset.set_ylabel('mm', fontsize=tick_fontsize - 1)
     inset.tick_params(labelsize=tick_fontsize - 2)
     inset.spines["top"].set_visible(False)
     inset.spines["right"].set_visible(False)
 
-# The first panel already identifies the six color-coded lead groups.
+    # The first panel already identifies the six color-coded lead groups.
     # Panel 2 therefore only needs to identify the bootstrap interval.
     bootstrap_handle, bootstrap_label = return_axis.get_legend_handles_labels()
     return_axis.legend(
         [bootstrap_handle[0]],
         [bootstrap_label[0]],
         frameon=False,
-        loc="upper left",
+        loc="lower right",
         handlelength=2.4,
     )
 

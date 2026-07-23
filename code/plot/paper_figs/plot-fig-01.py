@@ -58,7 +58,7 @@ PRECIP_VAR = "tp24"
 MSL_VAR = "msl"
 
 # ERA5-Land variable used in panel e.
-RUNOFF_VAR = "ro"
+RUNOFF_VAR = "sro"
 NDAY = 1
 
 WRITE_TO_FILE = False
