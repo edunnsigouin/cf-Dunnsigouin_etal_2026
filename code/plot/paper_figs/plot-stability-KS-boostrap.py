@@ -78,7 +78,7 @@ y_axis_max = None
 
 # For each lead time, draw this many equal-size bootstrap samples from the
 # leave-one-out pool and calculate one two-sample KS statistic per draw.
-number_of_ks_resamples = 1000
+number_of_ks_resamples = 100
 
 # Fixed seed makes the resampling results reproducible.
 random_seed = 42

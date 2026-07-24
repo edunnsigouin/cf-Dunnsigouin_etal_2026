@@ -1,37 +1,61 @@
 """
-Create a five-panel monthly diagnostic figure for one selected calendar month.
+Create a six-panel monthly UNSEEN diagnostic figure for one selected calendar
+month.
 
-Panel 1
--------
-Ensemble-member independence, following script 1:
-forecast and hindcast pairwise Spearman correlations are pooled and shown as
+Panel (a): Independence
+-----------------------
+Forecast and hindcast pairwise Spearman correlations are pooled and shown as
 one boxplot for the selected month.
 
-Panels 2-5
-----------
-UNSEEN moments-based fidelity tests, following script 2:
-    2. mean
-    3. standard deviation
-    4. skewness
-    5. kurtosis
+Panels (b)-(e): Fidelity
+------------------------
+The four moments-based fidelity tests are calculated from the COMPLETE
+all-lead-time model sample:
 
-Panel 6
--------
-Model, ERA5, and SeNorge precipitation distributions with two-sample
-Kolmogorov-Smirnov tests comparing the model with each reference dataset.
+    (b) mean
+    (c) standard deviation
+    (d) skewness
+    (e) kurtosis
 
-For each moment, the model is resampled with replacement using the same sample
-size as ERA5/SeNorge. The model bootstrap distribution, its central confidence
-interval, and the ERA5/SeNorge values are plotted.
+The model sample for these panels is taken from the same lead-location NetCDF
+file used for the stability test. ERA5 and SeNorge are used as observational
+references. For each moment, the complete model sample is resampled with
+replacement using the same sample size as the reference datasets. The model
+bootstrap distribution, its central confidence interval, and the ERA5/SeNorge
+statistics are plotted.
 
-The data-selection layer is kept separate from the analysis. This makes it
-straightforward to add alternative model inputs later, for example:
-    - leads 17-30;
-    - leads 31-46;
-    - bias-corrected model data.
+Panel (f): Stability
+--------------------
+The stability panel uses the lead-location sampling produced by the second
+input script.
 
-Only the current input-file conventions from scripts 1 and 2 are configured below.
-The same catchment is used for all datasets.
+For every initialization/member, one maximum is first calculated across the
+complete usable accumulated lead-time window. That SAME full-window maximum is
+then classified according to whether its maximum occurs in the early or late
+lead-time subgroup.
+
+For the default 2-day setup:
+
+    all leads   : ending leads 17-46
+    early leads : maximum occurs at ending leads 17-31
+    late leads  : maximum occurs at ending leads 32-46
+
+Panel (f) plots probability-density distributions for:
+
+    complete all-lead sample : black
+    early subgroup           : tab:green
+    late subgroup            : tab:purple
+
+A two-sided two-sample Kolmogorov-Smirnov test compares the Early and Late
+subgroups. The panel reports their sample numbers, the KS D statistic, p-value,
+and whether the null hypothesis of equal distributions is rejected at the
+user-defined significance level.
+
+Thus panels (b)-(f) all use the SAME underlying model NetCDF file:
+    - panels (b)-(e): complete all-lead sample;
+    - panel (f): complete, early, and late samples.
+
+Panel (a) continues to use the separate independence NetCDF file.
 """
 
 from dataclasses import dataclass
@@ -73,9 +97,17 @@ reference_years = (
 era5_grid = "0.5x0.5"
 senorge_dataset = "senorge"  # "senorge" or "senorge_regrid"
 
-# Select which model input configuration to use.
-# Add future lead-window or bias-corrected datasets in MODEL_INPUT_VARIANTS.
+# Select which model input configuration to use for panel (a).
 model_input_variant = "current_raw"
+
+# Lead-location sampling used by panels (b)-(f).
+first_input_lead = 16
+last_input_lead = 46
+number_of_lead_bins = 2
+
+# Optional full-path override for the lead-location model file.
+# Leave as None to construct the filename automatically.
+stability_model_filename_override = None
 
 # Bootstrap settings.
 number_of_bootstrap_samples = 10000
@@ -110,7 +142,7 @@ show_figure = True
 # =============================================================================
 
 MODEL_VARIABLE = "tp24"
-MODEL_EXTREME_VARIABLE = "max_value"
+# Model variables for panels (b)-(f) are built from lead ranges.
 MODEL_MONTH_COORDINATE = "month_of_year"
 
 ERA5_VARIABLE = "tp24"
@@ -144,7 +176,6 @@ class ModelInputVariant:
 
     # Optional full-path overrides for future datasets.
     independence_filename: str | None = None
-    moments_filename: str | None = None
 
 
 MODEL_INPUT_VARIANTS = {
@@ -219,6 +250,8 @@ STATISTIC_AXIS_LABELS = {
 MODEL_COLOR = "black"
 ERA5_COLOR = "tab:blue"
 SENORGE_COLOR = "tab:red"
+EARLY_COLOR = "tab:green"
+LATE_COLOR = "tab:purple"
 
 HISTOGRAM_LINEWIDTH = 1.4
 REFERENCE_LINEWIDTH = 1.6
@@ -331,6 +364,30 @@ def validate_user_settings() -> None:
             "y_axis_margin_fraction must be non-negative."
         )
 
+    if first_input_lead > last_input_lead:
+        raise ValueError(
+            "first_input_lead must not exceed last_input_lead."
+        )
+
+    first_usable_lead = first_input_lead + x_days - 1
+    number_of_usable_leads = last_input_lead - first_usable_lead + 1
+
+    if first_usable_lead > last_input_lead:
+        raise ValueError(
+            "x_days is too large for the available input lead window."
+        )
+
+    if number_of_lead_bins != 2:
+        raise ValueError(
+            "This combined stability figure is configured for exactly two "
+            "lead bins: Early and Late."
+        )
+
+    if number_of_lead_bins > number_of_usable_leads:
+        raise ValueError(
+            "number_of_lead_bins exceeds the number of usable leads."
+        )
+
 
 # =============================================================================
 # Filename helpers
@@ -357,24 +414,93 @@ def build_current_independence_filename(
     )
 
 
-def build_current_moments_model_filename() -> str:
-    """Build the model-extremes filename exactly as in script 2."""
+def split_usable_accumulated_leads(
+    first_lead: int,
+    last_lead: int,
+    number_of_bins: int,
+) -> list[tuple[int, int]]:
+    """Split usable accumulated ending leads into approximately equal bins."""
 
-    return (
-        f"{config.dirs['s2s_processed']}"
-        f"distribution_monthly_extremes_{MODEL_VARIABLE}_{x_days}dayacc_"
-        f"{catchment}_forecast_hindcast_"
-        f"{forecast_date_range[0]}_{forecast_date_range[1]}.nc"
+    number_of_leads = last_lead - first_lead + 1
+    base_size = number_of_leads // number_of_bins
+    remainder = number_of_leads % number_of_bins
+
+    bin_sizes = [
+        base_size + int(index >= number_of_bins - remainder)
+        for index in range(number_of_bins)
+    ]
+
+    bins = []
+    current_start = first_lead
+
+    for bin_size in bin_sizes:
+        current_end = current_start + bin_size - 1
+        bins.append((current_start, current_end))
+        current_start = current_end + 1
+
+    return bins
+
+
+def get_stability_lead_ranges() -> tuple[
+    tuple[int, int],
+    tuple[int, int],
+    tuple[int, int],
+]:
+    """Return complete, early, and late accumulated lead ranges."""
+
+    first_usable_lead = first_input_lead + x_days - 1
+
+    full_range = (first_usable_lead, last_input_lead)
+
+    split_ranges = split_usable_accumulated_leads(
+        first_lead=first_usable_lead,
+        last_lead=last_input_lead,
+        number_of_bins=number_of_lead_bins,
+    )
+
+    return full_range, split_ranges[0], split_ranges[1]
+
+
+def get_stability_variable_names() -> tuple[str, str, str]:
+    """Return complete, early, and late variable names in the model file."""
+
+    full_range, early_range, late_range = get_stability_lead_ranges()
+
+    all_variable = f"max_value_lead{full_range[0]}_{full_range[1]}"
+    early_variable = f"max_value_lead{early_range[0]}_{early_range[1]}"
+    late_variable = f"max_value_lead{late_range[0]}_{late_range[1]}"
+
+    return all_variable, early_variable, late_variable
+
+
+def build_stability_model_filename() -> str:
+    """Build the lead-location model filename exactly as in script 2."""
+
+    full_range, early_range, late_range = get_stability_lead_ranges()
+
+    lead_label = (
+        f"lead{full_range[0]}-{full_range[1]}_"
+        f"split{number_of_lead_bins}_"
+        f"{early_range[0]}-{early_range[1]}_"
+        f"{late_range[0]}-{late_range[1]}"
+    )
+
+    return os.path.join(
+        config.dirs["s2s_processed"],
+        (
+            f"lt_maxima_binning_distribution_monthly_extremes_"
+            f"{MODEL_VARIABLE}_{x_days}dayacc_"
+            f"{catchment}_"
+            f"{lead_label}_"
+            f"forecast_hindcast_"
+            f"{forecast_date_range[0]}_"
+            f"{forecast_date_range[1]}.nc"
+        ),
     )
 
 
 def resolve_model_input_filenames() -> tuple[str, str]:
-    """
-    Return independence and moments files for the selected model variant.
-
-    Future variants can provide explicit paths in MODEL_INPUT_VARIANTS.
-    The rest of the script does not need to know which variant is active.
-    """
+    """Return the independence file and shared model file for panels (b)-(f)."""
 
     variant = MODEL_INPUT_VARIANTS[model_input_variant]
 
@@ -384,13 +510,13 @@ def resolve_model_input_filenames() -> tuple[str, str]:
         else build_current_independence_filename(variant)
     )
 
-    moments_filename = (
-        variant.moments_filename
-        if variant.moments_filename is not None
-        else build_current_moments_model_filename()
+    shared_model_filename = (
+        stability_model_filename_override
+        if stability_model_filename_override is not None
+        else build_stability_model_filename()
     )
 
-    return independence_filename, moments_filename
+    return independence_filename, shared_model_filename
 
 
 def build_era5_filename() -> str:
@@ -423,9 +549,7 @@ def build_output_filename() -> str:
     return os.path.join(
         config.dirs["fig"],
         (
-            f"UNSEEN_independence_fidelity_tests_{month_name}_"
-            f"{x_days}dayacc_"
-            f"{catchment}.png"
+            f"UNSEEN_independence_fidelity_stability_tests_{month_name}_{x_days}dayacc_{catchment}.png"
         ),
     )
 
@@ -523,16 +647,17 @@ def check_coordinate_exists(
 
 def get_model_values_for_selected_month(
     model_ds: xr.Dataset,
+    variable_name: str,
 ) -> np.ndarray:
-    """Extract model monthly maxima for the selected month."""
+    """Extract one model lead-group sample for the selected month."""
 
     check_variable_exists(
         model_ds,
-        MODEL_EXTREME_VARIABLE,
+        variable_name,
         "model dataset",
     )
 
-    data = model_ds[MODEL_EXTREME_VARIABLE]
+    data = model_ds[variable_name]
 
     check_coordinate_exists(
         data,
@@ -554,11 +679,7 @@ def get_reference_values_for_selected_month(
 ) -> np.ndarray:
     """Extract ERA5 or SeNorge monthly maxima for the selected month."""
 
-    check_variable_exists(
-        ds,
-        variable,
-        dataset_name,
-    )
+    check_variable_exists(ds, variable, dataset_name)
 
     data = ds[variable]
 
@@ -572,14 +693,25 @@ def get_reference_values_for_selected_month(
     return remove_missing_values(values)
 
 
-def load_moments_values(
+def load_model_and_reference_values(
     model_filename: str,
     era5_filename: str,
     senorge_filename: str,
     senorge_variable: str,
     senorge_label: str,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Load model, ERA5, and SeNorge values for the selected month."""
+) -> tuple[
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+]:
+    """
+    Load all-lead, Early, Late, ERA5, and SeNorge samples for one month.
+
+    The all-lead model sample is used by panels (b)-(e). The all-lead, Early,
+    and Late model samples are used by panel (f).
+    """
 
     for dataset_name, filename in (
         ("model", model_filename),
@@ -591,26 +723,65 @@ def load_moments_values(
                 f"{dataset_name} input file does not exist:\n{filename}"
             )
 
+    all_variable, early_variable, late_variable = (
+        get_stability_variable_names()
+    )
+
     with (
         xr.open_dataset(model_filename) as model_ds,
         xr.open_dataset(era5_filename) as era5_ds,
         xr.open_dataset(senorge_filename) as senorge_ds,
     ):
-        model_values = get_model_values_for_selected_month(model_ds)
+        model_all_values = get_model_values_for_selected_month(
+            model_ds,
+            all_variable,
+        )
+
+        model_early_values = get_model_values_for_selected_month(
+            model_ds,
+            early_variable,
+        )
+
+        model_late_values = get_model_values_for_selected_month(
+            model_ds,
+            late_variable,
+        )
 
         era5_values = get_reference_values_for_selected_month(
-            ds=era5_ds,
-            variable=ERA5_VARIABLE,
-            dataset_name="ERA5 dataset",
+            era5_ds,
+            ERA5_VARIABLE,
+            "ERA5 dataset",
         )
 
         senorge_values = get_reference_values_for_selected_month(
-            ds=senorge_ds,
-            variable=senorge_variable,
-            dataset_name=f"{senorge_label} dataset",
+            senorge_ds,
+            senorge_variable,
+            f"{senorge_label} dataset",
         )
 
-    return model_values, era5_values, senorge_values
+    return (
+        model_all_values,
+        model_early_values,
+        model_late_values,
+        era5_values,
+        senorge_values,
+    )
+
+
+def validate_model_partition(
+    model_all_values: np.ndarray,
+    model_early_values: np.ndarray,
+    model_late_values: np.ndarray,
+) -> None:
+    """Check that Early + Late partition the complete selected-month sample."""
+
+    if model_all_values.size != (
+        model_early_values.size + model_late_values.size
+    ):
+        raise ValueError(
+            "Early + Late sample counts do not equal the all-lead sample "
+            "for the selected month."
+        )
 
 
 def validate_moments_samples(
@@ -803,29 +974,8 @@ def perform_all_moments_tests(
 
 
 # =============================================================================
-# Kolmogorov-Smirnov distribution test
+# Stability KS test
 # =============================================================================
-
-def perform_ks_test(
-    model_values: np.ndarray,
-    reference_values: np.ndarray,
-) -> tuple[float, float]:
-    """
-    Compare the full model and reference distributions with a two-sample KS test.
-
-    The null hypothesis is that both samples come from the same continuous
-    distribution.
-    """
-
-    result = ks_2samp(
-        model_values,
-        reference_values,
-        alternative=ks_alternative,
-        method=ks_method,
-    )
-
-    return float(result.statistic), float(result.pvalue)
-
 
 def get_ks_significance_threshold() -> float:
     """Convert the selected KS confidence level to a p-value threshold."""
@@ -833,49 +983,40 @@ def get_ks_significance_threshold() -> float:
     return 1.0 - ks_significance_level_percent / 100.0
 
 
-def ks_test_failed(p_value: float) -> bool:
-    """Return True when equal model/reference distributions are rejected."""
+def perform_stability_ks_test(
+    early_values: np.ndarray,
+    late_values: np.ndarray,
+) -> dict[str, object]:
+    """
+    Compare Early and Late model subgroups with a two-sided two-sample KS test.
 
-    return p_value < get_ks_significance_threshold()
+    Null hypothesis:
+        Early and Late samples come from the same continuous distribution.
+    """
+
+    result = ks_2samp(
+        early_values,
+        late_values,
+        alternative=ks_alternative,
+        method=ks_method,
+    )
+
+    p_value = float(result.pvalue)
+
+    return {
+        "statistic": float(result.statistic),
+        "p_value": p_value,
+        "reject_null": p_value < get_ks_significance_threshold(),
+    }
 
 
 def format_ks_p_value(p_value: float) -> str:
-    """Format a KS p-value and append an asterisk when the test fails."""
+    """Format a KS p-value compactly."""
 
     if p_value < 0.001:
-        text = f"{p_value:.1e}"
-    else:
-        text = f"{p_value:.3f}"
+        return f"{p_value:.1e}"
 
-    if ks_test_failed(p_value):
-        text += "*"
-
-    return text
-
-
-def perform_distribution_tests(
-    model_values: np.ndarray,
-    era5_values: np.ndarray,
-    senorge_values: np.ndarray,
-) -> dict[str, float]:
-    """Run the two selected-month KS tests used in panel 6."""
-
-    era5_statistic, era5_p_value = perform_ks_test(
-        model_values=model_values,
-        reference_values=era5_values,
-    )
-
-    senorge_statistic, senorge_p_value = perform_ks_test(
-        model_values=model_values,
-        reference_values=senorge_values,
-    )
-
-    return {
-        "era5_statistic": era5_statistic,
-        "era5_p_value": era5_p_value,
-        "senorge_statistic": senorge_statistic,
-        "senorge_p_value": senorge_p_value,
-    }
+    return f"{p_value:.3f}"
 
 
 # =============================================================================
@@ -948,7 +1089,7 @@ def plot_independence_panel(
         positions=[1],
         widths=0.55,
         patch_artist=False,
-        showfliers=True,
+        showfliers=False,
         whis=1.5,
         medianprops={
             "color": "black",
@@ -1138,97 +1279,97 @@ def calculate_distribution_bin_edges(
 def make_shared_legend_handles(
     senorge_label: str,
 ) -> list[Line2D]:
-    """Create one legend used by the complete six-panel figure."""
+    """Create the shared legend used by the six-panel figure."""
 
     return [
         Line2D(
-            [0],
-            [0],
+            [0], [0],
             color=MODEL_COLOR,
             linewidth=HISTOGRAM_LINEWIDTH,
-            label="Model",
+            label="Model / all leads (17-46)",
         ),
         Line2D(
-            [0],
-            [0],
+            [0], [0],
+            color=MODEL_COLOR,
+            linewidth=CONFIDENCE_LINEWIDTH,
+            linestyle="--",
+            label=f"Model / {confidence_level_percent:g}% boostrap interval",
+        ),
+        Line2D(
+            [0], [0],
             color=ERA5_COLOR,
             linewidth=REFERENCE_LINEWIDTH,
             label="ERA5",
         ),
         Line2D(
-            [0],
-            [0],
+            [0], [0],
             color=SENORGE_COLOR,
             linewidth=REFERENCE_LINEWIDTH,
             label=senorge_label,
         ),
         Line2D(
-            [0],
-            [0],
-            color=MODEL_COLOR,
-            linewidth=CONFIDENCE_LINEWIDTH,
-            linestyle="--",
-            label=f"{confidence_level_percent:g}% model interval",
+            [0], [0],
+            color=EARLY_COLOR,
+            linewidth=HISTOGRAM_LINEWIDTH,
+            label="Model / early leads (17-31)",
+        ),
+        Line2D(
+            [0], [0],
+            color=LATE_COLOR,
+            linewidth=HISTOGRAM_LINEWIDTH,
+            label="Model / late leads (32-46)",
         ),
     ]
 
 
-def add_ks_failure_text(
+def calculate_stability_bin_edges(
+    all_values: np.ndarray,
+    early_values: np.ndarray,
+    late_values: np.ndarray,
+) -> np.ndarray:
+    """Create common precipitation bins for all, Early, and Late samples."""
+
+    combined = np.concatenate(
+        [all_values, early_values, late_values]
+    )
+
+    x_min = float(np.min(combined))
+    x_max = float(np.max(combined))
+
+    if np.isclose(x_min, x_max):
+        padding = max(abs(x_min) * 0.05, 0.5)
+        x_min -= padding
+        x_max += padding
+
+    return np.linspace(
+        x_min,
+        x_max,
+        number_of_bins + 1,
+    )
+
+
+def plot_stability_panel(
     ax: plt.Axes,
-    ks_results: dict[str, float],
-    senorge_label: str,
+    all_values: np.ndarray,
+    early_values: np.ndarray,
+    late_values: np.ndarray,
+    stability_ks: dict[str, object],
 ) -> None:
-    """
-    Add a simple label only when a KS comparison rejects equal distributions.
-    """
+    """Plot all, Early, and Late model distributions for the stability test."""
 
-    failure_lines = []
-
-    if ks_test_failed(ks_results["era5_p_value"]):
-        failure_lines.append(("ERA5 fail", ERA5_COLOR))
-
-    if ks_test_failed(ks_results["senorge_p_value"]):
-        failure_lines.append((f"{senorge_label} fail", SENORGE_COLOR))
-
-    for index, (label, color) in enumerate(failure_lines):
-        ax.text(
-            0.97,
-            0.96 - index * 0.08,
-            label,
-            transform=ax.transAxes,
-            ha="right",
-            va="top",
-            fontsize=LEGEND_FONTSIZE,
-            color=color,
-        )
-
-
-def plot_distribution_panel(
-    ax: plt.Axes,
-    model_values: np.ndarray,
-    era5_values: np.ndarray,
-    senorge_values: np.ndarray,
-    senorge_label: str,
-    ks_results: dict[str, float],
-) -> None:
-    """
-    Plot the three selected-month precipitation distributions and KS results.
-    """
-
-    bin_edges = calculate_distribution_bin_edges(
-        model_values=model_values,
-        era5_values=era5_values,
-        senorge_values=senorge_values,
+    bin_edges = calculate_stability_bin_edges(
+        all_values,
+        early_values,
+        late_values,
     )
 
     maximum_density = 0.0
 
     for values, color, zorder in (
-        (model_values, MODEL_COLOR, 3),
-        (senorge_values, SENORGE_COLOR, 2),
-        (era5_values, ERA5_COLOR, 1),
+        (early_values, EARLY_COLOR, 2),
+        (late_values, LATE_COLOR, 1),
     ):
-        counts, _, _ = ax.hist(
+        density, _, _ = ax.hist(
             values,
             bins=bin_edges,
             density=plot_probability_density,
@@ -1238,10 +1379,10 @@ def plot_distribution_panel(
             zorder=zorder,
         )
 
-        if counts.size > 0:
+        if density.size > 0:
             maximum_density = max(
                 maximum_density,
-                float(np.nanmax(counts)),
+                float(np.nanmax(density)),
             )
 
     ax.set_xlim(bin_edges[0], bin_edges[-1])
@@ -1263,18 +1404,36 @@ def plot_distribution_panel(
     )
 
     ax.set_title(
-        "Fidelity: Kolmolgorov-Smirnov",
+        "Stability",
         fontsize=TITLE_FONTSIZE,
         fontweight="normal",
     )
 
-    format_axis(ax)
-
-    add_ks_failure_text(
-        ax=ax,
-        ks_results=ks_results,
-        senorge_label=senorge_label,
+    decision = (
+        r"Reject $H_0$"
+        if stability_ks["reject_null"]
+        else r"Do not reject $H_0$"
     )
+
+    annotation = (
+        f"Early n={early_values.size}\n"
+        f"Late n={late_values.size}\n"
+        f"KS D={stability_ks['statistic']:.3f}\n"
+        f"p={format_ks_p_value(stability_ks['p_value'])}\n"
+        f"{decision} ({ks_significance_level_percent:g}% level)"
+    )
+
+    ax.text(
+        0.97,
+        0.96,
+        annotation,
+        transform=ax.transAxes,
+        ha="right",
+        va="top",
+        fontsize=8.5,
+    )
+
+    format_axis(ax)
 
 
 def add_panel_label(
@@ -1312,18 +1471,18 @@ def build_figure_title() -> str:
 def create_combined_figure(
     independence_values: np.ndarray,
     moments_results: dict[str, dict[str, object]],
-    model_values: np.ndarray,
-    era5_values: np.ndarray,
-    senorge_values: np.ndarray,
+    model_all_values: np.ndarray,
+    model_early_values: np.ndarray,
+    model_late_values: np.ndarray,
     senorge_label: str,
-    ks_results: dict[str, float],
+    stability_ks: dict[str, object],
 ) -> plt.Figure:
     """
     Create the publication-style 2 x 3 diagnostic figure.
 
     Layout:
         (a) Independence      (b) Mean              (c) Standard deviation
-        (d) Skewness          (e) Excess kurtosis   (f) KS test
+        (d) Skewness          (e) Excess kurtosis   (f) Stability
     """
 
     fig, axes = plt.subplots(
@@ -1371,41 +1530,40 @@ def create_combined_figure(
             panel_labels[statistic_name],
         )
 
-    # (f) Full-distribution comparison and KS test.
-    plot_distribution_panel(
+    # (f) Lead-time stability.
+    plot_stability_panel(
         ax=axes[1, 2],
-        model_values=model_values,
-        era5_values=era5_values,
-        senorge_values=senorge_values,
-        senorge_label=senorge_label,
-        ks_results=ks_results,
+        all_values=model_all_values,
+        early_values=model_early_values,
+        late_values=model_late_values,
+        stability_ks=stability_ks,
     )
     add_panel_label(axes[1, 2], "(f)")
 
-    fig.suptitle(
-        build_figure_title(),
-        fontsize=SUPTITLE_FONTSIZE,
-        fontweight="normal",
-        y=0.985,
-    )
+    #fig.suptitle(
+    #    build_figure_title(),
+    #    fontsize=SUPTITLE_FONTSIZE,
+    #    fontweight="normal",
+    #    y=0.985,
+    #)
 
     # One legend applies to all six panels.
     fig.legend(
         handles=make_shared_legend_handles(senorge_label),
         loc="upper center",
-        bbox_to_anchor=(0.5, 0.925),
-        ncol=4,
+        bbox_to_anchor=(0.5, 0.96),
+        ncol=6,
         frameon=False,
         fontsize=LEGEND_FONTSIZE,
         handlelength=2.0,
-        columnspacing=1.8,
+        columnspacing=1.2,
     )
 
     fig.subplots_adjust(
         left=0.08,
         right=0.98,
         bottom=0.09,
-        top=0.84,
+        top=0.86,
         wspace=0.32,
         hspace=0.38,
     )
@@ -1463,38 +1621,44 @@ def print_moments_results(
 
 
 
-def print_ks_results(
-    ks_results: dict[str, float],
-    senorge_label: str,
+def print_stability_results(
+    model_all_values: np.ndarray,
+    model_early_values: np.ndarray,
+    model_late_values: np.ndarray,
+    stability_ks: dict[str, object],
 ) -> None:
-    """Print the selected-month KS distribution-test results."""
+    """Print selected-month lead-time stability results."""
 
     alpha = get_ks_significance_threshold()
 
-    era5_marker = "*" if ks_test_failed(
-        ks_results["era5_p_value"]
-    ) else ""
-
-    senorge_marker = "*" if ks_test_failed(
-        ks_results["senorge_p_value"]
-    ) else ""
+    decision = (
+        "Reject H0"
+        if stability_ks["reject_null"]
+        else "Do not reject H0"
+    )
 
     print()
-    print(f"{MONTH_LABELS[selected_month]} distribution KS tests")
+    print(f"{MONTH_LABELS[selected_month]} stability test")
     print("-" * 45)
     print(
-        f"Failure threshold: p < {alpha:.4f} "
-        f"({ks_significance_level_percent:g}% confidence)"
+        f"All={model_all_values.size}, "
+        f"Early={model_early_values.size}, "
+        f"Late={model_late_values.size}"
     )
     print(
-        f"ERA5: D={ks_results['era5_statistic']:.3f}, "
-        f"p={ks_results['era5_p_value']:.4g}{era5_marker}"
+        "Partition check: "
+        f"{model_early_values.size + model_late_values.size} "
+        f"= {model_all_values.size}"
     )
     print(
-        f"{senorge_label}: D={ks_results['senorge_statistic']:.3f}, "
-        f"p={ks_results['senorge_p_value']:.4g}{senorge_marker}"
+        f"KS: D={stability_ks['statistic']:.3f}, "
+        f"p={stability_ks['p_value']:.4g}"
     )
-    print("* model and reference distributions differ significantly")
+    print(
+        f"Decision: {decision} at "
+        f"{ks_significance_level_percent:g}% confidence "
+        f"(alpha={alpha:.4f})"
+    )
 
 
 # =============================================================================
@@ -1510,7 +1674,7 @@ if __name__ == "__main__":
 
     (
         independence_filename,
-        moments_model_filename,
+        shared_model_filename,
     ) = resolve_model_input_filenames()
 
     era5_filename = build_era5_filename()
@@ -1527,7 +1691,7 @@ if __name__ == "__main__":
     print("Input files")
     print("-----------")
     print(f"Independence model: {independence_filename}")
-    print(f"Moments model:      {moments_model_filename}")
+    print(f"Panels (b)-(f):     {shared_model_filename}")
     print(f"ERA5:               {era5_filename}")
     print(f"{senorge_label}:".ljust(20), senorge_filename)
 
@@ -1536,19 +1700,27 @@ if __name__ == "__main__":
     )
 
     (
-        model_values,
+        model_all_values,
+        model_early_values,
+        model_late_values,
         era5_values,
         senorge_values,
-    ) = load_moments_values(
-        model_filename=moments_model_filename,
+    ) = load_model_and_reference_values(
+        model_filename=shared_model_filename,
         era5_filename=era5_filename,
         senorge_filename=senorge_filename,
         senorge_variable=senorge_variable,
         senorge_label=senorge_label,
     )
 
+    validate_model_partition(
+        model_all_values=model_all_values,
+        model_early_values=model_early_values,
+        model_late_values=model_late_values,
+    )
+
     validate_moments_samples(
-        model_values=model_values,
+        model_values=model_all_values,
         era5_values=era5_values,
         senorge_values=senorge_values,
         senorge_label=senorge_label,
@@ -1557,16 +1729,15 @@ if __name__ == "__main__":
     rng = np.random.default_rng(random_seed)
 
     moments_results = perform_all_moments_tests(
-        model_values=model_values,
+        model_values=model_all_values,
         era5_values=era5_values,
         senorge_values=senorge_values,
         rng=rng,
     )
 
-    ks_results = perform_distribution_tests(
-        model_values=model_values,
-        era5_values=era5_values,
-        senorge_values=senorge_values,
+    stability_ks = perform_stability_ks_test(
+        early_values=model_early_values,
+        late_values=model_late_values,
     )
 
     print()
@@ -1580,19 +1751,21 @@ if __name__ == "__main__":
         senorge_label=senorge_label,
     )
 
-    print_ks_results(
-        ks_results=ks_results,
-        senorge_label=senorge_label,
+    print_stability_results(
+        model_all_values=model_all_values,
+        model_early_values=model_early_values,
+        model_late_values=model_late_values,
+        stability_ks=stability_ks,
     )
 
     figure = create_combined_figure(
         independence_values=independence_values,
         moments_results=moments_results,
-        model_values=model_values,
-        era5_values=era5_values,
-        senorge_values=senorge_values,
+        model_all_values=model_all_values,
+        model_early_values=model_early_values,
+        model_late_values=model_late_values,
         senorge_label=senorge_label,
-        ks_results=ks_results,
+        stability_ks=stability_ks,
     )
 
     if write2file:

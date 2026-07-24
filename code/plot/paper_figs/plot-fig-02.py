@@ -56,12 +56,12 @@ number_of_lead_bins = 2
 #     ...
 model_sampling_group = "full"
 
-write2file = True
 if model_sampling_group == "full":
     filename_out = config.dirs["fig"] + f"fig-02.png"
 else:
     filename_out = config.dirs["fig"] + f"fig-02-{model_sampling_group}.png"
 
+write2file = False
 
 # =============================================================================
 # Dataset-specific settings
@@ -358,9 +358,9 @@ def make_model_filename() -> str:
     return os.path.join(
         config.dirs["s2s_processed"],
         (
-            f"distribution_monthly_extremes_"
+            f"all_distribution_monthly_extremes_"
             f"{MODEL_VARIABLE}_{x_days}dayacc_"
-            f"nve_catchment_{catchment}_"
+            f"{catchment}_"
             f"{lead_label}_"
             f"forecast_hindcast_"
             f"{forecast_date_range[0]}_"

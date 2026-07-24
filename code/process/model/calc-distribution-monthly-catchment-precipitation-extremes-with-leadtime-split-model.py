@@ -1,39 +1,86 @@
 """
-Build monthly S2S extreme-precipitation samples for the full lead window and
-for N approximately equal lead-time bins.
+Build monthly S2S extreme-precipitation samples for the complete usable lead
+window and partition those SAME full-window maxima according to the lead-time
+bin in which each maximum occurs.
 
-The script follows the sampling approach of the original UNSEEN sample builder:
+Sampling procedure
+------------------
+The script follows the original UNSEEN sampling approach:
 1. Load forecast and hindcast daily precipitation.
 2. Calculate catchment-weighted mean precipitation.
 3. Calculate trailing X-day accumulated precipitation.
-4. Calculate one maximum for every ensemble member (and hindcast date).
-5. Assign those maxima to the calendar month containing most lead dates in
-   the corresponding lead-time window.
+4. For every ensemble member (and hindcast date), calculate ONE maximum over
+   the complete usable accumulated lead-time window.
+5. Assign that full-window maximum to a calendar month using the calendar month
+   containing most valid dates in the COMPLETE usable lead-time window.
+6. Record the ending lead day at which that same full-window maximum occurs.
+7. Place the full-window maximum into exactly one lead-time subgroup according
+   to the lead bin containing its maximum lead day.
 
-Lead-time splitting
--------------------
-The original daily input window is split into N consecutive, approximately
-equal bins. If the number of input lead days is not divisible by N, the extra
-days are assigned to the later bins.
+The lead-time subgroups are therefore NOT maxima recalculated over shorter
+windows. They are subsets of the complete-window maxima. Every stored subgroup
+value is exactly the same extreme value that appears in the full sample.
 
-Example for:
+Consequently, for every calendar month:
+
+    number of full-sample maxima
+        =
+    sum of the sample numbers across all lead-time bins
+
+apart from cases where a full-window maximum or its lead day is missing.
+
+Lead-time binning
+-----------------
+The usable accumulated ending leads are divided into N consecutive,
+approximately equal bins. The splitting occurs AFTER accounting for the X-day
+accumulation. If the number of usable accumulated leads is not divisible by N,
+the extra leads are assigned to the later bins.
+
+For:
     first_input_lead = 16
     last_input_lead  = 46
     x_days           = 2
+
+the usable accumulated ending leads are 17-46, giving 30 usable lead times.
+
+Examples:
+
+    number_of_lead_bins = 1
+        bin 1: 17-46
+
     number_of_lead_bins = 2
+        bin 1: 17-31
+        bin 2: 32-46
 
-The daily input leads are split as:
-    16-30
-    31-46
+    number_of_lead_bins = 3
+        bin 1: 17-26
+        bin 2: 27-36
+        bin 3: 37-46
 
-After the 2-day accumulation, the stored maximum variables are:
-    max_value_lead17_46   # complete usable lead window
-    max_value_lead17_30   # first split
-    max_value_lead31_46   # second split
+    ...
 
-The accumulation is calculated before the lead ranges are selected. Therefore,
-for example, the 2-day accumulation ending on lead 31 uses daily leads 30-31.
-This matches the requested lead labels above.
+    number_of_lead_bins = 30
+        one ending lead per bin
+
+For number_of_lead_bins = 2, a January full-window maximum that occurs at
+lead 25 is stored in:
+    max_value_lead17_46
+and also in:
+    max_value_bin1_lead17_31
+
+A January full-window maximum that occurs at lead 38 is stored in:
+    max_value_lead17_46
+and also in:
+    max_value_bin2_lead32_46
+
+The subgroup values therefore partition the full UNSEEN sample according to
+where within the forecast window the extreme occurred.
+
+Tie handling
+------------
+If exactly the same maximum value occurs at more than one lead time for a
+sample, the first occurrence in lead-time order is used to assign that sample
+to a lead bin. The maximum value itself is unchanged.
 
 Output dataset
 --------------
@@ -42,9 +89,19 @@ Dimensions:
     index         : pooled forecast/hindcast sample storage
 
 Variables:
-    One float32 max_value variable for the complete lead window and one for
-    each split lead window. No dates, members, model-type strings, or source
-    filenames are stored, keeping the output substantially smaller.
+    max_value_lead<start>_<end>
+        Complete-window maximum sample.
+
+    max_value_bin<N>_lead<start>_<end>
+        Subset of complete-window maxima whose maximum occurs within that
+        lead-time bin.
+
+The script prints the sample number for the full sample and every lead bin for
+each calendar month, plus a check that:
+
+    full count = sum of lead-bin counts
+
+for every month.
 """
 
 import os
@@ -64,10 +121,7 @@ variable = "tp24"
 x_days = 2
 catchment = "regine_drammen"
 
-forecast_date_range = [
-    "2020-01-02",
-    "2023-06-26",
-]
+forecast_date_range = ["2020-01-02","2023-06-26"]
 
 path_in_forecast = (
     config.dirs["s2s_forecast_daily"] + variable + "/"
@@ -87,7 +141,7 @@ path_out = config.dirs["s2s_processed"]
 first_input_lead = 16
 last_input_lead = 46
 
-# Number of approximately equal lead-time subsets.
+# Number of lead-location bins used to partition the full-window maxima
 number_of_lead_bins = 2
 
 # Expected ensemble structure. These values only determine storage size.
@@ -113,8 +167,9 @@ def validate_user_settings() -> None:
             "first_input_lead must not exceed last_input_lead."
         )
 
-    number_of_input_leads = (
-        last_input_lead - first_input_lead + 1
+    first_usable_lead = first_input_lead + x_days - 1
+    number_of_usable_leads = (
+        last_input_lead - first_usable_lead + 1
     )
 
     if not isinstance(number_of_lead_bins, int):
@@ -127,13 +182,12 @@ def validate_user_settings() -> None:
             "number_of_lead_bins must be at least 1."
         )
 
-    if number_of_lead_bins > number_of_input_leads:
+    if number_of_lead_bins > number_of_usable_leads:
         raise ValueError(
             "number_of_lead_bins cannot exceed the number of "
-            "available input lead days."
+            "usable accumulated lead times."
         )
 
-    first_usable_lead = first_input_lead + x_days - 1
 
     if first_usable_lead > last_input_lead:
         raise ValueError(
@@ -141,17 +195,22 @@ def validate_user_settings() -> None:
         )
 
 
-def split_input_leads(
+def split_usable_accumulated_leads(
     first_lead: int,
     last_lead: int,
     number_of_bins: int,
 ) -> list[tuple[int, int]]:
     """
-    Split an inclusive input lead interval into approximately equal bins.
+    Split the inclusive usable accumulated-lead interval into approximately
+    equal consecutive bins.
 
-    When the interval cannot be divided exactly, the extra lead days are
-    assigned to the later bins. Thus 16-46 split into two bins becomes
-    16-30 and 31-46.
+    The split is performed AFTER accounting for the X-day accumulation.
+    Therefore, with daily input leads 16-46 and x_days=2, the usable
+    accumulated ending leads are 17-46 (30 lead times). Splitting these into
+    two bins gives exactly 17-31 and 32-46.
+
+    If the number of usable accumulated leads is not divisible by the number
+    of bins, the extra leads are assigned to the later bins.
     """
 
     number_of_leads = last_lead - first_lead + 1
@@ -159,14 +218,9 @@ def split_input_leads(
     base_size = number_of_leads // number_of_bins
     remainder = number_of_leads % number_of_bins
 
-    # Put the larger bins at the end, matching the requested 16-30 / 31-46
-    # convention for 31 lead days split into two bins.
     bin_sizes = [
         base_size
-        + int(
-            bin_index
-            >= number_of_bins - remainder
-        )
+        + int(bin_index >= number_of_bins - remainder)
         for bin_index in range(number_of_bins)
     ]
 
@@ -175,11 +229,7 @@ def split_input_leads(
 
     for bin_size in bin_sizes:
         current_end = current_start + bin_size - 1
-
-        bins.append(
-            (current_start, current_end)
-        )
-
+        bins.append((current_start, current_end))
         current_start = current_end + 1
 
     return bins
@@ -187,62 +237,58 @@ def split_input_leads(
 
 def build_accumulated_lead_ranges() -> list[tuple[int, int]]:
     """
-    Return the full usable accumulated range followed by the N split ranges.
+    Return the full usable accumulated range followed by N lead-location bins.
 
-    Only the beginning of the first split is affected by the trailing
-    accumulation because later accumulated ending leads already exist after
-    the accumulation is calculated over the complete input period.
+    Importantly, the bins are created from the usable accumulated ending
+    leads, not from the original daily input leads.
+
+    Example:
+        first_input_lead = 16
+        last_input_lead  = 46
+        x_days           = 2
+        number_of_lead_bins = 2
+
+    gives usable accumulated leads 17-46, which are split as:
+        17-31
+        32-46
     """
 
-    first_usable_lead = (
-        first_input_lead + x_days - 1
-    )
-
-    input_bins = split_input_leads(
-        first_lead=first_input_lead,
-        last_lead=last_input_lead,
-        number_of_bins=number_of_lead_bins,
-    )
-
-    split_ranges = []
-
-    for bin_index, (bin_start, bin_end) in enumerate(input_bins):
-
-        if bin_index == 0:
-            accumulated_start = max(
-                bin_start,
-                first_usable_lead,
-            )
-        else:
-            accumulated_start = bin_start
-
-        accumulated_end = bin_end
-
-        if accumulated_start > accumulated_end:
-            raise ValueError(
-                "A lead-time bin contains no usable accumulated leads. "
-                "Reduce number_of_lead_bins or x_days."
-            )
-
-        split_ranges.append(
-            (accumulated_start, accumulated_end)
-        )
+    first_usable_lead = first_input_lead + x_days - 1
 
     full_range = (
         first_usable_lead,
         last_input_lead,
     )
 
+    split_ranges = split_usable_accumulated_leads(
+        first_lead=first_usable_lead,
+        last_lead=last_input_lead,
+        number_of_bins=number_of_lead_bins,
+    )
+
     return [full_range] + split_ranges
 
 
-def lead_range_variable_name(
+def full_range_variable_name(
+    full_range: tuple[int, int],
+) -> str:
+    """Return the NetCDF variable name for the complete-window maxima."""
+
+    lead_start, lead_end = full_range
+    return f"max_value_lead{lead_start}_{lead_end}"
+
+
+def lead_bin_variable_name(
+    bin_number: int,
     lead_start: int,
     lead_end: int,
 ) -> str:
-    """Return the NetCDF variable name for one lead-time range."""
+    """Return the NetCDF variable name for one lead-location subgroup."""
 
-    return f"max_value_lead{lead_start}_{lead_end}"
+    return (
+        f"max_value_bin{bin_number}_"
+        f"lead{lead_start}_{lead_end}"
+    )
 
 
 # =============================================================================
@@ -352,9 +398,9 @@ def make_output_filename(
     return os.path.join(
         path_out,
         (
-            f"distribution_monthly_extremes_"
+            f"lt_maxima_distribution_monthly_extremes_"
             f"{variable}_{x_days}dayacc_"
-            f"nve_catchment_{catchment}_"
+            f"{catchment}_"
             f"{lead_label}_"
             f"forecast_hindcast_"
             f"{forecast_date_range[0]}_"
@@ -619,40 +665,98 @@ def get_month_with_most_lead_dates(
     )
 
 
-def extract_max_values(
+def extract_full_window_maxima_and_leads(
     da: xr.DataArray,
-    lead_start: int,
-    lead_end: int,
-) -> tuple[int, np.ndarray]:
+    full_range: tuple[int, int],
+) -> tuple[int, np.ndarray, np.ndarray]:
     """
-    Extract all ensemble/hindcast maxima for one accumulated lead range.
+    Extract the complete-window maximum and its ending lead day for every sample.
 
-    Returns the assigned calendar month and a flattened float32 value array.
+    Returns
+    -------
+    month : int
+        Calendar month assigned from the complete usable lead-time window.
+
+    max_values : np.ndarray
+        Flattened full-window maximum values.
+
+    max_leads : np.ndarray
+        Flattened ending lead day at which each full-window maximum occurs.
+
+    Notes
+    -----
+    The lead day is found with argmax along the time dimension. If the same
+    maximum occurs at multiple lead times, xarray/numpy argmax selects the
+    first occurrence in lead-time order.
     """
+
+    full_start, full_end = full_range
 
     selected = select_lead_range(
         da=da,
-        lead_start=lead_start,
-        lead_end=lead_end,
+        lead_start=full_start,
+        lead_end=full_end,
     )
 
-    month = get_month_with_most_lead_dates(
-        selected
-    )
+    month = get_month_with_most_lead_dates(selected)
 
-    max_values = (
-        selected
-        .max(dim="time")
-        .values
-        .astype("float32")
-        .ravel()
-    )
+    # Maximum value over the complete lead window.
+    max_da = selected.max(dim="time")
 
-    max_values = max_values[
+    # Index of the first occurrence of the maximum along time.
+    argmax_da = selected.argmax(dim="time")
+
+    # Convert the argmax indices into actual ending lead days.
+    lead_days = selected["lead_day"].values
+    argmax_indices = argmax_da.values.astype("int64")
+
+    max_values = max_da.values.astype("float32").ravel()
+    max_leads = lead_days[argmax_indices].astype("int16").ravel()
+
+    valid = (
         np.isfinite(max_values)
-    ]
+        & np.isfinite(max_leads)
+    )
 
-    return month, max_values
+    return (
+        month,
+        max_values[valid],
+        max_leads[valid],
+    )
+
+
+def split_full_maxima_by_lead_bin(
+    max_values: np.ndarray,
+    max_leads: np.ndarray,
+    split_ranges: list[tuple[int, int]],
+) -> list[np.ndarray]:
+    """
+    Partition complete-window maxima according to where the maximum occurred.
+
+    Each full-window maximum is assigned to exactly one lead bin.
+    """
+
+    bin_values = []
+
+    for lead_start, lead_end in split_ranges:
+        in_bin = (
+            (max_leads >= lead_start)
+            & (max_leads <= lead_end)
+        )
+
+        bin_values.append(
+            max_values[in_bin]
+        )
+
+    assigned_count = sum(values.size for values in bin_values)
+
+    if assigned_count != max_values.size:
+        raise ValueError(
+            "Not every full-window maximum was assigned to exactly one "
+            "lead-time bin. Check the lead-bin definitions."
+        )
+
+    return bin_values
 
 
 # =============================================================================
@@ -664,10 +768,9 @@ def initialize_extreme_store(
     lead_ranges: list[tuple[int, int]],
 ) -> xr.Dataset:
     """
-    Create compact storage containing only maximum-value variables.
+    Create storage for the complete-window maxima and lead-location subsets.
 
-    Each lead range gets a separate float32 variable with dimensions
-    (month_of_year, index).
+    The full sample and every lead bin use dimensions (month_of_year, index).
     """
 
     n_index = n_forecasts * (
@@ -675,12 +778,29 @@ def initialize_extreme_store(
         + n_hindcast_members * n_hdates
     )
 
+    full_range = lead_ranges[0]
+    split_ranges = lead_ranges[1:]
+
     data_vars = {}
 
-    for lead_start, lead_end in lead_ranges:
-        variable_name = lead_range_variable_name(
-            lead_start,
-            lead_end,
+    full_variable = full_range_variable_name(full_range)
+    data_vars[full_variable] = (
+        ("month_of_year", "index"),
+        np.full(
+            (12, n_index),
+            np.nan,
+            dtype="float32",
+        ),
+    )
+
+    for bin_number, (lead_start, lead_end) in enumerate(
+        split_ranges,
+        start=1,
+    ):
+        variable_name = lead_bin_variable_name(
+            bin_number=bin_number,
+            lead_start=lead_start,
+            lead_end=lead_end,
         )
 
         data_vars[variable_name] = (
@@ -719,54 +839,79 @@ def add_store_metadata(
     store: xr.Dataset,
     lead_ranges: list[tuple[int, int]],
 ) -> None:
-    """Add compact metadata describing the sampling configuration."""
+    """Add metadata describing the full-window lead-location sampling."""
+
+    full_range = lead_ranges[0]
+    split_ranges = lead_ranges[1:]
+    full_start, full_end = full_range
 
     store.attrs.update(
         {
             "description": (
-                "Monthly pooled forecast/hindcast maxima for the complete "
-                "usable lead window and approximately equal lead-time splits."
+                "Monthly pooled forecast/hindcast maxima calculated over the "
+                "complete usable lead window, plus subsets of those SAME "
+                "maxima grouped by the lead-time bin in which each maximum "
+                "occurs."
             ),
             "variable": variable,
             "catchment": catchment,
             "x_days": x_days,
             "first_input_lead": first_input_lead,
             "last_input_lead": last_input_lead,
+            "first_usable_accumulated_lead": full_start,
+            "last_usable_accumulated_lead": full_end,
             "number_of_lead_bins": number_of_lead_bins,
+            "calendar_month_binning": "complete usable lead window",
+            "lead_bin_sampling": (
+                "complete-window maxima partitioned by lead day of maximum"
+            ),
+            "tie_handling": (
+                "first lead-time occurrence used when equal maxima are tied"
+            ),
             "forecast_date_start": forecast_date_range[0],
             "forecast_date_end": forecast_date_range[1],
         }
     )
 
-    for range_index, (
-        lead_start,
-        lead_end,
-    ) in enumerate(lead_ranges):
+    full_variable = full_range_variable_name(full_range)
+    store[full_variable].attrs.update(
+        {
+            "description": (
+                f"Maximum {x_days}-day accumulated catchment-mean "
+                f"precipitation over complete ending leads "
+                f"{full_start}-{full_end}"
+            ),
+            "units": "mm",
+            "lead_start": full_start,
+            "lead_end": full_end,
+            "range_type": "complete usable lead window",
+        }
+    )
 
-        variable_name = lead_range_variable_name(
-            lead_start,
-            lead_end,
+    for bin_number, (lead_start, lead_end) in enumerate(
+        split_ranges,
+        start=1,
+    ):
+        variable_name = lead_bin_variable_name(
+            bin_number=bin_number,
+            lead_start=lead_start,
+            lead_end=lead_end,
         )
-
-        if range_index == 0:
-            range_type = "complete usable lead window"
-        else:
-            range_type = (
-                f"lead-time split {range_index} of "
-                f"{number_of_lead_bins}"
-            )
 
         store[variable_name].attrs.update(
             {
                 "description": (
-                    f"Maximum {x_days}-day accumulated catchment-mean "
-                    f"precipitation for ending leads "
-                    f"{lead_start}-{lead_end}; {range_type}"
+                    f"Subset of complete-window maxima whose maximum occurs "
+                    f"at ending leads {lead_start}-{lead_end}; "
+                    f"lead bin {bin_number} of {number_of_lead_bins}"
                 ),
                 "units": "mm",
                 "lead_start": lead_start,
                 "lead_end": lead_end,
-                "range_type": range_type,
+                "range_type": (
+                    f"lead-location bin {bin_number} of "
+                    f"{number_of_lead_bins}"
+                ),
             }
         )
 
@@ -846,17 +991,52 @@ def process_and_store_all_ranges(
     da: xr.DataArray,
     lead_ranges: list[tuple[int, int]],
 ) -> None:
-    """Calculate and store maxima for the full range and every split range."""
+    """
+    Store the complete-window maxima and partition them by maximum lead day.
 
-    for lead_start, lead_end in lead_ranges:
+    The complete-window maximum is calculated once for each sample. That same
+    value is then stored in exactly one lead-bin variable according to the
+    ending lead day at which the maximum occurs.
+    """
 
-        variable_name = lead_range_variable_name(
-            lead_start,
-            lead_end,
-        )
+    full_range = lead_ranges[0]
+    split_ranges = lead_ranges[1:]
 
-        month, max_values = extract_max_values(
-            da=da,
+    (
+        month,
+        max_values,
+        max_leads,
+    ) = extract_full_window_maxima_and_leads(
+        da=da,
+        full_range=full_range,
+    )
+
+    # Store every complete-window maximum.
+    full_variable = full_range_variable_name(full_range)
+
+    add_values_to_store(
+        store=store,
+        variable_name=full_variable,
+        month=month,
+        values=max_values,
+    )
+
+    # Partition those same maxima among the lead-location bins.
+    bin_values = split_full_maxima_by_lead_bin(
+        max_values=max_values,
+        max_leads=max_leads,
+        split_ranges=split_ranges,
+    )
+
+    for bin_number, (
+        (lead_start, lead_end),
+        values,
+    ) in enumerate(
+        zip(split_ranges, bin_values),
+        start=1,
+    ):
+        variable_name = lead_bin_variable_name(
+            bin_number=bin_number,
             lead_start=lead_start,
             lead_end=lead_end,
         )
@@ -865,7 +1045,128 @@ def process_and_store_all_ranges(
             store=store,
             variable_name=variable_name,
             month=month,
-            values=max_values,
+            values=values,
+        )
+
+
+def print_monthly_sample_counts(
+    store: xr.Dataset,
+    lead_ranges: list[tuple[int, int]],
+) -> None:
+    """
+    Print monthly sample counts and verify that lead bins partition the full sample.
+    """
+
+    month_names = [
+        "January", "February", "March", "April", "May", "June",
+        "July", "August", "September", "October", "November", "December",
+    ]
+
+    full_range = lead_ranges[0]
+    split_ranges = lead_ranges[1:]
+
+    full_variable = full_range_variable_name(full_range)
+
+    bin_variables = [
+        lead_bin_variable_name(
+            bin_number=bin_number,
+            lead_start=lead_start,
+            lead_end=lead_end,
+        )
+        for bin_number, (lead_start, lead_end) in enumerate(
+            split_ranges,
+            start=1,
+        )
+    ]
+
+    labels = ["full"] + [
+        f"bin_{bin_number}"
+        for bin_number in range(1, len(split_ranges) + 1)
+    ] + ["bins_sum", "check"]
+
+    print()
+    print("Sample counts by calendar month")
+    print("-------------------------------")
+    print(
+        "Each lead-bin sample is a subset of the complete-window maxima."
+    )
+
+    header = f"{'Month':<12}" + "".join(
+        f"{label:>12}" for label in labels
+    )
+    print(header)
+    print("-" * len(header))
+
+    all_months_ok = True
+
+    for month, month_name in enumerate(month_names, start=1):
+
+        full_count = int(
+            np.isfinite(
+                store[full_variable]
+                .sel(month_of_year=month)
+                .values
+            ).sum()
+        )
+
+        bin_counts = []
+
+        for variable_name in bin_variables:
+            count = int(
+                np.isfinite(
+                    store[variable_name]
+                    .sel(month_of_year=month)
+                    .values
+                ).sum()
+            )
+            bin_counts.append(count)
+
+        bins_sum = sum(bin_counts)
+        check = "OK" if bins_sum == full_count else "FAIL"
+
+        if check == "FAIL":
+            all_months_ok = False
+
+        values_to_print = [full_count] + bin_counts + [bins_sum]
+
+        row = f"{month_name:<12}" + "".join(
+            f"{value:>12d}" for value in values_to_print
+        ) + f"{check:>12}"
+
+        print(row)
+
+    full_total = int(
+        np.isfinite(store[full_variable].values).sum()
+    )
+
+    bin_totals = [
+        int(np.isfinite(store[variable_name].values).sum())
+        for variable_name in bin_variables
+    ]
+
+    bins_total = sum(bin_totals)
+    total_check = "OK" if bins_total == full_total else "FAIL"
+
+    print("-" * len(header))
+
+    total_values = [full_total] + bin_totals + [bins_total]
+
+    print(
+        f"{'TOTAL':<12}"
+        + "".join(f"{value:>12d}" for value in total_values)
+        + f"{total_check:>12}"
+    )
+
+    print()
+
+    if all_months_ok and total_check == "OK":
+        print(
+            "Partition check passed: for every month, "
+            "full count = sum of lead-bin counts."
+        )
+    else:
+        print(
+            "WARNING: at least one month failed the partition check."
         )
 
 
@@ -931,25 +1232,31 @@ if __name__ == "__main__":
     print()
     print("Output maximum variables:")
 
-    for range_index, (
-        lead_start,
-        lead_end,
-    ) in enumerate(lead_ranges):
+    full_range = lead_ranges[0]
+    split_ranges = lead_ranges[1:]
 
-        variable_name = lead_range_variable_name(
-            lead_start,
-            lead_end,
-        )
+    full_variable = full_range_variable_name(full_range)
 
-        label = (
-            "full range"
-            if range_index == 0
-            else f"split {range_index}"
+    print(
+        f"  {full_variable}: "
+        f"complete-window maxima over leads "
+        f"{full_range[0]}-{full_range[1]}"
+    )
+
+    for bin_number, (lead_start, lead_end) in enumerate(
+        split_ranges,
+        start=1,
+    ):
+        variable_name = lead_bin_variable_name(
+            bin_number=bin_number,
+            lead_start=lead_start,
+            lead_end=lead_end,
         )
 
         print(
             f"  {variable_name}: "
-            f"leads {lead_start}-{lead_end} ({label})"
+            f"full-window maxima occurring at leads "
+            f"{lead_start}-{lead_end}"
         )
 
     forecast_dates = get_forecast_dates(
@@ -1009,6 +1316,11 @@ if __name__ == "__main__":
         # continuing to the next forecast date.
         del forecast
         del hindcast
+
+    print_monthly_sample_counts(
+        store=extreme_store,
+        lead_ranges=lead_ranges,
+    )
 
     if write2file:
         write_output(
