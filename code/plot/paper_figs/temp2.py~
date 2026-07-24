@@ -41,7 +41,14 @@ where F_early and F_late are the empirical cumulative distribution functions
 of the two samples. D is the largest vertical distance between the two CDFs.
 A larger D means the two distributions are more different.
 
-The p-value is estimated with a permutation test:
+Two p-values are calculated for comparison:
+
+1. p_perm: a permutation-based p-value estimated by randomly shuffling the
+   early/late labels.
+2. p_reg: the regular two-sample KS p-value returned by scipy.stats.ks_2samp
+   using its standard exact/asymptotic KS null distribution as appropriate.
+
+The permutation p-value is estimated as follows:
 
 1. Calculate the observed KS statistic, D_observed, from the real early and
    late samples.
@@ -65,8 +72,10 @@ The output figure contains one panel for each calendar month. Each panel shows:
     - the permutation distribution of KS D under H0;
     - the right-tail area corresponding to D_permuted >= D_observed;
     - a vertical line showing D_observed;
-    - the permutation p-value;
-    - whether H0 is rejected at the selected significance level.
+    - the permutation p-value, p_perm;
+    - the regular KS p-value, p_reg;
+    - whether H0 is rejected using the permutation p-value at the selected
+      significance level.
 
 The same x-axis is used for all months so the size of D can be compared
 visually across the year.
@@ -117,7 +126,7 @@ number_of_lead_bins = 2
 number_of_permutations = 100
 
 # Significance level. alpha=0.05 corresponds to a 95% significance level.
-alpha = 0.00001
+alpha = 0.05
 
 # Random seed makes the permutation results reproducible.
 random_seed = 42
@@ -311,7 +320,7 @@ def build_input_filename(
         (
             f"distribution_monthly_extremes_"
             f"{variable}_{x_days}dayacc_"
-            f"{catchment}_"
+            f"nve_catchment_{catchment}_"
             f"{lead_label}_"
             f"forecast_hindcast_"
             f"{forecast_date_range[0]}_"
@@ -416,15 +425,19 @@ def load_monthly_split_samples(
     return monthly_samples
 
 
-def calculate_ks_statistic(
+def calculate_regular_ks_test(
     sample_1: np.ndarray,
     sample_2: np.ndarray,
-) -> float:
+) -> tuple[float, float]:
     """
-    Calculate the two-sided two-sample KS D statistic.
+    Calculate the regular two-sided two-sample KS test.
 
-    Only the D statistic is used here. The p-value from scipy is deliberately
-    ignored because this script estimates the p-value by permutation.
+    Returns
+    -------
+    observed_d : float
+        The KS D statistic.
+    regular_p_value : float
+        The standard KS p-value returned by scipy.stats.ks_2samp.
     """
 
     result = ks_2samp(
@@ -434,7 +447,21 @@ def calculate_ks_statistic(
         method="auto",
     )
 
-    return float(result.statistic)
+    return float(result.statistic), float(result.pvalue)
+
+
+def calculate_ks_statistic(
+    sample_1: np.ndarray,
+    sample_2: np.ndarray,
+) -> float:
+    """Calculate only the two-sided two-sample KS D statistic."""
+
+    observed_d, _ = calculate_regular_ks_test(
+        sample_1,
+        sample_2,
+    )
+
+    return observed_d
 
 
 def permutation_ks_test(
@@ -461,7 +488,7 @@ def permutation_ks_test(
     n_early = early_values.size
     n_late = late_values.size
 
-    observed_d = calculate_ks_statistic(
+    observed_d, regular_p_value = calculate_regular_ks_test(
         early_values,
         late_values,
     )
@@ -502,6 +529,7 @@ def permutation_ks_test(
         "observed_d": observed_d,
         "permuted_d": permuted_d,
         "p_value": float(p_value),
+        "regular_p_value": float(regular_p_value),
         "reject_null": reject_null,
         "n_early": n_early,
         "n_late": n_late,
@@ -512,7 +540,7 @@ def run_all_monthly_tests(
     monthly_samples: dict[int, tuple[np.ndarray, np.ndarray]],
     rng: np.random.Generator,
 ) -> dict[int, dict[str, object]]:
-    """Run the permutation KS test independently for all 12 months."""
+    """Run permutation and regular KS tests independently for all 12 months."""
 
     results = {}
 
@@ -575,6 +603,15 @@ def format_p_value(p_value: float) -> str:
     return f"{p_value:.3f}"
 
 
+def format_regular_p_value(p_value: float) -> str:
+    """Format the regular KS p-value for the figure and terminal output."""
+
+    if p_value < 0.001:
+        return f"{p_value:.2e}"
+
+    return f"{p_value:.3f}"
+
+
 def plot_month_panel(
     ax: plt.Axes,
     month: int,
@@ -587,6 +624,7 @@ def plot_month_panel(
     permuted_d = np.asarray(result["permuted_d"])
     observed_d = float(result["observed_d"])
     p_value = float(result["p_value"])
+    regular_p_value = float(result["regular_p_value"])
     reject_null = bool(result["reject_null"])
 
     # Draw the complete permutation distribution first.
@@ -626,7 +664,8 @@ def plot_month_panel(
 
     annotation = (
         f"D = {observed_d:.3f}\n"
-        f"p = {format_p_value(p_value)}\n"
+        f"p_perm = {format_p_value(p_value)}\n"
+        f"p_reg = {format_regular_p_value(regular_p_value)}\n"
         f"{decision_text}"
     )
 
@@ -712,7 +751,7 @@ def create_figure(
 
     fig.suptitle(
         (
-            f"Permutation-based two-sided KS lead-time stability test\n"
+            f"Permutation-based and regular two-sided KS lead-time stability test\n"
             f"Early leads {early_start}-{early_end} vs late leads "
             f"{late_start}-{late_end} | "
             f"{x_days}-day precipitation extremes | "
@@ -772,14 +811,14 @@ def print_results(
     early_range: tuple[int, int],
     late_range: tuple[int, int],
 ) -> None:
-    """Print a concise table of monthly permutation-KS results."""
+    """Print a concise table comparing monthly permutation and regular KS results."""
 
     early_start, early_end = early_range
     late_start, late_end = late_range
 
     print()
-    print("Permutation-based two-sided KS test")
-    print("-----------------------------------")
+    print("Permutation-based and regular two-sided KS tests")
+    print("-----------------------------------------------")
     print(f"Early leads: {early_start}-{early_end}")
     print(f"Late leads:  {late_start}-{late_end}")
     print(f"Permutations: {number_of_permutations}")
@@ -791,7 +830,8 @@ def print_results(
         f"{'n early':>8s} "
         f"{'n late':>8s} "
         f"{'D':>8s} "
-        f"{'p':>10s} "
+        f"{'p_perm':>10s} "
+        f"{'p_reg':>10s} "
         f"{'Decision':>18s}"
     )
 
@@ -813,6 +853,7 @@ def print_results(
             f"{result['n_late']:>8d} "
             f"{result['observed_d']:>8.3f} "
             f"{format_p_value(result['p_value']):>10s} "
+            f"{format_regular_p_value(result['regular_p_value']):>10s} "
             f"{decision:>18s}"
         )
 
