@@ -27,8 +27,8 @@ diagnostic rather than a fully rigorous formal test.
 
 Required input variables
 ------------------------
-forecast_spearman_rho(assigned_month, forecast_pair)
-hindcast_spearman_rho(assigned_month, hindcast_pair)
+forecast_spearman_rho(month_of_year, forecast_pair)
+hindcast_spearman_rho(month_of_year, hindcast_pair)
 """
 
 import os
@@ -290,11 +290,11 @@ def load_independence_results(filename):
             f"{sorted(missing_variables)}"
         )
 
-    if "assigned_month" not in dataset.coords:
+    if "month_of_year" not in dataset.coords:
         dataset.close()
 
         raise KeyError(
-            "The input file does not contain the assigned_month coordinate."
+            "The input file does not contain the month_of_year coordinate."
         )
 
     return dataset
@@ -428,7 +428,7 @@ def adjust_p_values(p_values, method):
 def calculate_test_results(correlations):
     """Calculate one Wilcoxon test for each assigned calendar month."""
 
-    months = correlations["assigned_month"].values.astype(int)
+    months = correlations["month_of_year"].values.astype(int)
 
     medians = []
     raw_p_values = []
@@ -436,7 +436,7 @@ def calculate_test_results(correlations):
     for month in months:
 
         values = correlations.sel(
-            assigned_month=month
+            month_of_year=month
         ).values.ravel()
 
         values = values[np.isfinite(values)]
@@ -461,7 +461,7 @@ def calculate_test_results(correlations):
     )
 
     return {
-        "assigned_month": months,
+        "month_of_year": months,
         "median_rho": np.asarray(
             medians,
             dtype=float,
@@ -487,7 +487,7 @@ def print_test_results(test_results):
         raw_p_value,
         adjusted_p_value,
     ) in zip(
-        test_results["assigned_month"],
+        test_results["month_of_year"],
         test_results["median_rho"],
         test_results["raw_p_value"],
         test_results["adjusted_p_value"],
@@ -528,13 +528,13 @@ def significance_label(p_value):
 def prepare_boxplot_values(correlations):
     """Return one finite correlation array for each calendar month."""
 
-    months = correlations["assigned_month"].values.astype(int)
+    months = correlations["month_of_year"].values.astype(int)
     values_by_month = []
 
     for month in months:
 
         values = correlations.sel(
-            assigned_month=month
+            month_of_year=month
         ).values.ravel()
 
         values = values[np.isfinite(values)]

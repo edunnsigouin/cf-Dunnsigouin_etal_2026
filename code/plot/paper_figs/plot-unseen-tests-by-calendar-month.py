@@ -1,64 +1,106 @@
 """
-Create a six-panel monthly UNSEEN diagnostic figure for one selected calendar
-month.
+Create a six-panel UNSEEN diagnostic figure for one selected calendar month.
+
+The figure combines three checks:
+    1. ensemble-member independence;
+    2. fidelity of the S2S distribution relative to ERA5 and SeNorge;
+    3. stability of the S2S distribution across lead-time subgroups.
+
+Inputs
+------
+The script reads four NetCDF files:
+    - a precomputed Spearman-correlation file for panel (a);
+    - one S2S monthly extreme-sample file for panels (b)-(f);
+    - ERA5 monthly extremes;
+    - SeNorge monthly extremes.
+
+For the default settings
+    first_input_lead = 16
+    last_input_lead = 46
+    x_days = 2
+    number_of_lead_bins = 2
+
+the usable accumulated ending leads are 17-46 and the S2S variables are:
+    all leads : max_value_lead17_46
+    early     : max_value_lead17_31
+    late      : max_value_lead32_46
+
 
 Panel (a): Independence
 -----------------------
-Forecast and hindcast pairwise Spearman correlations are pooled and shown as
-one boxplot for the selected month.
+Shows one boxplot of pairwise Spearman rank correlations between ensemble
+members for the selected month. Forecast and hindcast correlations are pooled.
 
-Panels (b)-(e): Fidelity
-------------------------
-The four moments-based fidelity tests are calculated from the COMPLETE
-all-lead-time model sample:
+Correlations near zero indicate weak dependence between ensemble members.
+Larger positive or negative correlations indicate stronger dependence.
 
-    (b) mean
-    (c) standard deviation
-    (d) skewness
-    (e) kurtosis
 
-The model sample for these panels is taken from the same lead-location NetCDF
-file used for the stability test. ERA5 and SeNorge are used as observational
-references. For each moment, the complete model sample is resampled with
-replacement using the same sample size as the reference datasets. The model
-bootstrap distribution, its central confidence interval, and the ERA5/SeNorge
-statistics are plotted.
+Panel (b): Fidelity of the mean
+-------------------------------
+Uses the complete all-lead S2S sample.
 
-Panel (f): Stability
---------------------
-The stability panel uses the lead-location sampling produced by the second
-input script.
+The model sample is repeatedly resampled with replacement using the same sample
+size as the observational datasets. The resulting bootstrap distribution of
+the mean is shown together with the central model confidence interval and the
+ERA5 and SeNorge means.
 
-For every initialization/member, one maximum is first calculated across the
-complete usable accumulated lead-time window. That SAME full-window maximum is
-then classified according to whether its maximum occurs in the early or late
-lead-time subgroup.
 
-For the default 2-day setup:
+Panel (c): Fidelity of the standard deviation
+---------------------------------------------
+Uses the same bootstrap procedure, but for sample standard deviation.
 
-    all leads   : ending leads 17-46
-    early leads : maximum occurs at ending leads 17-31
-    late leads  : maximum occurs at ending leads 32-46
+This tests whether the observed spread of monthly extremes is consistent with
+the spread expected from the S2S distribution.
 
-Panel (f) plots probability-density distributions for:
 
-    complete all-lead sample : black
-    early subgroup           : tab:green
-    late subgroup            : tab:purple
+Panel (d): Fidelity of the skewness
+-----------------------------------
+Uses the same bootstrap procedure for skewness.
 
-A two-sided two-sample Kolmogorov-Smirnov test compares the Early and Late
-subgroups. The panel reports their sample numbers, the KS D statistic, p-value,
-and whether the null hypothesis of equal distributions is rejected at the
-user-defined significance level.
+This tests whether the asymmetry of the observed extreme-precipitation
+distribution is consistent with the S2S distribution.
 
-Thus panels (b)-(f) all use the SAME underlying model NetCDF file:
-    - panels (b)-(e): complete all-lead sample;
-    - panel (f): complete, early, and late samples.
 
-Panel (a) continues to use the separate independence NetCDF file.
+Panel (e): Fidelity of the kurtosis
+-----------------------------------
+Uses the same bootstrap procedure for excess kurtosis.
+
+This tests whether the tail-heaviness / peakedness of the observed extreme
+distribution is consistent with the S2S distribution.
+
+
+Panel (f): Lead-time stability
+------------------------------
+Compares the complete all-lead S2S distribution with the lead-location
+subgroups.
+
+The subgroup values are not maxima recalculated over shorter lead windows.
+They are the SAME full-window maxima, classified by the lead time at which each
+maximum occurred.
+
+For the default two-bin setup:
+    early = maxima occurring at ending leads 17-31
+    late  = maxima occurring at ending leads 32-46
+
+The panel shows probability-density distributions for all leads, early leads,
+and late leads. A two-sample Kolmogorov-Smirnov test compares the early and
+late subgroups and reports sample counts, KS statistic, p-value, and whether
+the equal-distribution null hypothesis is rejected.
+
+
+Data used by each panel
+-----------------------
+Panel (a):
+    precomputed independence file.
+
+Panels (b)-(e):
+    complete all-lead S2S sample + ERA5 + SeNorge.
+
+Panel (f):
+    complete, early, and late samples from the same S2S extreme-sample file.
 """
 
-from dataclasses import dataclass
+
 import os
 from typing import Callable
 
@@ -76,7 +118,7 @@ from Dunnsigouin_etal_2026 import config
 # =============================================================================
 
 # Calendar month to plot: 1=January, ..., 12=December.
-selected_month = 12
+selected_month = 11
 
 # Accumulation period.
 x_days = 2
@@ -95,17 +137,17 @@ reference_years = (
 )
 
 era5_grid = "0.5x0.5"
-senorge_dataset = "senorge"  # "senorge" or "senorge_regrid"
 
-# Select which model input configuration to use for panel (a).
-model_input_variant = "current_raw"
+# Optional full-path override for the independence file used by panel (a).
+# Leave as None to construct the standard filename automatically.
+independence_filename_override = None
 
 # Lead-location sampling used by panels (b)-(f).
 first_input_lead = 16
 last_input_lead = 46
 number_of_lead_bins = 2
 
-# Optional full-path override for the lead-location model file.
+# Optional full-path override for the monthly extreme-sample model file.
 # Leave as None to construct the filename automatically.
 stability_model_filename_override = None
 
@@ -124,16 +166,12 @@ number_of_bins = 30
 plot_probability_density = True
 y_axis_margin_fraction = 0.08
 
-# Finite-sample correction used for shape statistics.
-bias_correct_skewness = False
-bias_correct_kurtosis = False
-
 # Figure output.
 figure_width = 13.0
 figure_height = 8.0
 figure_dpi = 300
 
-write2file = True
+write2file = False
 show_figure = True
 
 
@@ -142,69 +180,13 @@ show_figure = True
 # =============================================================================
 
 MODEL_VARIABLE = "tp24"
-# Model variables for panels (b)-(f) are built from lead ranges.
+# S2S maximum-variable names are built automatically from lead ranges.
 MODEL_MONTH_COORDINATE = "month_of_year"
 
 ERA5_VARIABLE = "tp24"
 
-SENORGE_VARIABLES = {
-    "senorge": "rr",
-    "senorge_regrid": "rr",
-}
-
-SENORGE_LABELS = {
-    "senorge": "SeNorge",
-    "senorge_regrid": "SeNorge regrid",
-}
-
-
-@dataclass(frozen=True)
-class ModelInputVariant:
-    """
-    Describe one pair of model input files.
-
-    For the current dataset, filenames are built exactly as in scripts 1 and 2.
-    For future datasets, set explicit filename overrides without changing any
-    of the loading, analysis, bootstrap, or plotting functions.
-    """
-
-    label: str
-
-    # Settings used by the current independence filename convention.
-    first_input_lead: int = 16
-    last_input_lead: int = 46
-
-    # Optional full-path overrides for future datasets.
-    independence_filename: str | None = None
-
-
-MODEL_INPUT_VARIANTS = {
-    "current_raw": ModelInputVariant(
-        label="Current raw model input",
-        first_input_lead=16,
-        last_input_lead=46,
-    ),
-
-    # Future examples:
-    #
-    # "raw_lead17_30": ModelInputVariant(
-    #     label="Raw model, leads 17-30",
-    #     independence_filename="/path/to/independence_17_30.nc",
-    #     moments_filename="/path/to/monthly_extremes_17_30.nc",
-    # ),
-    #
-    # "raw_lead31_46": ModelInputVariant(
-    #     label="Raw model, leads 31-46",
-    #     independence_filename="/path/to/independence_31_46.nc",
-    #     moments_filename="/path/to/monthly_extremes_31_46.nc",
-    # ),
-    #
-    # "bias_corrected_lead17_46": ModelInputVariant(
-    #     label="Bias-corrected model, leads 17-46",
-    #     independence_filename="/path/to/bc_independence_17_46.nc",
-    #     moments_filename="/path/to/bc_monthly_extremes_17_46.nc",
-    # ),
-}
+SENORGE_VARIABLE = "rr"
+SENORGE_LABEL = "SeNorge"
 
 
 # =============================================================================
@@ -285,30 +267,6 @@ def readable_catchment_name(catchment_name: str) -> str:
     return name.replace("_", " ").title()
 
 
-def get_senorge_variable() -> str:
-    """Return the precipitation variable for the selected SeNorge product."""
-
-    if senorge_dataset not in SENORGE_VARIABLES:
-        raise ValueError(
-            f"Unknown senorge_dataset '{senorge_dataset}'. "
-            f"Choose from {sorted(SENORGE_VARIABLES)}."
-        )
-
-    return SENORGE_VARIABLES[senorge_dataset]
-
-
-def get_senorge_label() -> str:
-    """Return a readable label for the selected SeNorge product."""
-
-    if senorge_dataset not in SENORGE_LABELS:
-        raise ValueError(
-            f"Unknown senorge_dataset '{senorge_dataset}'. "
-            f"Choose from {sorted(SENORGE_LABELS)}."
-        )
-
-    return SENORGE_LABELS[senorge_dataset]
-
-
 def remove_missing_values(values: np.ndarray) -> np.ndarray:
     """Flatten an array and retain only finite values."""
 
@@ -324,12 +282,6 @@ def validate_user_settings() -> None:
 
     if x_days < 1:
         raise ValueError("x_days must be at least 1.")
-
-    if model_input_variant not in MODEL_INPUT_VARIANTS:
-        raise ValueError(
-            f"Unknown model_input_variant '{model_input_variant}'. "
-            f"Choose from {sorted(MODEL_INPUT_VARIANTS)}."
-        )
 
     if number_of_bootstrap_samples < 1:
         raise ValueError("number_of_bootstrap_samples must be at least 1.")
@@ -393,26 +345,20 @@ def validate_user_settings() -> None:
 # Filename helpers
 # =============================================================================
 
-def build_current_independence_filename(
-    variant: ModelInputVariant,
-) -> str:
-    """Build the independence filename exactly as in script 1."""
+def build_independence_filename() -> str:
+    """Build the standard independence filename."""
 
-    first_usable_accumulation_lead = (
-        variant.first_input_lead + x_days - 1
-    )
+    first_usable_lead = first_input_lead + x_days - 1
 
     return (
         config.dirs["s2s_processed"]
         + f"independence_spearman_monthly_max_{MODEL_VARIABLE}_"
         + f"{x_days}dayacc_"
         + f"nve_catchment_{catchment}_"
-        + f"lead{first_usable_accumulation_lead}-"
-        + f"{variant.last_input_lead}_"
+        + f"lead{first_usable_lead}-{last_input_lead}_"
         + f"{forecast_date_range[0]}_"
         + f"{forecast_date_range[1]}.nc"
     )
-
 
 def split_usable_accumulated_leads(
     first_lead: int,
@@ -474,7 +420,17 @@ def get_stability_variable_names() -> tuple[str, str, str]:
 
 
 def build_stability_model_filename() -> str:
-    """Build the lead-location model filename exactly as in script 2."""
+    """
+    Build the shared model filename exactly as written by the revised
+    monthly extreme-sample script.
+
+    Example for x_days=2 and number_of_lead_bins=2:
+
+        unseen_sample_monthly_catchment_precipitation_extremes_
+        tp24_2dayacc_regine_drammen_
+        lead17-46_split2_17-31_32-46_
+        forecast_hindcast_2020-01-02_2023-06-26.nc
+    """
 
     full_range, early_range, late_range = get_stability_lead_ranges()
 
@@ -488,7 +444,7 @@ def build_stability_model_filename() -> str:
     return os.path.join(
         config.dirs["s2s_processed"],
         (
-            f"lt_maxima_binning_distribution_monthly_extremes_"
+            f"unseen_sample_monthly_catchment_precipitation_extremes_"
             f"{MODEL_VARIABLE}_{x_days}dayacc_"
             f"{catchment}_"
             f"{lead_label}_"
@@ -500,14 +456,12 @@ def build_stability_model_filename() -> str:
 
 
 def resolve_model_input_filenames() -> tuple[str, str]:
-    """Return the independence file and shared model file for panels (b)-(f)."""
-
-    variant = MODEL_INPUT_VARIANTS[model_input_variant]
+    """Return the independence file and shared S2S extreme-sample file."""
 
     independence_filename = (
-        variant.independence_filename
-        if variant.independence_filename is not None
-        else build_current_independence_filename(variant)
+        independence_filename_override
+        if independence_filename_override is not None
+        else build_independence_filename()
     )
 
     shared_model_filename = (
@@ -517,7 +471,6 @@ def resolve_model_input_filenames() -> tuple[str, str]:
     )
 
     return independence_filename, shared_model_filename
-
 
 def build_era5_filename() -> str:
     """Build the ERA5 filename exactly as in script 2."""
@@ -530,19 +483,18 @@ def build_era5_filename() -> str:
     )
 
 
-def build_senorge_filename(senorge_variable: str) -> str:
-    """Build the SeNorge filename exactly as in script 2."""
+def build_senorge_filename() -> str:
+    """Build the SeNorge monthly-extremes filename."""
 
     return (
-        f"{config.dirs[f'{senorge_dataset}_processed']}"
-        f"distribution_monthly_extremes_{senorge_variable}_{x_days}dayacc_"
-        f"{catchment}_{senorge_dataset}_"
+        f"{config.dirs['senorge_processed']}"
+        f"distribution_monthly_extremes_{SENORGE_VARIABLE}_{x_days}dayacc_"
+        f"{catchment}_senorge_"
         f"{reference_years[0]}-{reference_years[1]}.nc"
     )
 
-
 def build_output_filename() -> str:
-    """Create a descriptive filename for the combined five-panel figure."""
+    """Create a descriptive filename for the six-panel figure."""
 
     month_name = MONTH_LABELS[selected_month].lower()
 
@@ -582,20 +534,20 @@ def load_independence_values(filename: str) -> np.ndarray:
                 f"{sorted(missing)}"
             )
 
-        if "assigned_month" not in ds.coords:
+        if "month_of_year" not in ds.coords:
             raise KeyError(
-                "Independence file has no 'assigned_month' coordinate."
+                "Independence file has no 'month_of_year' coordinate."
             )
 
         forecast = remove_missing_values(
             ds["forecast_spearman_rho"]
-            .sel(assigned_month=selected_month)
+            .sel(month_of_year=selected_month)
             .values
         )
 
         hindcast = remove_missing_values(
             ds["hindcast_spearman_rho"]
-            .sel(assigned_month=selected_month)
+            .sel(month_of_year=selected_month)
             .values
         )
 
@@ -834,7 +786,7 @@ def calculate_statistic(
         return float(
             skew(
                 values,
-                bias=not bias_correct_skewness,
+                bias=True,
             )
         )
 
@@ -843,7 +795,7 @@ def calculate_statistic(
             kurtosis(
                 values,
                 fisher=True,
-                bias=not bias_correct_kurtosis,
+                bias=True,
             )
         )
 
@@ -869,7 +821,7 @@ def get_vectorized_statistic_function(
         return lambda samples: skew(
             samples,
             axis=1,
-            bias=not bias_correct_skewness,
+            bias=True,
         )
 
     if statistic_name == "kurtosis":
@@ -877,7 +829,7 @@ def get_vectorized_statistic_function(
             samples,
             axis=1,
             fisher=True,
-            bias=not bias_correct_kurtosis,
+            bias=True,
         )
 
     raise ValueError(f"Unsupported statistic: {statistic_name}")
@@ -1293,7 +1245,7 @@ def make_shared_legend_handles(
             color=MODEL_COLOR,
             linewidth=CONFIDENCE_LINEWIDTH,
             linestyle="--",
-            label=f"Model / {confidence_level_percent:g}% boostrap interval",
+            label=f"Model / {confidence_level_percent:g}% bootstrap interval",
         ),
         Line2D(
             [0], [0],
@@ -1460,11 +1412,10 @@ def build_figure_title() -> str:
 
     catchment_name = readable_catchment_name(catchment)
     month_name = MONTH_LABELS[selected_month]
-    variant_label = MODEL_INPUT_VARIANTS[model_input_variant].label
 
     return (
         f"{month_name}: {x_days}-day accumulated precipitation maxima\n"
-        f"{catchment_name} catchment | {variant_label}"
+        f"{catchment_name} catchment"
     )
 
 
@@ -1669,8 +1620,8 @@ if __name__ == "__main__":
 
     validate_user_settings()
 
-    senorge_variable = get_senorge_variable()
-    senorge_label = get_senorge_label()
+    senorge_variable = SENORGE_VARIABLE
+    senorge_label = SENORGE_LABEL
 
     (
         independence_filename,
@@ -1678,9 +1629,7 @@ if __name__ == "__main__":
     ) = resolve_model_input_filenames()
 
     era5_filename = build_era5_filename()
-    senorge_filename = build_senorge_filename(
-        senorge_variable
-    )
+    senorge_filename = build_senorge_filename()
     output_filename = build_output_filename()
 
     print("Selected month")
