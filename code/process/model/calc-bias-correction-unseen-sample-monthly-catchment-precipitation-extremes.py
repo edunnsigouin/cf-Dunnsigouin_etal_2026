@@ -16,7 +16,7 @@ The same monthly ratio is then applied to:
     1. the full lead-window maximum variable; and
     2. every split lead-window maximum variable in the model file.
 
-All original model variables are retained unchanged.
+The original uncorrected max_value variables are omitted from the output.\nAll other model variables are retained unchanged.
 """
 
 import os
@@ -36,7 +36,7 @@ x_days = 2
 
 forecast_date_range = [
     "2020-01-02",
-    "2023-06-26",
+    "2022-12-29",
 ]
 
 observation_years = [
@@ -54,7 +54,15 @@ number_of_lead_bins = 2
 # Choose ONE reference dataset at a time: "era5" or "senorge".
 REFERENCE_DATASET = "senorge"
 
-write2file = False
+# If True, exclude 2023 when calculating the reference monthly means.
+# This is useful for excluding Storm Hans from the ERA5/SeNorge reference
+# climatology used to calculate the bias-correction ratios.
+#
+# True  -> use 1957-2022
+# False -> use 1957-2023
+EXCLUDE_2023_FROM_REFERENCE = True
+
+write2file = True
 
 # =============================================================================
 # Dataset-specific settings
@@ -288,9 +296,26 @@ def get_reference_monthly_mean(reference_ds, reference_variable):
             "dimensions 'year' and 'month'."
         )
 
+    # Optionally exclude 2023 so that Storm Hans does not influence
+    # the monthly reference means used for bias correction.
+    if EXCLUDE_2023_FROM_REFERENCE:
+        values = values.sel(
+            year=values["year"] < 2023
+        )
+
     reference_monthly_mean = values.mean(
         dim="year",
         skipna=True,
+    )
+
+    # Record the actual reference period used.
+    reference_year_start = int(values["year"].min().values)
+    reference_year_end = int(values["year"].max().values)
+
+    reference_monthly_mean.attrs["reference_year_start"] = reference_year_start
+    reference_monthly_mean.attrs["reference_year_end"] = reference_year_end
+    reference_monthly_mean.attrs["exclude_2023"] = str(
+        EXCLUDE_2023_FROM_REFERENCE
     )
 
     # Rename to match the model calendar-month dimension.
@@ -355,6 +380,13 @@ def calculate_monthly_bias_correction_ratio(
             "lead-window sampled maximum statistic"
         ),
         "reference_dataset": REFERENCE_DATASET,
+        "reference_year_start": reference_monthly_mean.attrs[
+            "reference_year_start"
+        ],
+        "reference_year_end": reference_monthly_mean.attrs[
+            "reference_year_end"
+        ],
+        "exclude_2023_from_reference": str(EXCLUDE_2023_FROM_REFERENCE),
         "formula": "reference_monthly_mean / model_monthly_mean",
         "model_variable_used_for_ratio": full_model_variable,
         "application": (
@@ -369,15 +401,23 @@ def calculate_monthly_bias_correction_ratio(
 
 def add_bias_corrected_variables(model_ds, ratio):
     """
-    Copy the model dataset and add corrected maximum variables.
+    Create the output dataset with bias-corrected maximum variables only.
 
-    The original maximum variables and all metadata/provenance variables are
-    retained unchanged.
+    The original uncorrected ``max_value_lead*`` variables are removed from
+    the output. All other variables, such as ``date_of_max``,
+    ``forecast_date``, ``hdate``, ``ensemble_member``, ``model_type``,
+    ``source_file``, and the sample-count variables, are retained unchanged.
     """
 
-    output_ds = model_ds.copy(deep=True)
     maximum_variables = get_model_maximum_variables(model_ds)
     suffix = f"_bc_{REFERENCE_DATASET}"
+
+    # Start with the complete model dataset, then remove only the original
+    # uncorrected sampled-maximum variables. This keeps all coordinates,
+    # provenance variables, dates, ensemble information, and sample counts.
+    output_ds = model_ds.drop_vars(
+        maximum_variables
+    ).copy(deep=True)
 
     for variable in maximum_variables:
         output_variable = f"{variable}{suffix}"
@@ -405,6 +445,7 @@ def add_bias_corrected_variables(model_ds, ratio):
             f"bias_correction_ratio_{REFERENCE_DATASET}"
         )
         corrected.attrs["bias_correction_reference"] = REFERENCE_DATASET
+        corrected.attrs["original_variable"] = variable
 
         output_ds[output_variable] = corrected
 
@@ -418,6 +459,15 @@ def add_bias_corrected_variables(model_ds, ratio):
         "maximum and applied to all maximum variables."
     )
     output_ds.attrs["bias_correction_reference_dataset"] = REFERENCE_DATASET
+    output_ds.attrs["bias_correction_reference_year_start"] = (
+        ratio.attrs["reference_year_start"]
+    )
+    output_ds.attrs["bias_correction_reference_year_end"] = (
+        ratio.attrs["reference_year_end"]
+    )
+    output_ds.attrs["bias_correction_exclude_2023"] = str(
+        EXCLUDE_2023_FROM_REFERENCE
+    )
 
     return output_ds
 
@@ -437,6 +487,13 @@ def print_bias_correction_table(
     model_monthly_mean = model_ds[full_model_variable].mean(
         dim="index",
         skipna=True,
+    )
+
+    print()
+    print(
+        "Reference period:",
+        f"{reference_monthly_mean.attrs['reference_year_start']}-"
+        f"{reference_monthly_mean.attrs['reference_year_end']}",
     )
 
     print()
@@ -540,4 +597,3 @@ if __name__ == "__main__":
         
     finally:
         model_ds.close()
-        reference_ds.close()
