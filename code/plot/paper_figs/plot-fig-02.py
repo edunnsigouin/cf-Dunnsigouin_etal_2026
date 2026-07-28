@@ -4,6 +4,11 @@ Plot monthly distributions of catchment precipitation extremes.
 The S2S model input is read from the monthly extreme-sample file produced by
 the lead-bin sample-building script.
 
+The model sample can optionally be read from the multiplicatively
+bias-corrected file produced by the bias-correction script. Set
+``USE_BIAS_CORRECTED_MODEL = True`` and select ``era5`` or ``senorge`` as
+the correction reference.
+
 The model sample can be selected in two ways:
 
     model_sampling_group = "full"
@@ -106,23 +111,22 @@ number_of_lead_bins = 2
 model_sampling_group = "full"
 
 
-# Output figure name.
-if model_sampling_group == "full":
+# Choose whether to use the original or bias-corrected S2S model sample.
+#
+# False -> original model sample
+# True  -> bias-corrected model sample created by the bias-correction script
+USE_BIAS_CORRECTED_MODEL = True
 
-    if catchment == "regine_drammen":
-        filename_out = config.dirs["fig"] + "fig-02.png"
-    else:
-        filename_out = config.dirs["fig"] + f"fig-02-{catchment}.png"
-
-else:
-
-    filename_out = (
-        config.dirs["fig"]
-        + f"fig-02-{model_sampling_group}.png"
-    )
+# Reference dataset used for the bias correction.
+# Only used when USE_BIAS_CORRECTED_MODEL = True.
+#
+# Options:
+#     "era5"
+#     "senorge"
+BIAS_CORRECTION_REFERENCE = "era5"
 
 
-write2file = True
+write2file = False
 
 
 # =============================================================================
@@ -263,6 +267,21 @@ def validate_model_sampling_settings():
             f"Valid options are: "
             f"{sorted(valid_groups)}."
         )
+
+
+    if USE_BIAS_CORRECTED_MODEL:
+
+        valid_references = {
+            "era5",
+            "senorge",
+        }
+
+        if BIAS_CORRECTION_REFERENCE not in valid_references:
+            raise ValueError(
+                f"BIAS_CORRECTION_REFERENCE must be one of "
+                f"{sorted(valid_references)}. "
+                f"Got '{BIAS_CORRECTION_REFERENCE}'."
+            )
 
 
 def split_usable_accumulated_leads(
@@ -421,10 +440,21 @@ def get_selected_model_variable():
     ) = get_selected_model_lead_range()
 
 
-    return (
+    variable = (
         f"max_value_lead"
         f"{lead_start}_{lead_end}"
     )
+
+
+    if USE_BIAS_CORRECTED_MODEL:
+
+        variable = (
+            f"{variable}_bc_"
+            f"{BIAS_CORRECTION_REFERENCE}"
+        )
+
+
+    return variable
 
 
 def get_selected_sample_count_variable():
@@ -488,7 +518,14 @@ def get_model_sampling_label():
 
     if model_sampling_group == "full":
 
-        return f"Model extremes"
+        if USE_BIAS_CORRECTED_MODEL:
+
+            return (
+                f"Model extremes, bias corrected to "
+                f"{BIAS_CORRECTION_REFERENCE.upper()}"
+            )
+
+        return "Model extremes"
 
 
     split_number = int(
@@ -499,10 +536,21 @@ def get_model_sampling_label():
     )
 
 
-    return (
+    label = (
         f"S2S split {split_number}, "
         f"ending leads {lead_start}-{lead_end}"
     )
+
+
+    if USE_BIAS_CORRECTED_MODEL:
+
+        label += (
+            f", bias corrected to "
+            f"{BIAS_CORRECTION_REFERENCE.upper()}"
+        )
+
+
+    return label
 
 
 # =============================================================================
@@ -534,7 +582,9 @@ def make_model_filename():
     """
     Create the S2S input filename.
 
-    This matches the filename convention in the attached model-sample builder.
+    When USE_BIAS_CORRECTED_MODEL is True, read the output from the
+    bias-correction script, which appends ``_bc_<reference>`` to the
+    original model-sample filename.
     """
 
     lead_label = (
@@ -542,7 +592,7 @@ def make_model_filename():
     )
 
 
-    return os.path.join(
+    filename = os.path.join(
         config.dirs[
             "s2s_processed"
         ],
@@ -556,6 +606,22 @@ def make_model_filename():
             f"{forecast_date_range[1]}.nc"
         ),
     )
+
+
+    if USE_BIAS_CORRECTED_MODEL:
+
+        stem, extension = os.path.splitext(
+            filename
+        )
+
+        filename = (
+            f"{stem}_bc_"
+            f"{BIAS_CORRECTION_REFERENCE}"
+            f"{extension}"
+        )
+
+
+    return filename
 
 
 def make_era5_filename():
@@ -581,6 +647,39 @@ def make_senorge_filename():
         f"{catchment}_senorge_"
         f"{observation_years[0]}-"
         f"{observation_years[1]}.nc"
+    )
+
+
+def make_figure_filename():
+    """Create an output figure name that records the model-data choice."""
+
+    if USE_BIAS_CORRECTED_MODEL:
+        suffix = (
+            f"bc-{BIAS_CORRECTION_REFERENCE}"
+        )
+    else:
+        suffix = "raw"
+
+
+    if model_sampling_group != "full":
+        suffix = (
+            f"{suffix}-{model_sampling_group}"
+        )
+
+
+    if catchment == "regine_drammen":
+        filename = (
+            f"fig-02-{suffix}.png"
+        )
+    else:
+        filename = (
+            f"fig-02-{catchment}-{suffix}.png"
+        )
+
+
+    return os.path.join(
+        config.dirs["fig"],
+        filename,
     )
 
 
@@ -1345,6 +1444,11 @@ if __name__ == "__main__":
     )
 
 
+    filename_out = (
+        make_figure_filename()
+    )
+
+
     (
         lead_start,
         lead_end,
@@ -1378,6 +1482,18 @@ if __name__ == "__main__":
         f"{model_sample_count_variable}"
     )
 
+    print(
+        f"Bias corrected:   "
+        f"{USE_BIAS_CORRECTED_MODEL}"
+    )
+
+    if USE_BIAS_CORRECTED_MODEL:
+
+        print(
+            f"BC reference:     "
+            f"{BIAS_CORRECTION_REFERENCE}"
+        )
+
 
     print()
     print(
@@ -1394,10 +1510,19 @@ if __name__ == "__main__":
     ) = get_full_lead_range()
 
 
-    print(
-        f"full:   "
+    full_variable = (
         f"max_value_lead"
         f"{full_start}_{full_end}"
+    )
+
+    if USE_BIAS_CORRECTED_MODEL:
+        full_variable += (
+            f"_bc_{BIAS_CORRECTION_REFERENCE}"
+        )
+
+    print(
+        f"full:   "
+        f"{full_variable}"
     )
 
 
@@ -1409,10 +1534,19 @@ if __name__ == "__main__":
         start=1,
     ):
 
-        print(
-            f"split{bin_number}: "
+        split_variable = (
             f"max_value_lead"
             f"{bin_start}_{bin_end}"
+        )
+
+        if USE_BIAS_CORRECTED_MODEL:
+            split_variable += (
+                f"_bc_{BIAS_CORRECTION_REFERENCE}"
+            )
+
+        print(
+            f"split{bin_number}: "
+            f"{split_variable}"
         )
 
 
