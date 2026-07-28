@@ -8,16 +8,16 @@ The figure combines three checks:
 
 Inputs
 ------
-The script reads four NetCDF files:
-    - a precomputed Spearman-correlation file for panel (a);
-    - one S2S monthly extreme-sample file for panels (b)-(f), which can be
-      either the original or multiplicatively bias-corrected model sample;
+The script reads three NetCDF files:
+    - one S2S monthly extreme-sample file used for ALL model diagnostics,
+      which can be either the original or bias-corrected model sample;
     - ERA5 monthly extremes;
     - SeNorge monthly extremes.
 
-Panel (a) always uses the original precomputed independence file. The
-``USE_BIAS_CORRECTED_MODEL`` and ``BIAS_CORRECTION_REFERENCE`` settings affect
-only panels (b)-(f).
+Panel (a) calculates ensemble-member Spearman correlations directly from the
+same all-lead S2S sample used by the fidelity and stability diagnostics.
+Therefore ``USE_BIAS_CORRECTED_MODEL`` and ``BIAS_CORRECTION_REFERENCE`` apply
+consistently to panels (a)-(f).
 
 For the default settings
     first_input_lead = 16
@@ -96,7 +96,8 @@ the equal-distribution null hypothesis is rejected.
 Data used by each panel
 -----------------------
 Panel (a):
-    precomputed independence file.
+    complete all-lead S2S sample + forecast_date + hdate + ensemble_member
+    + model_type from the shared S2S extreme-sample file.
 
 Panels (b)-(e):
     complete all-lead S2S sample + ERA5 + SeNorge.
@@ -107,13 +108,15 @@ Panel (f):
 
 
 import os
+from itertools import combinations
 from typing import Callable
 
 import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
 import xarray as xr
 from matplotlib.lines import Line2D
-from scipy.stats import ks_2samp, kurtosis, skew
+from scipy.stats import ks_2samp, kurtosis, rankdata, skew
 
 from Dunnsigouin_etal_2026 import config
 
@@ -123,7 +126,7 @@ from Dunnsigouin_etal_2026 import config
 # =============================================================================
 
 # Calendar month to plot: 1=January, ..., 12=December.
-selected_month = 6
+selected_month = 1
 
 # Accumulation period.
 x_days = 2
@@ -133,7 +136,7 @@ catchment = "regine_drammen"
 
 forecast_date_range = (
     "2020-01-02",
-    "2023-06-26",
+    "2022-12-29",
 )
 
 reference_years = (
@@ -143,25 +146,16 @@ reference_years = (
 
 era5_grid = "0.5x0.5"
 
-# Optional full-path override for the independence file used by panel (a).
-# Leave as None to construct the standard filename automatically.
-independence_filename_override = None
-
 # Lead-location sampling used by panels (b)-(f).
 first_input_lead = 16
 last_input_lead = 46
 number_of_lead_bins = 2
 
-# Optional full-path override for the monthly extreme-sample model file.
-# Leave as None to construct the filename automatically.
-stability_model_filename_override = None
-
-# Choose whether panels (b)-(f) use the original or bias-corrected S2S sample.
+# Choose whether all model diagnostics, panels (a)-(f), use the original
+# or bias-corrected S2S sample.
 #
 # False -> original model sample
 # True  -> bias-corrected model sample created by the bias-correction script
-#
-# Panel (a) always continues to use the original independence file.
 USE_BIAS_CORRECTED_MODEL = True
 
 # Reference dataset used for the bias correction.
@@ -170,7 +164,16 @@ USE_BIAS_CORRECTED_MODEL = True
 # Options:
 #     "era5"
 #     "senorge"
-BIAS_CORRECTION_REFERENCE = "era5"
+BIAS_CORRECTION_REFERENCE = "senorge"
+
+# Independence-test settings.
+# Minimum number of paired initialization values required for one
+# ensemble-member Spearman correlation.
+minimum_samples = 10
+
+# Expected ensemble sizes.
+n_forecast_members = 51
+n_hindcast_members = 11
 
 # Bootstrap settings.
 number_of_bootstrap_samples = 10000
@@ -361,6 +364,11 @@ def validate_user_settings() -> None:
             "number_of_lead_bins exceeds the number of usable leads."
         )
 
+    if minimum_samples < 3:
+        raise ValueError(
+            "minimum_samples must be at least 3."
+        )
+
 
     if USE_BIAS_CORRECTED_MODEL:
         valid_references = {
@@ -379,21 +387,6 @@ def validate_user_settings() -> None:
 # =============================================================================
 # Filename helpers
 # =============================================================================
-
-def build_independence_filename() -> str:
-    """Build the standard independence filename."""
-
-    first_usable_lead = first_input_lead + x_days - 1
-
-    return (
-        config.dirs["s2s_processed"]
-        + f"independence_spearman_monthly_max_{MODEL_VARIABLE}_"
-        + f"{x_days}dayacc_"
-        + f"nve_catchment_{catchment}_"
-        + f"lead{first_usable_lead}-{last_input_lead}_"
-        + f"{forecast_date_range[0]}_"
-        + f"{forecast_date_range[1]}.nc"
-    )
 
 def split_usable_accumulated_leads(
     first_lead: int,
@@ -508,22 +501,11 @@ def build_stability_model_filename() -> str:
     return filename
 
 
-def resolve_model_input_filenames() -> tuple[str, str]:
-    """Return the independence file and shared S2S extreme-sample file."""
+def resolve_model_input_filename() -> str:
+    """Construct the shared S2S extreme-sample filename."""
 
-    independence_filename = (
-        independence_filename_override
-        if independence_filename_override is not None
-        else build_independence_filename()
-    )
+    return build_stability_model_filename()
 
-    shared_model_filename = (
-        stability_model_filename_override
-        if stability_model_filename_override is not None
-        else build_stability_model_filename()
-    )
-
-    return independence_filename, shared_model_filename
 
 def build_era5_filename() -> str:
     """Build the ERA5 filename exactly as in script 2."""
@@ -568,56 +550,501 @@ def build_output_filename() -> str:
 
 
 # =============================================================================
-# Independence data: script 1 logic for one month
+# Independence calculation from the shared S2S sample
 # =============================================================================
 
-def load_independence_values(filename: str) -> np.ndarray:
-    """
-    Load and pool forecast/hindcast pairwise correlations for one month.
-    """
+def normalize_model_type(values: np.ndarray) -> np.ndarray:
+    """Return model-type values as stripped lowercase strings."""
 
-    if not os.path.exists(filename):
-        raise FileNotFoundError(
-            f"Independence input file does not exist:\n{filename}"
+    flat_values = np.asarray(values).ravel()
+
+    return np.array(
+        [
+            (
+                value.decode("utf-8")
+                if isinstance(value, bytes)
+                else str(value)
+            ).strip().lower()
+            for value in flat_values
+        ],
+        dtype=object,
+    )
+
+
+def datetime_values_to_key(values: np.ndarray) -> np.ndarray:
+    """Convert forecast_date values to datetime64[ns] keys."""
+
+    return pd.to_datetime(
+        np.asarray(values).ravel(),
+        errors="coerce",
+    ).to_numpy(
+        dtype="datetime64[ns]"
+    )
+
+
+def hdate_values_to_key(values: np.ndarray) -> np.ndarray:
+    """Convert hdate values to integer YYYYMMDD keys."""
+
+    values = np.asarray(values).ravel()
+
+    if np.issubdtype(
+        values.dtype,
+        np.datetime64,
+    ):
+        dates = pd.to_datetime(
+            values,
+            errors="coerce",
         )
 
-    with xr.open_dataset(filename) as ds:
-        required = {
-            "forecast_spearman_rho",
-            "hindcast_spearman_rho",
-        }
+        out = np.full(
+            values.size,
+            -99999999,
+            dtype="int64",
+        )
 
-        missing = required.difference(ds.data_vars)
+        valid = ~pd.isna(dates)
 
-        if missing:
-            raise KeyError(
-                "Independence file is missing variables: "
-                f"{sorted(missing)}"
+        out[valid] = (
+            dates[valid]
+            .strftime("%Y%m%d")
+            .astype("int64")
+        )
+
+        return out
+
+    numeric_values = pd.to_numeric(
+        values,
+        errors="coerce",
+    )
+
+    out = np.full(
+        values.size,
+        -99999999,
+        dtype="int64",
+    )
+
+    valid = np.isfinite(
+        numeric_values
+    )
+
+    out[valid] = (
+        numeric_values[valid]
+        .astype("int64")
+    )
+
+    return out
+
+
+def get_independence_month_samples(
+    model_ds: xr.Dataset,
+    all_variable: str,
+    model_type: str,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Extract the selected-month all-lead samples needed for independence.
+
+    Forecast initialization key:
+        forecast_date
+
+    Hindcast initialization key:
+        (forecast_date, hdate)
+    """
+
+    required_variables = {
+        all_variable,
+        "forecast_date",
+        "hdate",
+        "ensemble_member",
+        "model_type",
+    }
+
+    missing = required_variables.difference(
+        model_ds.data_vars
+    )
+
+    if missing:
+        raise KeyError(
+            "Model dataset is missing variables needed for the "
+            f"independence calculation: {sorted(missing)}"
+        )
+
+    values = (
+        model_ds[all_variable]
+        .sel(
+            month_of_year=selected_month
+        )
+        .values
+        .ravel()
+        .astype("float64")
+    )
+
+    model_types = normalize_model_type(
+        model_ds["model_type"]
+        .sel(
+            month_of_year=selected_month
+        )
+        .values
+    )
+
+    members = (
+        model_ds["ensemble_member"]
+        .sel(
+            month_of_year=selected_month
+        )
+        .values
+        .ravel()
+        .astype("int64")
+    )
+
+    forecast_date_keys = datetime_values_to_key(
+        model_ds["forecast_date"]
+        .sel(
+            month_of_year=selected_month
+        )
+        .values
+    )
+
+    if model_type == "forecast":
+
+        initialization_keys = forecast_date_keys
+
+        valid_initialization = (
+            ~np.isnat(
+                forecast_date_keys
             )
+        )
 
-        if "month_of_year" not in ds.coords:
-            raise KeyError(
-                "Independence file has no 'month_of_year' coordinate."
+    elif model_type == "hindcast":
+
+        hdate_keys = hdate_values_to_key(
+            model_ds["hdate"]
+            .sel(
+                month_of_year=selected_month
             )
-
-        forecast = remove_missing_values(
-            ds["forecast_spearman_rho"]
-            .sel(month_of_year=selected_month)
             .values
         )
 
-        hindcast = remove_missing_values(
-            ds["hindcast_spearman_rho"]
-            .sel(month_of_year=selected_month)
-            .values
+        initialization_keys = np.empty(
+            hdate_keys.size,
+            dtype=object,
         )
 
-    combined = np.concatenate([forecast, hindcast])
+        for index in range(
+            hdate_keys.size
+        ):
+            initialization_keys[index] = (
+                forecast_date_keys[index],
+                int(
+                    hdate_keys[index]
+                ),
+            )
+
+        valid_initialization = (
+            ~np.isnat(
+                forecast_date_keys
+            )
+            & (
+                hdate_keys
+                != -99999999
+            )
+        )
+
+    else:
+        raise ValueError(
+            "model_type must be 'forecast' or 'hindcast'."
+        )
+
+    valid = (
+        np.isfinite(
+            values
+        )
+        & (
+            model_types
+            == model_type
+        )
+        & valid_initialization
+        & (
+            members
+            >= 0
+        )
+    )
+
+    return (
+        values[valid],
+        initialization_keys[valid],
+        members[valid],
+    )
+
+
+def reconstruct_member_matrix(
+    values: np.ndarray,
+    initialization_keys: np.ndarray,
+    member_labels: np.ndarray,
+    model_type: str,
+) -> tuple[np.ndarray, list, np.ndarray]:
+    """Reconstruct an initialization-by-member matrix."""
+
+    if values.size == 0:
+        return (
+            np.empty(
+                (0, 0),
+                dtype="float64",
+            ),
+            [],
+            np.array([]),
+        )
+
+    unique_initializations = []
+    initialization_lookup = {}
+
+    for initialization in initialization_keys:
+
+        if initialization not in initialization_lookup:
+
+            initialization_lookup[
+                initialization
+            ] = len(
+                unique_initializations
+            )
+
+            unique_initializations.append(
+                initialization
+            )
+
+    unique_members = np.unique(
+        member_labels
+    )
+
+    expected_members = (
+        n_forecast_members
+        if model_type == "forecast"
+        else n_hindcast_members
+    )
+
+    if unique_members.size != expected_members:
+        raise ValueError(
+            f"{model_type.capitalize()} data contain "
+            f"{unique_members.size} unique ensemble-member labels, "
+            f"but {expected_members} were expected. "
+            f"Found labels: {unique_members.tolist()}"
+        )
+
+    member_lookup = {
+        member: index
+        for index, member
+        in enumerate(
+            unique_members
+        )
+    }
+
+    matrix = np.full(
+        (
+            len(
+                unique_initializations
+            ),
+            unique_members.size,
+        ),
+        np.nan,
+        dtype="float64",
+    )
+
+    for value, initialization, member in zip(
+        values,
+        initialization_keys,
+        member_labels,
+    ):
+
+        row = initialization_lookup[
+            initialization
+        ]
+
+        column = member_lookup[
+            member
+        ]
+
+        if np.isfinite(
+            matrix[
+                row,
+                column,
+            ]
+        ):
+            raise ValueError(
+                "Duplicate sample found for "
+                f"{model_type} initialization "
+                f"{initialization!r}, member {member!r}."
+            )
+
+        matrix[
+            row,
+            column,
+        ] = value
+
+    return (
+        matrix,
+        unique_initializations,
+        unique_members,
+    )
+
+
+def spearman_correlation(
+    x: np.ndarray,
+    y: np.ndarray,
+    minimum_valid_samples: int,
+) -> float:
+    """Calculate one pairwise Spearman rank correlation."""
+
+    valid = (
+        np.isfinite(
+            x
+        )
+        & np.isfinite(
+            y
+        )
+    )
+
+    number_of_valid_samples = int(
+        valid.sum()
+    )
+
+    if (
+        number_of_valid_samples
+        < minimum_valid_samples
+    ):
+        return np.nan
+
+    x_valid = x[valid]
+    y_valid = y[valid]
+
+    if (
+        np.all(
+            x_valid
+            == x_valid[0]
+        )
+        or np.all(
+            y_valid
+            == y_valid[0]
+        )
+    ):
+        return np.nan
+
+    x_ranks = rankdata(
+        x_valid,
+        method="average",
+    )
+
+    y_ranks = rankdata(
+        y_valid,
+        method="average",
+    )
+
+    return float(
+        np.corrcoef(
+            x_ranks,
+            y_ranks,
+        )[0, 1]
+    )
+
+
+def calculate_selected_month_correlations(
+    model_ds: xr.Dataset,
+    all_variable: str,
+    model_type: str,
+) -> np.ndarray:
+    """
+    Calculate all member-pair correlations for the selected month.
+    """
+
+    (
+        values,
+        initialization_keys,
+        member_labels,
+    ) = get_independence_month_samples(
+        model_ds=model_ds,
+        all_variable=all_variable,
+        model_type=model_type,
+    )
+
+    (
+        matrix,
+        _,
+        unique_members,
+    ) = reconstruct_member_matrix(
+        values=values,
+        initialization_keys=initialization_keys,
+        member_labels=member_labels,
+        model_type=model_type,
+    )
+
+    if matrix.size == 0:
+        return np.array(
+            [],
+            dtype="float64",
+        )
+
+    pair_indices = list(
+        combinations(
+            range(
+                unique_members.size
+            ),
+            2,
+        )
+    )
+
+    correlations = np.array(
+        [
+            spearman_correlation(
+                x=matrix[
+                    :,
+                    index_1,
+                ],
+                y=matrix[
+                    :,
+                    index_2,
+                ],
+                minimum_valid_samples=minimum_samples,
+            )
+            for index_1, index_2
+            in pair_indices
+        ],
+        dtype="float64",
+    )
+
+    return remove_missing_values(
+        correlations
+    )
+
+
+def calculate_independence_values(
+    model_ds: xr.Dataset,
+    all_variable: str,
+) -> np.ndarray:
+    """
+    Calculate and pool forecast/hindcast correlations for panel (a).
+    """
+
+    forecast = calculate_selected_month_correlations(
+        model_ds=model_ds,
+        all_variable=all_variable,
+        model_type="forecast",
+    )
+
+    hindcast = calculate_selected_month_correlations(
+        model_ds=model_ds,
+        all_variable=all_variable,
+        model_type="hindcast",
+    )
+
+    combined = np.concatenate(
+        [
+            forecast,
+            hindcast,
+        ]
+    )
 
     if combined.size == 0:
         raise ValueError(
-            f"No finite independence values found for "
-            f"{MONTH_LABELS[selected_month]}."
+            f"No finite independence correlations could be calculated "
+            f"for {MONTH_LABELS[selected_month]}."
         )
 
     return combined
@@ -718,12 +1145,15 @@ def load_model_and_reference_values(
     np.ndarray,
     np.ndarray,
     np.ndarray,
+    np.ndarray,
 ]:
     """
-    Load all-lead, Early, Late, ERA5, and SeNorge samples for one month.
+    Load all data needed for the six panels from the shared inputs.
 
-    The all-lead model sample is used by panels (b)-(e). The all-lead, Early,
-    and Late model samples are used by panel (f).
+    The same open S2S model dataset is used to:
+        - calculate independence correlations for panel (a);
+        - extract the all-lead sample for panels (b)-(e);
+        - extract Early and Late samples for panel (f).
     """
 
     for dataset_name, filename in (
@@ -745,6 +1175,11 @@ def load_model_and_reference_values(
         xr.open_dataset(era5_filename) as era5_ds,
         xr.open_dataset(senorge_filename) as senorge_ds,
     ):
+        independence_values = calculate_independence_values(
+            model_ds=model_ds,
+            all_variable=all_variable,
+        )
+
         model_all_values = get_model_values_for_selected_month(
             model_ds,
             all_variable,
@@ -773,6 +1208,7 @@ def load_model_and_reference_values(
         )
 
     return (
+        independence_values,
         model_all_values,
         model_early_values,
         model_late_values,
@@ -1684,10 +2120,9 @@ if __name__ == "__main__":
     senorge_variable = SENORGE_VARIABLE
     senorge_label = SENORGE_LABEL
 
-    (
-        independence_filename,
-        shared_model_filename,
-    ) = resolve_model_input_filenames()
+    shared_model_filename = (
+        resolve_model_input_filename()
+    )
 
     era5_filename = build_era5_filename()
     senorge_filename = build_senorge_filename()
@@ -1700,8 +2135,7 @@ if __name__ == "__main__":
     print()
     print("Input files")
     print("-----------")
-    print(f"Independence model: {independence_filename}")
-    print(f"Panels (b)-(f):     {shared_model_filename}")
+    print(f"S2S model (panels a-f): {shared_model_filename}")
     print(f"ERA5:               {era5_filename}")
     print(f"{senorge_label}:".ljust(20), senorge_filename)
 
@@ -1724,11 +2158,8 @@ if __name__ == "__main__":
     print(f"Early leads:    {early_variable}")
     print(f"Late leads:     {late_variable}")
 
-    independence_values = load_independence_values(
-        independence_filename
-    )
-
     (
+        independence_values,
         model_all_values,
         model_early_values,
         model_late_values,

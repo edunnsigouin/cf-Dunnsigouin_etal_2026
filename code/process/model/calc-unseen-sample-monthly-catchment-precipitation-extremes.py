@@ -84,9 +84,14 @@ Output structure
 The full sample retains all supporting information from the original
 distribution script.
 
-Each lead-bin variable contains only precipitation values. The lead-bin samples
-are stored compactly within each calendar month and do not duplicate
-date/member/source metadata.
+Each lead-bin variable contains only precipitation values, but it uses the
+SAME (month_of_year, index) positions as the full-window sample.
+
+Therefore, one index always refers to the same forecast/hindcast initialization,
+hindcast date, and ensemble member across the full-window and lead-bin
+variables. For each finite full-window maximum, exactly one lead-bin variable
+contains that same value at the same index and all other lead-bin variables
+contain NaN.
 
 For every calendar month:
 
@@ -128,7 +133,6 @@ variable = "tp24"
 x_days = 2
 catchment = "regine_drammen"
 
-#forecast_date_range = ["2020-01-02","2023-06-26"]
 forecast_date_range = ["2020-01-02","2022-12-29"]
 
 path_in_forecast = (
@@ -892,7 +896,8 @@ def initialize_extreme_store(
         max_value and all supporting metadata.
 
     Lead-bin samples:
-        precipitation values only.
+        precipitation values only, stored at the same index positions as the
+        corresponding full-window samples.
     """
 
     n_index = (
@@ -1113,6 +1118,12 @@ def add_store_metadata(
             "lead_bin_sampling": (
                 "complete-window maxima partitioned by ending lead day "
                 "of maximum"
+            ),
+
+            "lead_bin_indexing": (
+                "index aligned with complete-window sample; each lead-bin "
+                "value is stored at the same (month_of_year, index) as its "
+                "corresponding full-window maximum"
             ),
 
             "maximum_tie_handling": (
@@ -1365,9 +1376,9 @@ def get_free_indices(
     """
     Return the first available storage positions for one variable and month.
 
-    Full-window and lead-bin variables are allowed to have different numbers
-    of stored values, so free positions are found separately for each maximum
-    variable.
+    In the index-aligned storage scheme, this is used to allocate positions
+    for the full-window sample. Lead-bin values then reuse those exact indices
+    rather than allocating their own compact positions.
     """
 
     if n_values == 0:
@@ -1422,7 +1433,19 @@ def add_full_max_info_to_store(
     All samples from this initialization go into the same calendar month:
     the month containing the largest number of usable accumulated lead dates.
 
-    If month counts are tied, the first month is used.
+    Returns
+    -------
+    store : xr.Dataset
+        Updated output store.
+
+    index_values : np.ndarray
+        The exact output indices assigned to the valid full-window maxima.
+        These SAME indices must be used when storing the lead-bin values.
+
+    valid : np.ndarray of bool
+        Validity mask for the original flattened max_value array. This is
+        passed to the lead-bin storage function so that the lead information
+        stays aligned with the same samples.
     """
 
     month = int(
@@ -1431,85 +1454,70 @@ def add_full_max_info_to_store(
         ].values
     )
 
-
     max_value = (
         max_info["max_value"]
     )
 
-
-    max_values = (
+    max_values_all = (
         max_value
         .values
         .astype("float32")
         .ravel()
     )
 
-
-    dates = (
+    dates_all = (
         max_info["date_of_max"]
         .values
         .ravel()
     )
 
-
-    members = (
+    members_all = (
         get_member_labels(
             max_value
         )
     )
 
-
-    hdates = (
+    hdates_all = (
         get_hdate_labels(
             max_value
         )
     )
 
-
-    # Remove genuinely missing maxima from the stored full sample.
+    # This mask defines which flattened samples are actually stored.
     valid = np.isfinite(
-        max_values
+        max_values_all
     )
 
-
-    max_values = (
-        max_values[valid]
-    )
-
-    dates = (
-        dates[valid]
-    )
-
-    members = (
-        members[valid]
-    )
-
-    hdates = (
-        hdates[valid]
-    )
-
+    max_values = max_values_all[valid]
+    dates = dates_all[valid]
+    members = members_all[valid]
+    hdates = hdates_all[valid]
 
     n_values = (
         max_values.size
     )
 
-
     if n_values == 0:
-        return store
-
+        return (
+            store,
+            np.array(
+                [],
+                dtype="int32",
+            ),
+            valid,
+        )
 
     full_variable = (
         full_range_variable_name()
     )
 
-
+    # Allocate output indices ONCE for the full sample.
     index_values = get_free_indices(
         store=store,
         variable_name=full_variable,
         month=month,
         n_values=n_values,
     )
-
 
     store[full_variable].loc[
         dict(
@@ -1518,14 +1526,12 @@ def add_full_max_info_to_store(
         )
     ] = max_values
 
-
     store["date_of_max"].loc[
         dict(
             month_of_year=month,
             index=index_values,
         )
     ] = dates
-
 
     store["forecast_date"].loc[
         dict(
@@ -1536,14 +1542,12 @@ def add_full_max_info_to_store(
         forecast_date
     )
 
-
     store["hdate"].loc[
         dict(
             month_of_year=month,
             index=index_values,
         )
     ] = hdates
-
 
     store["ensemble_member"].loc[
         dict(
@@ -1552,14 +1556,12 @@ def add_full_max_info_to_store(
         )
     ] = members
 
-
     store["model_type"].loc[
         dict(
             month_of_year=month,
             index=index_values,
         )
     ] = model_type
-
 
     store["source_file"].loc[
         dict(
@@ -1568,8 +1570,11 @@ def add_full_max_info_to_store(
         )
     ] = source_file
 
-
-    return store
+    return (
+        store,
+        index_values,
+        valid,
+    )
 
 
 # =============================================================================
@@ -1580,18 +1585,22 @@ def add_lead_bin_values_to_store(
     store,
     max_info,
     lead_bins,
+    index_values,
+    valid,
 ):
     """
-    Partition the full-window maxima according to where each maximum occurred.
+    Partition the SAME full-window maxima by lead of maximum while preserving
+    the full-sample index.
 
-    No new maximum is calculated here.
-
-    For every sample:
-        1. take its already calculated full-window max_value;
+    For every valid full-window sample:
+        1. use the exact output index assigned to that full-window maximum;
         2. inspect lead_of_max;
-        3. copy max_value into exactly one lead-bin sample.
+        3. write the maximum into exactly one lead-bin variable at that SAME
+           index;
+        4. leave all other lead-bin variables as NaN at that index.
 
-    Lead-bin samples contain precipitation values only.
+    Consequently, (month_of_year, index) refers to the same unique sample in
+    the full-window variable, the split variables, and all metadata variables.
     """
 
     month = int(
@@ -1600,40 +1609,50 @@ def add_lead_bin_values_to_store(
         ].values
     )
 
-
-    max_values = (
+    max_values_all = (
         max_info["max_value"]
         .values
         .astype("float32")
         .ravel()
     )
 
-
-    max_leads = (
+    max_leads_all = (
         max_info["lead_of_max"]
         .values
         .astype("int16")
         .ravel()
     )
 
-
-    valid = (
-        np.isfinite(max_values)
-        & np.isfinite(max_leads)
-    )
-
-
+    # Apply exactly the same validity mask that was used when storing the
+    # full-window sample. This keeps values, leads, and output indices aligned.
     max_values = (
-        max_values[valid]
+        max_values_all[
+            valid
+        ]
     )
 
     max_leads = (
-        max_leads[valid]
+        max_leads_all[
+            valid
+        ]
     )
 
+    if max_values.size != index_values.size:
+        raise ValueError(
+            "The number of valid full-window maxima does not match the "
+            "number of output indices assigned to them."
+        )
+
+    if np.any(
+        ~np.isfinite(
+            max_leads
+        )
+    ):
+        raise ValueError(
+            "At least one stored full-window maximum has missing lead_of_max."
+        )
 
     number_assigned = 0
-
 
     for (
         lead_start,
@@ -1645,20 +1664,26 @@ def add_lead_bin_values_to_store(
             & (max_leads <= lead_end)
         )
 
-
+        # Crucially, subset BOTH the values and their already-assigned full
+        # sample indices with the same mask.
         bin_values = (
-            max_values[in_bin]
+            max_values[
+                in_bin
+            ]
         )
 
+        bin_indices = (
+            index_values[
+                in_bin
+            ]
+        )
 
         number_assigned += (
             bin_values.size
         )
 
-
         if bin_values.size == 0:
             continue
-
 
         variable_name = (
             lead_bin_variable_name(
@@ -1667,29 +1692,18 @@ def add_lead_bin_values_to_store(
             )
         )
 
-
-        index_values = get_free_indices(
-            store=store,
-            variable_name=variable_name,
-            month=month,
-            n_values=bin_values.size,
-        )
-
-
         store[variable_name].loc[
             dict(
                 month_of_year=month,
-                index=index_values,
+                index=bin_indices,
             )
         ] = bin_values
-
 
     if number_assigned != max_values.size:
         raise ValueError(
             "Not every valid full-window maximum was assigned to exactly "
             "one lead-time bin. Check the lead-bin definitions."
         )
-
 
     return store
 
@@ -1768,8 +1782,14 @@ def print_monthly_sample_counts(
     lead_bins,
 ):
     """
-    Print monthly sample counts and verify that the lead bins partition
-    the full sample.
+    Print monthly sample counts and verify the index-aligned partition.
+
+    Checks, for every month:
+        1. full count = sum of lead-bin counts;
+        2. every finite full value has exactly one finite lead-bin value at
+           the same index;
+        3. that lead-bin value equals the full-window maximum;
+        4. no lead-bin value exists where the full sample is NaN.
     """
 
     month_names = [
@@ -1787,11 +1807,9 @@ def print_monthly_sample_counts(
         "December",
     ]
 
-
     full_variable = (
         full_range_variable_name()
     )
-
 
     bin_variables = [
         lead_bin_variable_name(
@@ -1804,7 +1822,6 @@ def print_monthly_sample_counts(
         ) in lead_bins
     ]
 
-
     bin_labels = [
         f"{lead_start}-{lead_end}"
         for (
@@ -1813,15 +1830,13 @@ def print_monthly_sample_counts(
         ) in lead_bins
     ]
 
-
     print()
     print(
-        "Sample counts by calendar month"
+        "Sample counts and index-alignment checks by calendar month"
     )
     print(
-        "-------------------------------"
+        "---------------------------------------------------------"
     )
-
 
     header = (
         f"{'Month':<12}"
@@ -1835,69 +1850,150 @@ def print_monthly_sample_counts(
 
     header += (
         f"{'bins_sum':>12}"
-        f"{'check':>10}"
+        f"{'check':>12}"
     )
 
-
-    print(header)
     print(
-        "-" * len(header)
+        header
     )
-
+    print(
+        "-" * len(
+            header
+        )
+    )
 
     all_months_ok = True
-
 
     for month, month_name in enumerate(
         month_names,
         start=1,
     ):
 
-        full_count = int(
+        full_values = (
+            store[
+                full_variable
+            ]
+            .sel(
+                month_of_year=month
+            )
+            .values
+        )
+
+        full_finite = (
             np.isfinite(
-                store[full_variable]
+                full_values
+            )
+        )
+
+        full_count = int(
+            full_finite.sum()
+        )
+
+        bin_values = [
+            (
+                store[
+                    variable_name
+                ]
                 .sel(
                     month_of_year=month
                 )
                 .values
-            ).sum()
-        )
+            )
+            for variable_name
+            in bin_variables
+        ]
 
-
-        bin_counts = []
-
-        for variable_name in bin_variables:
-
-            count = int(
+        bin_counts = [
+            int(
                 np.isfinite(
-                    store[variable_name]
-                    .sel(
-                        month_of_year=month
-                    )
-                    .values
+                    values
                 ).sum()
             )
-
-            bin_counts.append(
-                count
-            )
-
+            for values
+            in bin_values
+        ]
 
         bins_sum = sum(
             bin_counts
         )
 
+        finite_bin_count = np.zeros(
+            full_values.shape,
+            dtype="int16",
+        )
+
+        reconstructed = np.full(
+            full_values.shape,
+            np.nan,
+            dtype="float32",
+        )
+
+        for values in bin_values:
+
+            finite = (
+                np.isfinite(
+                    values
+                )
+            )
+
+            finite_bin_count += (
+                finite.astype(
+                    "int16"
+                )
+            )
+
+            reconstructed[
+                finite
+            ] = values[
+                finite
+            ]
+
+        partition_ok = bool(
+            np.all(
+                finite_bin_count[
+                    full_finite
+                ] == 1
+            )
+            and np.all(
+                finite_bin_count[
+                    ~full_finite
+                ] == 0
+            )
+        )
+
+        values_ok = bool(
+            np.allclose(
+                reconstructed[
+                    full_finite
+                ],
+                full_values[
+                    full_finite
+                ],
+                rtol=0.0,
+                atol=0.0,
+                equal_nan=True,
+            )
+        )
+
+        count_ok = (
+            bins_sum
+            == full_count
+        )
+
+        month_ok = (
+            count_ok
+            and partition_ok
+            and values_ok
+        )
 
         check = (
             "OK"
-            if bins_sum == full_count
+            if month_ok
             else "FAIL"
         )
 
-
-        if check == "FAIL":
+        if not month_ok:
             all_months_ok = False
-
 
         row = (
             f"{month_name:<12}"
@@ -1911,85 +2007,41 @@ def print_monthly_sample_counts(
 
         row += (
             f"{bins_sum:>12}"
-            f"{check:>10}"
+            f"{check:>12}"
         )
-
-
-        print(row)
-
-
-    print(
-        "-" * len(header)
-    )
-
-
-    full_total = int(
-        np.isfinite(
-            store[full_variable]
-            .values
-        ).sum()
-    )
-
-
-    bin_totals = [
-        int(
-            np.isfinite(
-                store[variable_name]
-                .values
-            ).sum()
-        )
-        for variable_name
-        in bin_variables
-    ]
-
-
-    bins_total = sum(
-        bin_totals
-    )
-
-
-    total_check = (
-        "OK"
-        if bins_total == full_total
-        else "FAIL"
-    )
-
-
-    total_row = (
-        f"{'TOTAL':<12}"
-        f"{full_total:>10}"
-    )
-
-    for count in bin_totals:
-        total_row += (
-            f"{count:>12}"
-        )
-
-    total_row += (
-        f"{bins_total:>12}"
-        f"{total_check:>10}"
-    )
-
-
-    print(total_row)
-    print()
-
-
-    if (
-        all_months_ok
-        and total_check == "OK"
-    ):
 
         print(
-            "Partition check passed: for every month, "
-            "full count = sum of lead-bin counts."
+            row
+        )
+
+    print(
+        "-" * len(
+            header
+        )
+    )
+
+    if all_months_ok:
+
+        print()
+        print(
+            "Index-alignment check passed:"
+        )
+        print(
+            "  - every finite full-window maximum appears in exactly one "
+            "lead-bin variable;"
+        )
+        print(
+            "  - it appears at the SAME (month_of_year, index);"
+        )
+        print(
+            "  - the split value exactly equals the full-window value."
         )
 
     else:
 
-        print(
-            "WARNING: at least one month failed the "
-            "lead-bin partition check."
+        raise ValueError(
+            "At least one month failed the index-aligned lead-bin "
+            "partition check."
         )
 
 
@@ -2221,23 +2273,28 @@ if __name__ == "__main__":
         # Store full forecast sample and metadata.
         # ---------------------------------------------------------
 
-        extreme_store = (
-            add_full_max_info_to_store(
-                store=extreme_store,
-                max_info=forecast_max_info,
-                forecast_date=date,
-                source_file=forecast_filename,
-                model_type="forecast",
-            )
+        (
+            extreme_store,
+            forecast_index_values,
+            forecast_valid,
+        ) = add_full_max_info_to_store(
+            store=extreme_store,
+            max_info=forecast_max_info,
+            forecast_date=date,
+            source_file=forecast_filename,
+            model_type="forecast",
         )
 
 
-        # Split those SAME forecast maxima by lead of maximum.
+        # Split those SAME forecast maxima by lead of maximum, using the
+        # exact same output indices as the full-window sample.
         extreme_store = (
             add_lead_bin_values_to_store(
                 store=extreme_store,
                 max_info=forecast_max_info,
                 lead_bins=lead_bins,
+                index_values=forecast_index_values,
+                valid=forecast_valid,
             )
         )
 
@@ -2246,23 +2303,28 @@ if __name__ == "__main__":
         # Store full hindcast sample and metadata.
         # ---------------------------------------------------------
 
-        extreme_store = (
-            add_full_max_info_to_store(
-                store=extreme_store,
-                max_info=hindcast_max_info,
-                forecast_date=date,
-                source_file=hindcast_filename,
-                model_type="hindcast",
-            )
+        (
+            extreme_store,
+            hindcast_index_values,
+            hindcast_valid,
+        ) = add_full_max_info_to_store(
+            store=extreme_store,
+            max_info=hindcast_max_info,
+            forecast_date=date,
+            source_file=hindcast_filename,
+            model_type="hindcast",
         )
 
 
-        # Split those SAME hindcast maxima by lead of maximum.
+        # Split those SAME hindcast maxima by lead of maximum, using the
+        # exact same output indices as the full-window sample.
         extreme_store = (
             add_lead_bin_values_to_store(
                 store=extreme_store,
                 max_info=hindcast_max_info,
                 lead_bins=lead_bins,
+                index_values=hindcast_index_values,
+                valid=hindcast_valid,
             )
         )
 

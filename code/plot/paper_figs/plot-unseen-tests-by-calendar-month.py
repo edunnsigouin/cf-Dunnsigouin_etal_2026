@@ -10,9 +10,14 @@ Inputs
 ------
 The script reads four NetCDF files:
     - a precomputed Spearman-correlation file for panel (a);
-    - one S2S monthly extreme-sample file for panels (b)-(f);
+    - one S2S monthly extreme-sample file for panels (b)-(f), which can be
+      either the original or multiplicatively bias-corrected model sample;
     - ERA5 monthly extremes;
     - SeNorge monthly extremes.
+
+Panel (a) always uses the original precomputed independence file. The
+``USE_BIAS_CORRECTED_MODEL`` and ``BIAS_CORRECTION_REFERENCE`` settings affect
+only panels (b)-(f).
 
 For the default settings
     first_input_lead = 16
@@ -118,7 +123,7 @@ from Dunnsigouin_etal_2026 import config
 # =============================================================================
 
 # Calendar month to plot: 1=January, ..., 12=December.
-selected_month = 11
+selected_month = 5
 
 # Accumulation period.
 x_days = 2
@@ -128,7 +133,7 @@ catchment = "regine_drammen"
 
 forecast_date_range = (
     "2020-01-02",
-    "2023-06-26",
+    "2022-12-29",
 )
 
 reference_years = (
@@ -138,18 +143,26 @@ reference_years = (
 
 era5_grid = "0.5x0.5"
 
-# Optional full-path override for the independence file used by panel (a).
-# Leave as None to construct the standard filename automatically.
-independence_filename_override = None
-
 # Lead-location sampling used by panels (b)-(f).
 first_input_lead = 16
 last_input_lead = 46
 number_of_lead_bins = 2
 
-# Optional full-path override for the monthly extreme-sample model file.
-# Leave as None to construct the filename automatically.
-stability_model_filename_override = None
+# Choose whether panels (b)-(f) use the original or bias-corrected S2S sample.
+#
+# False -> original model sample
+# True  -> bias-corrected model sample created by the bias-correction script
+#
+# Panel (a) always continues to use the original independence file.
+USE_BIAS_CORRECTED_MODEL = True
+
+# Reference dataset used for the bias correction.
+# Only used when USE_BIAS_CORRECTED_MODEL = True.
+#
+# Options:
+#     "era5"
+#     "senorge"
+BIAS_CORRECTION_REFERENCE = "senorge"
 
 # Bootstrap settings.
 number_of_bootstrap_samples = 10000
@@ -341,6 +354,20 @@ def validate_user_settings() -> None:
         )
 
 
+    if USE_BIAS_CORRECTED_MODEL:
+        valid_references = {
+            "era5",
+            "senorge",
+        }
+
+        if BIAS_CORRECTION_REFERENCE not in valid_references:
+            raise ValueError(
+                f"BIAS_CORRECTION_REFERENCE must be one of "
+                f"{sorted(valid_references)}. "
+                f"Got '{BIAS_CORRECTION_REFERENCE}'."
+            )
+
+
 # =============================================================================
 # Filename helpers
 # =============================================================================
@@ -416,6 +443,13 @@ def get_stability_variable_names() -> tuple[str, str, str]:
     early_variable = f"max_value_lead{early_range[0]}_{early_range[1]}"
     late_variable = f"max_value_lead{late_range[0]}_{late_range[1]}"
 
+    if USE_BIAS_CORRECTED_MODEL:
+        suffix = f"_bc_{BIAS_CORRECTION_REFERENCE}"
+
+        all_variable += suffix
+        early_variable += suffix
+        late_variable += suffix
+
     return all_variable, early_variable, late_variable
 
 
@@ -441,7 +475,7 @@ def build_stability_model_filename() -> str:
         f"{late_range[0]}-{late_range[1]}"
     )
 
-    return os.path.join(
+    filename = os.path.join(
         config.dirs["s2s_processed"],
         (
             f"unseen_sample_monthly_catchment_precipitation_extremes_"
@@ -454,21 +488,23 @@ def build_stability_model_filename() -> str:
         ),
     )
 
+    if USE_BIAS_CORRECTED_MODEL:
+        stem, extension = os.path.splitext(filename)
+
+        filename = (
+            f"{stem}_bc_"
+            f"{BIAS_CORRECTION_REFERENCE}"
+            f"{extension}"
+        )
+
+    return filename
+
 
 def resolve_model_input_filenames() -> tuple[str, str]:
-    """Return the independence file and shared S2S extreme-sample file."""
+    """Construct the independence and shared S2S extreme-sample filenames."""
 
-    independence_filename = (
-        independence_filename_override
-        if independence_filename_override is not None
-        else build_independence_filename()
-    )
-
-    shared_model_filename = (
-        stability_model_filename_override
-        if stability_model_filename_override is not None
-        else build_stability_model_filename()
-    )
+    independence_filename = build_independence_filename()
+    shared_model_filename = build_stability_model_filename()
 
     return independence_filename, shared_model_filename
 
@@ -498,10 +534,18 @@ def build_output_filename() -> str:
 
     month_name = MONTH_LABELS[selected_month].lower()
 
+    if USE_BIAS_CORRECTED_MODEL:
+        model_label = (
+            f"bc_{BIAS_CORRECTION_REFERENCE}"
+        )
+    else:
+        model_label = "raw"
+
     return os.path.join(
         config.dirs["fig"],
         (
-            f"UNSEEN_independence_fidelity_stability_tests_{month_name}_{x_days}dayacc_{catchment}.png"
+            f"UNSEEN_independence_fidelity_stability_tests_"
+            f"{month_name}_{x_days}dayacc_{catchment}_{model_label}.png"
         ),
     )
 
@@ -1643,6 +1687,25 @@ if __name__ == "__main__":
     print(f"Panels (b)-(f):     {shared_model_filename}")
     print(f"ERA5:               {era5_filename}")
     print(f"{senorge_label}:".ljust(20), senorge_filename)
+
+    print()
+    print("Model data for panels (b)-(f)")
+    print("-----------------------------")
+    print(f"Bias corrected: {USE_BIAS_CORRECTED_MODEL}")
+
+    if USE_BIAS_CORRECTED_MODEL:
+        print(
+            f"BC reference:   "
+            f"{BIAS_CORRECTION_REFERENCE}"
+        )
+
+    all_variable, early_variable, late_variable = (
+        get_stability_variable_names()
+    )
+
+    print(f"All leads:      {all_variable}")
+    print(f"Early leads:    {early_variable}")
+    print(f"Late leads:     {late_variable}")
 
     independence_values = load_independence_values(
         independence_filename

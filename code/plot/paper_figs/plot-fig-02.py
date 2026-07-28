@@ -115,7 +115,7 @@ model_sampling_group = "full"
 #
 # False -> original model sample
 # True  -> bias-corrected model sample created by the bias-correction script
-USE_BIAS_CORRECTED_MODEL = True
+USE_BIAS_CORRECTED_MODEL = False
 
 # Reference dataset used for the bias correction.
 # Only used when USE_BIAS_CORRECTED_MODEL = True.
