@@ -131,9 +131,9 @@ from Dunnsigouin_etal_2026 import config
 
 variable = "tp24"
 x_days = 2
-catchment = "regine_drammen"
+catchment = "regine_glomma"
 
-forecast_date_range = ["2020-01-02","2022-12-29"]
+forecast_date_range = ["2020-01-02","2023-06-26"]
 
 path_in_forecast = (
     config.dirs["s2s_forecast_daily"]

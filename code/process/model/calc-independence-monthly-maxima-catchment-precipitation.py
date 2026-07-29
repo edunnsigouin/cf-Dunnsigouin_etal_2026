@@ -29,6 +29,10 @@ Hindcasts
 Only the complete-window maximum variable is used. Lead-bin subsamples such as
 max_value_lead17_31 and max_value_lead32_46 are intentionally ignored.
 
+The complete-window input can be either the original sample or the
+bias-corrected sample produced by the bias-correction script. This is selected
+with USE_BIAS_CORRECTED_MODEL and BIAS_CORRECTION_REFERENCE.
+
 For example, with:
     first_input_lead = 16
     last_input_lead = 46
@@ -84,6 +88,20 @@ last_input_lead = 46
 # monthly-extreme sample-building script.
 number_of_lead_bins = 2
 
+# Choose whether to use the original or bias-corrected all-lead sample.
+#
+# False -> original all-lead sample
+# True  -> bias-corrected all-lead sample
+USE_BIAS_CORRECTED_MODEL = True
+
+# Reference dataset used to create the bias-corrected sample.
+# Only used when USE_BIAS_CORRECTED_MODEL = True.
+#
+# Options:
+#     "era5"
+#     "senorge"
+BIAS_CORRECTION_REFERENCE = "senorge"
+
 # Minimum number of paired initialization values required for a correlation.
 minimum_samples = 10
 
@@ -92,7 +110,7 @@ minimum_samples = 10
 n_forecast_members = 51
 n_hindcast_members = 11
 
-write_to_file = True
+write_to_file = False
 
 path_in = config.dirs["s2s_processed"]
 path_out = config.dirs["s2s_processed"]
@@ -144,6 +162,15 @@ def validate_user_settings():
         raise ValueError(
             "minimum_samples must be at least 3."
         )
+
+    if USE_BIAS_CORRECTED_MODEL:
+        valid_references = {"era5", "senorge"}
+
+        if BIAS_CORRECTION_REFERENCE not in valid_references:
+            raise ValueError(
+                f"BIAS_CORRECTION_REFERENCE must be one of "
+                f"{sorted(valid_references)}."
+            )
 
 
 def split_usable_accumulated_leads(
@@ -216,6 +243,17 @@ def full_range_variable_name():
     )
 
 
+def input_full_range_variable_name():
+    """Return the raw or bias-corrected all-lead variable name."""
+
+    name = full_range_variable_name()
+
+    if USE_BIAS_CORRECTED_MODEL:
+        name = f"{name}_bc_{BIAS_CORRECTION_REFERENCE}"
+
+    return name
+
+
 # =============================================================================
 # Filenames
 # =============================================================================
@@ -244,8 +282,13 @@ def make_input_filename():
         f"lead{first_usable_lead}-{last_input_lead}_"
         f"split{number_of_lead_bins}_{lead_bin_text}_"
         f"forecast_hindcast_"
-        f"{forecast_date_range[0]}_{forecast_date_range[1]}.nc"
+        f"{forecast_date_range[0]}_{forecast_date_range[1]}"
     )
+
+    if USE_BIAS_CORRECTED_MODEL:
+        filename += f"_bc_{BIAS_CORRECTION_REFERENCE}"
+
+    filename += ".nc"
 
     return os.path.join(
         path_in,
@@ -265,8 +308,13 @@ def make_output_filename():
         f"{x_days}dayacc_"
         f"nve_catchment_{catchment}_"
         f"lead{first_usable_lead}-{last_input_lead}_"
-        f"{forecast_date_range[0]}_{forecast_date_range[1]}.nc"
+        f"{forecast_date_range[0]}_{forecast_date_range[1]}"
     )
+
+    if USE_BIAS_CORRECTED_MODEL:
+        filename += f"_bc_{BIAS_CORRECTION_REFERENCE}"
+
+    filename += ".nc"
 
     return os.path.join(
         path_out,
@@ -281,7 +329,7 @@ def make_output_filename():
 def load_extreme_sample(filename):
     """Open and load the variables needed for the independence calculation."""
 
-    full_variable = full_range_variable_name()
+    full_variable = input_full_range_variable_name()
 
     required_variables = [
         full_variable,
@@ -466,7 +514,7 @@ def get_month_samples(
     member_labels : numpy.ndarray
     """
 
-    full_variable = full_range_variable_name()
+    full_variable = input_full_range_variable_name()
 
     values = (
         dataset[full_variable]
@@ -1005,7 +1053,7 @@ def add_output_metadata(dataset):
     """Add descriptions and global metadata."""
 
     full_variable = (
-        full_range_variable_name()
+        input_full_range_variable_name()
     )
 
     dataset[
@@ -1089,6 +1137,14 @@ def add_output_metadata(dataset):
         ),
         "minimum_samples": int(
             minimum_samples
+        ),
+        "bias_corrected_input": str(
+            USE_BIAS_CORRECTED_MODEL
+        ),
+        "bias_correction_reference": (
+            BIAS_CORRECTION_REFERENCE
+            if USE_BIAS_CORRECTED_MODEL
+            else "none"
         ),
         "input_processing": (
             "Uses precomputed complete-window maxima and metadata; "
@@ -1185,8 +1241,19 @@ if __name__ == "__main__":
 
     print(
         f"Maximum variable:       "
-        f"{full_range_variable_name()}"
+        f"{input_full_range_variable_name()}"
     )
+
+    print(
+        f"Bias-corrected input:   "
+        f"{USE_BIAS_CORRECTED_MODEL}"
+    )
+
+    if USE_BIAS_CORRECTED_MODEL:
+        print(
+            f"BC reference:           "
+            f"{BIAS_CORRECTION_REFERENCE}"
+        )
 
     print(
         f"Maximum ending leads:   "

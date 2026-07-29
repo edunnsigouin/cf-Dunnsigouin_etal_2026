@@ -137,15 +137,9 @@ x_days = 2
 # Catchment used consistently for all input datasets and figure labels.
 catchment = "regine_drammen"
 
-forecast_date_range = (
-    "2020-01-02",
-    "2022-12-29",
-)
+forecast_date_range = ("2020-01-02","2022-12-29")
 
-reference_years = (
-    "1957",
-    "2022",
-)
+reference_years = ("1957","2022")
 
 era5_grid = "0.5x0.5"
 
@@ -161,7 +155,7 @@ number_of_lead_bins = 2
 # Options:
 #     "era5"
 #     "senorge"
-REFERENCE_DATASET = "senorge"
+REFERENCE_DATASET = "era5"
 
 # Independence-test settings.
 # Minimum number of paired initialization values required for one
@@ -243,12 +237,21 @@ STATISTIC_LABELS = {
     "kurtosis": "Kurtosis",
 }
 
+#STATISTIC_AXIS_LABELS = {
+#    "mean": "Mean precipitation [mm]",
+#    "std": "Precipitation standard deviation [mm]",
+#    "skewness": "Precipitation skewness",
+#    "kurtosis": "Precipitation excess kurtosis",
+#}
+
 STATISTIC_AXIS_LABELS = {
-    "mean": "Mean precipitation [mm]",
-    "std": "Precipitation standard deviation [mm]",
-    "skewness": "Precipitation skewness",
-    "kurtosis": "Precipitation excess kurtosis",
+    "mean": f"Maximum monthly {x_days}-day precipitation [mm]",
+    "std": f"Maximum monthly {x_days}-day precipitation [mm]",
+    "skewness": "unitless",
+    "kurtosis": "unitless",
 }
+
+
 
 # Raw and bias-corrected bootstrap distributions in panels (b)-(e).
 # Semi-transparent filled histograms make their overlap visually apparent,
@@ -1712,44 +1715,38 @@ def add_failure_text(
     ax: plt.Axes,
     result: dict[str, object],
 ) -> None:
-    """Annotate only failed raw/BC fidelity checks."""
+    """
+    Mark failure of the RAW model fidelity test.
 
-    failure_lines = []
+    If the selected reference statistic falls outside the raw-model
+    bootstrap confidence interval, show:
 
-    if not result["raw_passes"]:
-        failure_lines.append(
-            (
-                "Raw fail",
-                RAW_MODEL_COLOR,
-            )
-        )
+        Model
+        raw
+        fail
 
-    if not result["bc_passes"]:
-        failure_lines.append(
-            (
-                "BC fail",
-                BIAS_CORRECTED_COLOR,
-            )
-        )
+    in the selected reference-dataset color.
+    """
 
-    for index, (
-        label,
-        color,
-    ) in enumerate(
-        failure_lines
-    ):
-        ax.text(
-            0.97,
-            0.96
-            - index
-            * 0.08,
-            label,
-            transform=ax.transAxes,
-            ha="right",
-            va="top",
-            fontsize=LEGEND_FONTSIZE,
-            color=color,
-        )
+    if result["raw_passes"]:
+        return
+
+    reference_color = (
+        ERA5_COLOR
+        if REFERENCE_DATASET == "era5"
+        else SENORGE_COLOR
+    )
+
+    ax.text(
+        0.97,
+        0.96,
+        "Model\nraw\nfail",
+        transform=ax.transAxes,
+        ha="center",
+        va="top",
+        fontsize=LEGEND_FONTSIZE,
+        color=reference_color,
+    )
 
 
 def plot_moment_panel(
@@ -1900,10 +1897,10 @@ def plot_moment_panel(
         ax
     )
 
-    #add_failure_text(
-    #    ax,
-    #    result,
-    #)
+    add_failure_text(
+        ax,
+        result,
+    )
 
 
 def make_shared_legend_handles(
@@ -2074,7 +2071,7 @@ def plot_stability_panel(
         )
 
     ax.set_xlabel(
-        "Precipitation [mm]",
+        f"Maximum monthly {x_days}-day precipitation [mm]",
         fontsize=AXIS_LABELSIZE,
     )
 
@@ -2089,23 +2086,61 @@ def plot_stability_panel(
         fontweight="normal",
     )
 
-    annotation = (
-        f"Early n={bc_early_values.size}\n"
-        f"Late n={bc_late_values.size}\n"
-        f"Model raw: D={raw_stability_ks['statistic']:.3f}, "
-        f"p={format_ks_p_value(raw_stability_ks['p_value'])}\n"
-        f"Model BC:   D={bc_stability_ks['statistic']:.3f}, "
-        f"p={format_ks_p_value(bc_stability_ks['p_value'])}"
+    reference_color = (
+        ERA5_COLOR
+        if REFERENCE_DATASET == "era5"
+        else SENORGE_COLOR
     )
 
+    raw_text_color = (
+        reference_color
+        if raw_stability_ks["p_value"] < 0.05
+        else "black"
+    )
+
+    # Sample sizes remain black.
     ax.text(
-        0.97,
-        0.96,
-        annotation,
+        0.4,
+        0.95,
+        (
+            f"Early n={bc_early_values.size}\n"
+            f"Late n={bc_late_values.size}"
+        ),
         transform=ax.transAxes,
-        ha="right",
+        ha="left",
         va="top",
-        fontsize=8.5,
+        fontsize=9,
+        color="black",
+    )
+
+    # Raw stability result is colored like the reference dataset when p < 0.05.
+    ax.text(
+        0.4,
+        0.82,
+        (
+            f"Model raw: D={raw_stability_ks['statistic']:.3f}, "
+            f"p={format_ks_p_value(raw_stability_ks['p_value'])}"
+        ),
+        transform=ax.transAxes,
+        ha="left",
+        va="top",
+        fontsize=9,
+        color=raw_text_color,
+    )
+
+    # Bias-corrected stability result remains black.
+    ax.text(
+        0.4,
+        0.75,
+        (
+            f"Model BC: D={bc_stability_ks['statistic']:.3f}, "
+            f"p={format_ks_p_value(bc_stability_ks['p_value'])}"
+        ),
+        transform=ax.transAxes,
+        ha="left",
+        va="top",
+        fontsize=9,
+        color="black",
     )
 
     format_axis(

@@ -41,7 +41,7 @@ from Dunnsigouin_etal_2026 import config
 # User settings
 # =============================================================================
 
-catchment = "regine_drammen"
+catchment = "regine_glomma"
 x_days = 2
 
 forecast_date_range = [
@@ -62,7 +62,7 @@ last_input_lead = 46
 number_of_lead_bins = 2
 
 # Choose ONE reference dataset at a time: "era5" or "senorge".
-REFERENCE_DATASET = "senorge"
+REFERENCE_DATASET = "era5"
 
 # If True, exclude 2023 when calculating the reference monthly means.
 # This is useful for excluding Storm Hans from the ERA5/SeNorge reference
