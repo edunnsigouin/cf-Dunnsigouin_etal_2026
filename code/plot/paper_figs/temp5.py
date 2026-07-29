@@ -1,0 +1,2366 @@
+"""
+Plot observational, raw-UNSEEN, and bias-corrected-UNSEEN return-period
+curves for one calendar month.
+
+The observational reference dataset can be either SeNorge or ERA5.
+
+The raw UNSEEN model sample is read from the monthly extreme-sample file
+produced by the lead-bin sample-building script.
+
+The bias-corrected UNSEEN sample is read from the corresponding bias-corrected
+file. The bias-correction reference is ALWAYS the same dataset selected with
+REFERENCE_DATASET:
+
+    REFERENCE_DATASET = "senorge"
+        -> observations use SeNorge
+        -> bias-corrected UNSEEN is corrected to SeNorge
+
+    REFERENCE_DATASET = "era5"
+        -> observations use ERA5
+        -> bias-corrected UNSEEN is corrected to ERA5
+
+For observations, raw UNSEEN, and bias-corrected UNSEEN, this script:
+
+1. Selects the chosen calendar month.
+2. Fits the same selected stationary extreme-value distribution by maximum
+   likelihood.
+3. Calculates the fitted return-level curve.
+4. Estimates a confidence interval with the same parametric-bootstrap method.
+5. Calculates empirical return periods with the same Weibull plotting
+   position and plots them as points.
+6. Prints the fitted parameters, log-likelihood, and AIC.
+
+All three confidence intervals are drawn with transparent shading. Where the
+bands overlap, the colors naturally combine into darker regions.
+
+Storm Hans is always taken from the August 2023 observational maximum and can
+optionally be plotted as a horizontal line, regardless of SELECTED_MONTH.
+
+Important
+---------
+SciPy's ``genextreme`` shape parameter ``c`` has the opposite sign from the
+conventional GEV shape parameter xi:
+
+    xi = -c
+"""
+
+# =============================================================================
+# Imports
+# =============================================================================
+
+import os
+
+import matplotlib.pyplot as plt
+import numpy as np
+import xarray as xr
+from scipy.optimize import minimize
+from scipy.stats import genextreme, gumbel_r
+
+from Dunnsigouin_etal_2026 import config
+
+
+# =============================================================================
+# User-defined input parameters
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Observational reference dataset
+# -----------------------------------------------------------------------------
+
+# Options:
+#     "senorge"
+#     "era5"
+REFERENCE_DATASET = "senorge"
+
+CATCHMENT = "regine_drammen"
+X_DAYS = 2
+
+OBSERVATION_YEARS = [
+    "1957",
+    "2023",
+]
+
+# If True, 2023 is read but excluded from the fitted observational sample.
+EXCLUDE_2023_FROM_FIT = True
+
+SENORGE_VARIABLE = "rr"
+SENORGE_LABEL = "SeNorge"
+
+ERA5_VARIABLE = "tp24"
+ERA5_LABEL = "ERA5"
+ERA5_GRID = "0.5x0.5"
+
+
+# -----------------------------------------------------------------------------
+# UNSEEN model sample
+# -----------------------------------------------------------------------------
+
+MODEL_VARIABLE = "tp24"
+
+FORECAST_DATE_RANGE = [
+    "2020-01-02",
+    "2022-12-29",
+]
+
+# Daily input lead range used when building the UNSEEN sample.
+FIRST_INPUT_LEAD = 16
+LAST_INPUT_LEAD = 46
+
+# Must match the value used by the UNSEEN sample-building script.
+NUMBER_OF_LEAD_BINS = 2
+
+# Options:
+#     "full"
+#     "split1"
+#     "split2"
+#     ...
+MODEL_SAMPLING_GROUP = "full"
+
+# Plot the bias-corrected UNSEEN sample as the third distribution.
+PLOT_BIAS_CORRECTED_UNSEEN = True
+
+
+# -----------------------------------------------------------------------------
+# Extreme-value distribution
+# -----------------------------------------------------------------------------
+
+# Options:
+#     1 -> GEV
+#     2 -> Gumbel
+#     3 -> GenEx (two-parameter Generalized Exponential)
+EXTREME_VALUE_DISTRIBUTION = 2
+
+
+# -----------------------------------------------------------------------------
+# Calendar month
+# -----------------------------------------------------------------------------
+
+# 1 = January, ..., 8 = August, ..., 12 = December.
+SELECTED_MONTH = 8
+
+MONTH_NAMES = [
+    "January",
+    "February",
+    "March",
+    "April",
+    "May",
+    "June",
+    "July",
+    "August",
+    "September",
+    "October",
+    "November",
+    "December",
+]
+
+
+# -----------------------------------------------------------------------------
+# Storm Hans
+# -----------------------------------------------------------------------------
+
+STORM_HANS_DATE = "2023-08-08"
+PLOT_STORM_HANS = True
+
+
+# -----------------------------------------------------------------------------
+# Return-period and bootstrap settings
+# -----------------------------------------------------------------------------
+
+MIN_RETURN_PERIOD = 1.01
+MAX_RETURN_PERIOD = 100000.0
+NUMBER_OF_RETURN_PERIODS = 500
+
+# Use a smaller value while testing and a larger value for the final figure.
+NUMBER_OF_BOOTSTRAPS = 100
+CONFIDENCE_LEVEL = 0.95
+RANDOM_SEED = 42
+
+
+# -----------------------------------------------------------------------------
+# Plot settings
+# -----------------------------------------------------------------------------
+
+FIG_WIDTH_IN = 7.2
+FIG_HEIGHT_IN = 4.8
+
+TITLE_FONTSIZE = 11
+AXIS_LABELSIZE = 11
+TICK_LABELSIZE = 10
+LEGEND_FONTSIZE = 8
+
+OBSERVATION_COLOR = "tab:blue"
+RAW_UNSEEN_COLOR = "tab:orange"
+BIAS_CORRECTED_UNSEEN_COLOR = "tab:green"
+
+# Transparent intervals become darker where they overlap.
+CONFIDENCE_ALPHA = 0.18
+
+YMIN = 0.0
+YMAX = None
+
+WRITE_TO_FILE = False
+
+
+# =============================================================================
+# Validation and labels
+# =============================================================================
+
+def validate_user_settings():
+    """Check user-defined settings before doing any calculations."""
+
+    if REFERENCE_DATASET not in {
+        "senorge",
+        "era5",
+    }:
+        raise ValueError(
+            "REFERENCE_DATASET must be 'senorge' or 'era5'."
+        )
+
+    if EXTREME_VALUE_DISTRIBUTION not in {
+        1,
+        2,
+        3,
+    }:
+        raise ValueError(
+            "EXTREME_VALUE_DISTRIBUTION must be 1, 2, or 3."
+        )
+
+    if SELECTED_MONTH not in range(1, 13):
+        raise ValueError(
+            "SELECTED_MONTH must be an integer from 1 to 12."
+        )
+
+    if X_DAYS < 1:
+        raise ValueError(
+            "X_DAYS must be at least 1."
+        )
+
+    if FIRST_INPUT_LEAD > LAST_INPUT_LEAD:
+        raise ValueError(
+            "FIRST_INPUT_LEAD must not exceed LAST_INPUT_LEAD."
+        )
+
+    first_usable_lead = (
+        FIRST_INPUT_LEAD
+        + X_DAYS
+        - 1
+    )
+
+    if first_usable_lead > LAST_INPUT_LEAD:
+        raise ValueError(
+            "X_DAYS is too large for the requested input lead window."
+        )
+
+    number_of_usable_leads = (
+        LAST_INPUT_LEAD
+        - first_usable_lead
+        + 1
+    )
+
+    if not isinstance(
+        NUMBER_OF_LEAD_BINS,
+        int,
+    ):
+        raise TypeError(
+            "NUMBER_OF_LEAD_BINS must be an integer."
+        )
+
+    if (
+        NUMBER_OF_LEAD_BINS < 1
+        or NUMBER_OF_LEAD_BINS > number_of_usable_leads
+    ):
+        raise ValueError(
+            "NUMBER_OF_LEAD_BINS must be between 1 and the number "
+            "of usable accumulated leads."
+        )
+
+    valid_groups = {
+        "full",
+    }
+
+    valid_groups.update(
+        {
+            f"split{bin_number}"
+            for bin_number in range(
+                1,
+                NUMBER_OF_LEAD_BINS + 1,
+            )
+        }
+    )
+
+    if MODEL_SAMPLING_GROUP not in valid_groups:
+        raise ValueError(
+            f"MODEL_SAMPLING_GROUP must be one of "
+            f"{sorted(valid_groups)}."
+        )
+
+    if MIN_RETURN_PERIOD <= 1:
+        raise ValueError(
+            "MIN_RETURN_PERIOD must be greater than 1."
+        )
+
+    if MAX_RETURN_PERIOD <= MIN_RETURN_PERIOD:
+        raise ValueError(
+            "MAX_RETURN_PERIOD must exceed MIN_RETURN_PERIOD."
+        )
+
+    if NUMBER_OF_BOOTSTRAPS < 1:
+        raise ValueError(
+            "NUMBER_OF_BOOTSTRAPS must be at least 1."
+        )
+
+    if not 0 < CONFIDENCE_LEVEL < 1:
+        raise ValueError(
+            "CONFIDENCE_LEVEL must lie between 0 and 1."
+        )
+
+
+def get_distribution_name():
+    """Return the name of the selected fitted distribution."""
+
+    return {
+        1: "GEV",
+        2: "Gumbel",
+        3: "GenEx",
+    }[EXTREME_VALUE_DISTRIBUTION]
+
+
+def get_reference_variable():
+    """Return the variable name for the selected reference dataset."""
+
+    if REFERENCE_DATASET == "senorge":
+        return SENORGE_VARIABLE
+
+    return ERA5_VARIABLE
+
+
+def get_reference_label():
+    """Return a plot-friendly name for the selected reference dataset."""
+
+    if REFERENCE_DATASET == "senorge":
+        return SENORGE_LABEL
+
+    return ERA5_LABEL
+
+
+def get_bias_correction_reference():
+    """
+    Return the bias-correction reference.
+
+    This is intentionally tied to REFERENCE_DATASET so the bias-corrected
+    UNSEEN sample always uses the same reference as the plotted observations.
+    """
+
+    return REFERENCE_DATASET
+
+
+# =============================================================================
+# UNSEEN lead-time configuration
+# =============================================================================
+
+def split_usable_accumulated_leads(
+    first_lead,
+    last_lead,
+    number_of_bins,
+):
+    """Split usable accumulated ending leads into approximately equal bins."""
+
+    number_of_leads = (
+        last_lead
+        - first_lead
+        + 1
+    )
+
+    base_size = (
+        number_of_leads
+        // number_of_bins
+    )
+
+    remainder = (
+        number_of_leads
+        % number_of_bins
+    )
+
+    bin_sizes = [
+        base_size
+        + int(
+            bin_index
+            >= number_of_bins - remainder
+        )
+        for bin_index in range(
+            number_of_bins
+        )
+    ]
+
+    lead_bins = []
+    current_start = first_lead
+
+    for bin_size in bin_sizes:
+
+        current_end = (
+            current_start
+            + bin_size
+            - 1
+        )
+
+        lead_bins.append(
+            (
+                current_start,
+                current_end,
+            )
+        )
+
+        current_start = (
+            current_end
+            + 1
+        )
+
+    return lead_bins
+
+
+def build_lead_bins():
+    """Return the lead-location bins used by the UNSEEN sample."""
+
+    first_usable_lead = (
+        FIRST_INPUT_LEAD
+        + X_DAYS
+        - 1
+    )
+
+    return split_usable_accumulated_leads(
+        first_lead=first_usable_lead,
+        last_lead=LAST_INPUT_LEAD,
+        number_of_bins=NUMBER_OF_LEAD_BINS,
+    )
+
+
+def get_full_lead_range():
+    """Return the complete usable accumulated lead range."""
+
+    return (
+        FIRST_INPUT_LEAD
+        + X_DAYS
+        - 1,
+        LAST_INPUT_LEAD,
+    )
+
+
+def get_selected_model_lead_range():
+    """Return the lead range corresponding to MODEL_SAMPLING_GROUP."""
+
+    if MODEL_SAMPLING_GROUP == "full":
+        return get_full_lead_range()
+
+    split_number = int(
+        MODEL_SAMPLING_GROUP.replace(
+            "split",
+            "",
+        )
+    )
+
+    return build_lead_bins()[
+        split_number - 1
+    ]
+
+
+def get_raw_model_variable():
+    """Return the raw UNSEEN maximum variable."""
+
+    lead_start, lead_end = (
+        get_selected_model_lead_range()
+    )
+
+    return (
+        f"max_value_lead"
+        f"{lead_start}_{lead_end}"
+    )
+
+
+def get_bias_corrected_model_variable():
+    """Return the bias-corrected UNSEEN maximum variable."""
+
+    return (
+        f"{get_raw_model_variable()}_bc_"
+        f"{get_bias_correction_reference()}"
+    )
+
+
+def get_selected_sample_count_variable():
+    """Return the sample-count variable matching the selected UNSEEN sample."""
+
+    lead_start, lead_end = (
+        get_selected_model_lead_range()
+    )
+
+    return (
+        f"sample_count_lead"
+        f"{lead_start}_{lead_end}"
+    )
+
+
+def lead_split_filename_label():
+    """Return the lead-split label used in the UNSEEN filename."""
+
+    full_start, full_end = (
+        get_full_lead_range()
+    )
+
+    split_text = "_".join(
+        f"{lead_start}-{lead_end}"
+        for lead_start, lead_end
+        in build_lead_bins()
+    )
+
+    return (
+        f"lead{full_start}-{full_end}_"
+        f"split{NUMBER_OF_LEAD_BINS}_"
+        f"{split_text}"
+    )
+
+
+def get_raw_model_sampling_label():
+    """Return a readable name for the selected raw UNSEEN sample."""
+
+    lead_start, lead_end = (
+        get_selected_model_lead_range()
+    )
+
+    if MODEL_SAMPLING_GROUP == "full":
+        return (
+            f"Raw UNSEEN, ending leads "
+            f"{lead_start}-{lead_end}"
+        )
+
+    split_number = int(
+        MODEL_SAMPLING_GROUP.replace(
+            "split",
+            "",
+        )
+    )
+
+    return (
+        f"Raw UNSEEN split {split_number}, "
+        f"ending leads {lead_start}-{lead_end}"
+    )
+
+
+def get_bias_corrected_model_sampling_label():
+    """Return a readable name for the bias-corrected UNSEEN sample."""
+
+    return (
+        f"Bias-corrected UNSEEN "
+        f"({get_reference_label()} reference)"
+    )
+
+
+# =============================================================================
+# Filename helpers
+# =============================================================================
+
+def make_reference_filename():
+    """Construct the observational reference filename."""
+
+    if REFERENCE_DATASET == "senorge":
+
+        filename = (
+            f"distribution_monthly_extremes_"
+            f"{SENORGE_VARIABLE}_{X_DAYS}dayacc_"
+            f"{CATCHMENT}_senorge_"
+            f"{OBSERVATION_YEARS[0]}-"
+            f"{OBSERVATION_YEARS[1]}.nc"
+        )
+
+        return os.path.join(
+            config.dirs["senorge_processed"],
+            filename,
+        )
+
+    filename = (
+        f"distribution_monthly_extremes_"
+        f"{ERA5_VARIABLE}_{X_DAYS}dayacc_"
+        f"{CATCHMENT}_era5_{ERA5_GRID}_"
+        f"{OBSERVATION_YEARS[0]}-"
+        f"{OBSERVATION_YEARS[1]}.nc"
+    )
+
+    return os.path.join(
+        config.dirs["era5_processed"],
+        filename,
+    )
+
+
+def make_raw_model_filename():
+    """Construct the raw UNSEEN model filename."""
+
+    lead_label = (
+        lead_split_filename_label()
+    )
+
+    filename = (
+        f"unseen_sample_monthly_catchment_precipitation_extremes_"
+        f"{MODEL_VARIABLE}_{X_DAYS}dayacc_"
+        f"{CATCHMENT}_"
+        f"{lead_label}_"
+        f"forecast_hindcast_"
+        f"{FORECAST_DATE_RANGE[0]}_"
+        f"{FORECAST_DATE_RANGE[1]}.nc"
+    )
+
+    return os.path.join(
+        config.dirs["s2s_processed"],
+        filename,
+    )
+
+
+def make_bias_corrected_model_filename():
+    """
+    Construct the bias-corrected UNSEEN filename.
+
+    The bias-correction script appends ``_bc_<reference>`` to the raw model
+    sample filename.
+    """
+
+    raw_filename = (
+        make_raw_model_filename()
+    )
+
+    stem, extension = os.path.splitext(
+        raw_filename
+    )
+
+    return (
+        f"{stem}_bc_"
+        f"{get_bias_correction_reference()}"
+        f"{extension}"
+    )
+
+
+def make_figure_filename():
+    """Construct the output figure filename."""
+
+    month_name = (
+        MONTH_NAMES[
+            SELECTED_MONTH - 1
+        ].lower()
+    )
+
+    filename = (
+        f"return-period-observations-raw-bc-unseen-"
+        f"{get_distribution_name().lower()}-"
+        f"{REFERENCE_DATASET}-"
+        f"{CATCHMENT}-"
+        f"{X_DAYS}dayacc-"
+        f"{month_name}-"
+        f"{MODEL_SAMPLING_GROUP}.png"
+    )
+
+    return os.path.join(
+        config.dirs["fig"],
+        filename,
+    )
+
+
+# =============================================================================
+# Data reading
+# =============================================================================
+
+def check_variable_exists(
+    ds,
+    variable,
+    dataset_name,
+):
+    """Raise a clear error if a required variable is absent."""
+
+    if variable not in ds:
+        raise KeyError(
+            f"Variable '{variable}' was not found in "
+            f"{dataset_name}. Available data variables are: "
+            f"{list(ds.data_vars)}"
+        )
+
+
+def read_reference_data(
+    filename,
+):
+    """Read the selected observational month and August 2023 Storm Hans."""
+
+    variable = (
+        get_reference_variable()
+    )
+
+    with xr.open_dataset(
+        filename
+    ) as ds:
+
+        check_variable_exists(
+            ds,
+            variable,
+            get_reference_label(),
+        )
+
+        selected_month_data = (
+            ds[variable]
+            .sel(
+                year=slice(
+                    int(
+                        OBSERVATION_YEARS[0]
+                    ),
+                    int(
+                        OBSERVATION_YEARS[1]
+                    ),
+                ),
+                month=SELECTED_MONTH,
+            )
+            .load()
+        )
+
+        hans_value = None
+
+        if PLOT_STORM_HANS:
+
+            try:
+
+                hans_data = (
+                    ds[variable]
+                    .sel(
+                        year=2023,
+                        month=8,
+                    )
+                    .load()
+                )
+
+                candidate = float(
+                    hans_data.values
+                )
+
+                if np.isfinite(
+                    candidate
+                ):
+                    hans_value = candidate
+
+            except KeyError:
+                hans_value = None
+
+    years = np.asarray(
+        selected_month_data[
+            "year"
+        ].values
+    )
+
+    values = np.asarray(
+        selected_month_data.values,
+        dtype=float,
+    )
+
+    finite = np.isfinite(
+        values
+    )
+
+    return (
+        years[finite],
+        values[finite],
+        hans_value,
+    )
+
+
+def create_reference_fit_sample(
+    years,
+    values,
+):
+    """Create the observational sample used for fitting."""
+
+    fit_mask = np.ones(
+        years.size,
+        dtype=bool,
+    )
+
+    if EXCLUDE_2023_FROM_FIT:
+
+        fit_mask &= (
+            years != 2023
+        )
+
+    fit_years = (
+        years[
+            fit_mask
+        ]
+    )
+
+    fit_values = (
+        values[
+            fit_mask
+        ]
+    )
+
+    if fit_values.size < 10:
+        raise ValueError(
+            "Fewer than 10 finite observational values remain "
+            "in the fitting sample."
+        )
+
+    return (
+        fit_years,
+        fit_values,
+    )
+
+
+def read_unseen_values(
+    filename,
+    variable,
+    dataset_name,
+    check_sample_count,
+):
+    """
+    Read finite UNSEEN values for SELECTED_MONTH.
+
+    The same function is used for the raw and bias-corrected model samples.
+    """
+
+    with xr.open_dataset(
+        filename
+    ) as ds:
+
+        check_variable_exists(
+            ds,
+            variable,
+            dataset_name,
+        )
+
+        values = (
+            ds[variable]
+            .sel(
+                month_of_year=SELECTED_MONTH
+            )
+            .values
+        )
+
+        values = np.asarray(
+            values,
+            dtype=float,
+        )
+
+        values = values[
+            np.isfinite(
+                values
+            )
+        ]
+
+        if values.size < 10:
+            raise ValueError(
+                f"Fewer than 10 finite values were found in "
+                f"{dataset_name} for month {SELECTED_MONTH}."
+            )
+
+        if check_sample_count:
+
+            sample_count_variable = (
+                get_selected_sample_count_variable()
+            )
+
+            if sample_count_variable in ds:
+
+                stored_count = int(
+                    ds[
+                        sample_count_variable
+                    ]
+                    .sel(
+                        month_of_year=SELECTED_MONTH
+                    )
+                    .values
+                )
+
+                if stored_count != values.size:
+
+                    raise ValueError(
+                        f"Stored sample count ({stored_count}) does not "
+                        f"match the number of finite values read "
+                        f"({values.size}) from {dataset_name}."
+                    )
+
+                print(
+                    f"{dataset_name} sample-count check: "
+                    f"{values.size} values, OK."
+                )
+
+            else:
+
+                print(
+                    f"Sample-count variable "
+                    f"'{sample_count_variable}' was not found in "
+                    f"{dataset_name}. Using {values.size} finite values."
+                )
+
+    return values
+
+
+# =============================================================================
+# Distribution fitting
+# =============================================================================
+
+def fit_gev(
+    values,
+):
+    """Fit a stationary three-parameter GEV by maximum likelihood."""
+
+    shape_c, location, scale = (
+        genextreme.fit(
+            values
+        )
+    )
+
+    if (
+        not np.isfinite(
+            [
+                shape_c,
+                location,
+                scale,
+            ]
+        ).all()
+        or scale <= 0
+    ):
+        raise RuntimeError(
+            "The GEV fit returned invalid parameters."
+        )
+
+    return (
+        shape_c,
+        location,
+        scale,
+    )
+
+
+def fit_gumbel(
+    values,
+):
+    """Fit a stationary two-parameter Gumbel distribution by MLE."""
+
+    location, scale = (
+        gumbel_r.fit(
+            values
+        )
+    )
+
+    if (
+        not np.isfinite(
+            [
+                location,
+                scale,
+            ]
+        ).all()
+        or scale <= 0
+    ):
+        raise RuntimeError(
+            "The Gumbel fit returned invalid parameters."
+        )
+
+    return (
+        location,
+        scale,
+    )
+
+
+def genex_negative_log_likelihood(
+    log_parameters,
+    values,
+):
+    """
+    Negative log-likelihood for the two-parameter Generalized Exponential.
+
+        F(x) = [1 - exp(-x / scale)] ** shape,  x >= 0
+    """
+
+    shape, scale = np.exp(
+        log_parameters
+    )
+
+    if (
+        not np.isfinite(shape)
+        or not np.isfinite(scale)
+        or shape <= 0
+        or scale <= 0
+        or np.any(
+            values < 0
+        )
+    ):
+        return np.inf
+
+    z = (
+        values
+        / scale
+    )
+
+    log_one_minus_exp = np.log(
+        -np.expm1(
+            -z
+        )
+    )
+
+    log_pdf = (
+        np.log(
+            shape
+        )
+        - np.log(
+            scale
+        )
+        - z
+        + (
+            shape
+            - 1.0
+        )
+        * log_one_minus_exp
+    )
+
+    if not np.isfinite(
+        log_pdf
+    ).all():
+        return np.inf
+
+    return -np.sum(
+        log_pdf
+    )
+
+
+def fit_genex(
+    values,
+):
+    """Fit a two-parameter Generalized Exponential distribution by MLE."""
+
+    if np.any(
+        values < 0
+    ):
+        raise ValueError(
+            "The GenEx implementation requires non-negative values."
+        )
+
+    positive_values = (
+        values[
+            values > 0
+        ]
+    )
+
+    if positive_values.size == 0:
+        raise RuntimeError(
+            "GenEx cannot be fitted because there are no positive values."
+        )
+
+    result = minimize(
+        genex_negative_log_likelihood,
+        x0=np.log(
+            [
+                1.0,
+                np.mean(
+                    positive_values
+                ),
+            ]
+        ),
+        args=(
+            values,
+        ),
+        method="Nelder-Mead",
+        options={
+            "maxiter": 5000,
+        },
+    )
+
+    if not result.success:
+        raise RuntimeError(
+            f"GenEx fit failed: "
+            f"{result.message}"
+        )
+
+    shape, scale = np.exp(
+        result.x
+    )
+
+    if (
+        not np.isfinite(
+            [
+                shape,
+                scale,
+            ]
+        ).all()
+        or shape <= 0
+        or scale <= 0
+    ):
+        raise RuntimeError(
+            "The GenEx fit returned invalid parameters."
+        )
+
+    return (
+        shape,
+        scale,
+    )
+
+
+def fit_distribution(
+    values,
+):
+    """Fit the distribution selected by EXTREME_VALUE_DISTRIBUTION."""
+
+    if EXTREME_VALUE_DISTRIBUTION == 1:
+        return fit_gev(
+            values
+        )
+
+    if EXTREME_VALUE_DISTRIBUTION == 2:
+        return fit_gumbel(
+            values
+        )
+
+    return fit_genex(
+        values
+    )
+
+
+# =============================================================================
+# AIC
+# =============================================================================
+
+def calculate_log_likelihood(
+    values,
+    fitted_parameters,
+):
+    """Calculate the maximized log-likelihood of the selected distribution."""
+
+    if EXTREME_VALUE_DISTRIBUTION == 1:
+
+        shape_c, location, scale = (
+            fitted_parameters
+        )
+
+        log_pdf = genextreme.logpdf(
+            values,
+            shape_c,
+            loc=location,
+            scale=scale,
+        )
+
+    elif EXTREME_VALUE_DISTRIBUTION == 2:
+
+        location, scale = (
+            fitted_parameters
+        )
+
+        log_pdf = gumbel_r.logpdf(
+            values,
+            loc=location,
+            scale=scale,
+        )
+
+    else:
+
+        log_likelihood = (
+            -genex_negative_log_likelihood(
+                np.log(
+                    fitted_parameters
+                ),
+                values,
+            )
+        )
+
+        if not np.isfinite(
+            log_likelihood
+        ):
+            raise RuntimeError(
+                "The GenEx log-likelihood is not finite."
+            )
+
+        return float(
+            log_likelihood
+        )
+
+    if not np.isfinite(
+        log_pdf
+    ).all():
+        raise RuntimeError(
+            "The fitted distribution produced a non-finite log-likelihood."
+        )
+
+    return float(
+        np.sum(
+            log_pdf
+        )
+    )
+
+
+def get_number_of_fitted_parameters():
+    """Return the number of fitted parameters in the selected distribution."""
+
+    if EXTREME_VALUE_DISTRIBUTION == 1:
+        return 3
+
+    return 2
+
+
+def calculate_aic(
+    values,
+    fitted_parameters,
+):
+    """Calculate AIC = 2k - 2 log(L)."""
+
+    log_likelihood = (
+        calculate_log_likelihood(
+            values,
+            fitted_parameters,
+        )
+    )
+
+    number_of_parameters = (
+        get_number_of_fitted_parameters()
+    )
+
+    aic = (
+        2.0
+        * number_of_parameters
+        - 2.0
+        * log_likelihood
+    )
+
+    return (
+        aic,
+        log_likelihood,
+        number_of_parameters,
+    )
+
+
+# =============================================================================
+# Distribution probability functions and return levels
+# =============================================================================
+
+def genex_ppf(
+    probabilities,
+    parameters,
+):
+    """Quantile function of the two-parameter Generalized Exponential."""
+
+    shape, scale = (
+        parameters
+    )
+
+    probabilities = np.asarray(
+        probabilities,
+        dtype=float,
+    )
+
+    return (
+        -scale
+        * np.log1p(
+            -np.power(
+                probabilities,
+                1.0 / shape,
+            )
+        )
+    )
+
+
+def genex_cdf(
+    values,
+    parameters,
+):
+    """CDF of the two-parameter Generalized Exponential."""
+
+    shape, scale = (
+        parameters
+    )
+
+    values = np.asarray(
+        values,
+        dtype=float,
+    )
+
+    cdf = np.zeros_like(
+        values,
+        dtype=float,
+    )
+
+    mask = (
+        values >= 0
+    )
+
+    cdf[
+        mask
+    ] = np.power(
+        1.0
+        - np.exp(
+            -values[
+                mask
+            ]
+            / scale
+        ),
+        shape,
+    )
+
+    return cdf
+
+
+def calculate_return_levels(
+    return_periods,
+    fitted_parameters,
+):
+    """Calculate fitted return levels for the selected distribution."""
+
+    probabilities = (
+        1.0
+        - 1.0
+        / return_periods
+    )
+
+    if EXTREME_VALUE_DISTRIBUTION == 1:
+
+        shape_c, location, scale = (
+            fitted_parameters
+        )
+
+        return genextreme.ppf(
+            probabilities,
+            shape_c,
+            loc=location,
+            scale=scale,
+        )
+
+    if EXTREME_VALUE_DISTRIBUTION == 2:
+
+        location, scale = (
+            fitted_parameters
+        )
+
+        return gumbel_r.ppf(
+            probabilities,
+            loc=location,
+            scale=scale,
+        )
+
+    return genex_ppf(
+        probabilities,
+        fitted_parameters,
+    )
+
+
+def generate_random_sample(
+    fitted_parameters,
+    sample_size,
+    rng,
+):
+    """Generate one parametric-bootstrap sample from the fitted model."""
+
+    if EXTREME_VALUE_DISTRIBUTION == 1:
+
+        shape_c, location, scale = (
+            fitted_parameters
+        )
+
+        return genextreme.rvs(
+            shape_c,
+            loc=location,
+            scale=scale,
+            size=sample_size,
+            random_state=rng,
+        )
+
+    if EXTREME_VALUE_DISTRIBUTION == 2:
+
+        location, scale = (
+            fitted_parameters
+        )
+
+        return gumbel_r.rvs(
+            loc=location,
+            scale=scale,
+            size=sample_size,
+            random_state=rng,
+        )
+
+    uniforms = rng.uniform(
+        np.finfo(
+            float
+        ).eps,
+        1.0
+        - np.finfo(
+            float
+        ).eps,
+        size=sample_size,
+    )
+
+    return genex_ppf(
+        uniforms,
+        fitted_parameters,
+    )
+
+
+def make_return_period_grid():
+    """Create logarithmically spaced return periods."""
+
+    return np.geomspace(
+        MIN_RETURN_PERIOD,
+        MAX_RETURN_PERIOD,
+        NUMBER_OF_RETURN_PERIODS,
+    )
+
+
+def calculate_empirical_return_periods(
+    values,
+):
+    """
+    Calculate empirical return periods using the Weibull plotting position.
+
+        T = (n + 1) / rank
+
+    rank = 1 is the largest event.
+    """
+
+    sorted_values = np.sort(
+        values
+    )[::-1]
+
+    ranks = np.arange(
+        1,
+        sorted_values.size + 1,
+    )
+
+    return_periods = (
+        sorted_values.size
+        + 1
+    ) / ranks
+
+    return (
+        return_periods,
+        sorted_values,
+    )
+
+
+def calculate_event_return_period(
+    event_value,
+    fitted_parameters,
+):
+    """Calculate the fitted return period corresponding to one event."""
+
+    if EXTREME_VALUE_DISTRIBUTION == 1:
+
+        shape_c, location, scale = (
+            fitted_parameters
+        )
+
+        exceedance_probability = genextreme.sf(
+            event_value,
+            shape_c,
+            loc=location,
+            scale=scale,
+        )
+
+    elif EXTREME_VALUE_DISTRIBUTION == 2:
+
+        location, scale = (
+            fitted_parameters
+        )
+
+        exceedance_probability = gumbel_r.sf(
+            event_value,
+            loc=location,
+            scale=scale,
+        )
+
+    else:
+
+        cdf = float(
+            genex_cdf(
+                np.array(
+                    [
+                        event_value,
+                    ]
+                ),
+                fitted_parameters,
+            )[0]
+        )
+
+        exceedance_probability = (
+            1.0
+            - cdf
+        )
+
+    if (
+        not np.isfinite(
+            exceedance_probability
+        )
+        or exceedance_probability <= 0
+    ):
+        return np.inf
+
+    return (
+        1.0
+        / exceedance_probability
+    )
+
+
+# =============================================================================
+# Parametric bootstrap
+# =============================================================================
+
+def parametric_bootstrap_return_levels(
+    sample_values,
+    fitted_parameters,
+    return_periods,
+    random_seed,
+):
+    """
+    Estimate uncertainty in a fitted return-level curve.
+
+    The same procedure is used for observations, raw UNSEEN, and
+    bias-corrected UNSEEN.
+    """
+
+    rng = np.random.default_rng(
+        random_seed
+    )
+
+    sample_size = (
+        sample_values.size
+    )
+
+    bootstrap_return_levels = np.full(
+        (
+            NUMBER_OF_BOOTSTRAPS,
+            return_periods.size,
+        ),
+        np.nan,
+        dtype=float,
+    )
+
+    successful_fits = 0
+
+    for bootstrap_number in range(
+        NUMBER_OF_BOOTSTRAPS
+    ):
+
+        simulated_values = (
+            generate_random_sample(
+                fitted_parameters=fitted_parameters,
+                sample_size=sample_size,
+                rng=rng,
+            )
+        )
+
+        try:
+
+            bootstrap_parameters = (
+                fit_distribution(
+                    simulated_values
+                )
+            )
+
+            bootstrap_levels = (
+                calculate_return_levels(
+                    return_periods,
+                    bootstrap_parameters,
+                )
+            )
+
+        except (
+            RuntimeError,
+            ValueError,
+            FloatingPointError,
+        ):
+            continue
+
+        if not np.isfinite(
+            bootstrap_levels
+        ).all():
+            continue
+
+        bootstrap_return_levels[
+            bootstrap_number,
+            :
+        ] = bootstrap_levels
+
+        successful_fits += 1
+
+    minimum_successful_fits = int(
+        0.90
+        * NUMBER_OF_BOOTSTRAPS
+    )
+
+    if successful_fits < minimum_successful_fits:
+        raise RuntimeError(
+            f"Only {successful_fits} of "
+            f"{NUMBER_OF_BOOTSTRAPS} bootstrap fits succeeded."
+        )
+
+    alpha = (
+        1.0
+        - CONFIDENCE_LEVEL
+    )
+
+    lower_percentile = (
+        100.0
+        * alpha
+        / 2.0
+    )
+
+    upper_percentile = (
+        100.0
+        * (
+            1.0
+            - alpha
+            / 2.0
+        )
+    )
+
+    lower = np.nanpercentile(
+        bootstrap_return_levels,
+        lower_percentile,
+        axis=0,
+    )
+
+    upper = np.nanpercentile(
+        bootstrap_return_levels,
+        upper_percentile,
+        axis=0,
+    )
+
+    return (
+        lower,
+        upper,
+        successful_fits,
+    )
+
+
+# =============================================================================
+# Analysis helper
+# =============================================================================
+
+def analyse_distribution(
+    values,
+    return_periods,
+    random_seed,
+):
+    """Fit one sample and calculate everything needed for plotting/reporting."""
+
+    fitted_parameters = (
+        fit_distribution(
+            values
+        )
+    )
+
+    fitted_return_levels = (
+        calculate_return_levels(
+            return_periods,
+            fitted_parameters,
+        )
+    )
+
+    (
+        lower_confidence_limit,
+        upper_confidence_limit,
+        successful_bootstraps,
+    ) = parametric_bootstrap_return_levels(
+        sample_values=values,
+        fitted_parameters=fitted_parameters,
+        return_periods=return_periods,
+        random_seed=random_seed,
+    )
+
+    (
+        empirical_return_periods,
+        empirical_values,
+    ) = calculate_empirical_return_periods(
+        values
+    )
+
+    (
+        aic,
+        log_likelihood,
+        number_of_parameters,
+    ) = calculate_aic(
+        values=values,
+        fitted_parameters=fitted_parameters,
+    )
+
+    return {
+        "values": values,
+        "fitted_parameters": fitted_parameters,
+        "fitted_return_levels": fitted_return_levels,
+        "lower_confidence_limit": lower_confidence_limit,
+        "upper_confidence_limit": upper_confidence_limit,
+        "successful_bootstraps": successful_bootstraps,
+        "empirical_return_periods": empirical_return_periods,
+        "empirical_values": empirical_values,
+        "aic": aic,
+        "log_likelihood": log_likelihood,
+        "number_of_parameters": number_of_parameters,
+    }
+
+
+# =============================================================================
+# Reporting
+# =============================================================================
+
+def print_fit_summary(
+    label,
+    analysis,
+    years=None,
+):
+    """Print a summary for one fitted distribution."""
+
+    fitted_parameters = (
+        analysis[
+            "fitted_parameters"
+        ]
+    )
+
+    print()
+    print(
+        f"{label} {get_distribution_name()} fit"
+    )
+    print(
+        "-" * (
+            len(label)
+            + len(
+                get_distribution_name()
+            )
+            + 5
+        )
+    )
+
+    print(
+        f"Calendar month:   "
+        f"{MONTH_NAMES[SELECTED_MONTH - 1]} "
+        f"({SELECTED_MONTH})"
+    )
+
+    if years is not None:
+
+        print(
+            f"Years used:       "
+            f"{int(years.min())}-"
+            f"{int(years.max())}"
+        )
+
+    print(
+        f"Sample size:      "
+        f"{analysis['values'].size}"
+    )
+
+    if EXTREME_VALUE_DISTRIBUTION == 1:
+
+        shape_c, location, scale = (
+            fitted_parameters
+        )
+
+        print(
+            f"Location, mu:     "
+            f"{location:.3f} mm"
+        )
+        print(
+            f"Scale, sigma:     "
+            f"{scale:.3f} mm"
+        )
+        print(
+            f"Shape, xi:        "
+            f"{-shape_c:.4f}"
+        )
+
+    elif EXTREME_VALUE_DISTRIBUTION == 2:
+
+        location, scale = (
+            fitted_parameters
+        )
+
+        print(
+            f"Location:         "
+            f"{location:.3f} mm"
+        )
+        print(
+            f"Scale:            "
+            f"{scale:.3f} mm"
+        )
+
+    else:
+
+        shape, scale = (
+            fitted_parameters
+        )
+
+        print(
+            f"Shape:            "
+            f"{shape:.4f}"
+        )
+        print(
+            f"Scale:            "
+            f"{scale:.3f} mm"
+        )
+
+    print(
+        f"Parameters, k:    "
+        f"{analysis['number_of_parameters']}"
+    )
+
+    print(
+        f"Log-likelihood:   "
+        f"{analysis['log_likelihood']:.3f}"
+    )
+
+    print(
+        f"AIC:              "
+        f"{analysis['aic']:.3f}"
+    )
+
+    print(
+        f"Bootstrap fits:   "
+        f"{analysis['successful_bootstraps']}/"
+        f"{NUMBER_OF_BOOTSTRAPS}"
+    )
+
+
+# =============================================================================
+# Plotting
+# =============================================================================
+
+def plot_return_period_curves(
+    return_periods,
+    observation_analysis,
+    raw_unseen_analysis,
+    bias_corrected_unseen_analysis,
+    hans_value,
+    filename_out,
+):
+    """
+    Overlay observations, raw UNSEEN, and bias-corrected UNSEEN distributions.
+    """
+
+    fig, ax = plt.subplots(
+        figsize=(
+            FIG_WIDTH_IN,
+            FIG_HEIGHT_IN,
+        )
+    )
+
+    # -------------------------------------------------------------------------
+    # Confidence intervals
+    # -------------------------------------------------------------------------
+
+    ax.fill_between(
+        return_periods,
+        observation_analysis[
+            "lower_confidence_limit"
+        ],
+        observation_analysis[
+            "upper_confidence_limit"
+        ],
+        color=OBSERVATION_COLOR,
+        alpha=CONFIDENCE_ALPHA,
+        linewidth=0,
+        label=(
+            f"{get_reference_label()} "
+            f"{int(CONFIDENCE_LEVEL * 100)}% interval"
+        ),
+        zorder=1,
+    )
+
+    ax.fill_between(
+        return_periods,
+        raw_unseen_analysis[
+            "lower_confidence_limit"
+        ],
+        raw_unseen_analysis[
+            "upper_confidence_limit"
+        ],
+        color=RAW_UNSEEN_COLOR,
+        alpha=CONFIDENCE_ALPHA,
+        linewidth=0,
+        label=(
+            f"Raw UNSEEN "
+            f"{int(CONFIDENCE_LEVEL * 100)}% interval"
+        ),
+        zorder=1,
+    )
+
+    if bias_corrected_unseen_analysis is not None:
+
+        ax.fill_between(
+            return_periods,
+            bias_corrected_unseen_analysis[
+                "lower_confidence_limit"
+            ],
+            bias_corrected_unseen_analysis[
+                "upper_confidence_limit"
+            ],
+            color=BIAS_CORRECTED_UNSEEN_COLOR,
+            alpha=CONFIDENCE_ALPHA,
+            linewidth=0,
+            label=(
+                f"Bias-corrected UNSEEN "
+                f"{int(CONFIDENCE_LEVEL * 100)}% interval"
+            ),
+            zorder=1,
+        )
+
+    # -------------------------------------------------------------------------
+    # Fitted curves
+    # -------------------------------------------------------------------------
+
+    ax.plot(
+        return_periods,
+        observation_analysis[
+            "fitted_return_levels"
+        ],
+        color=OBSERVATION_COLOR,
+        linewidth=2.0,
+        label=(
+            f"{get_reference_label()} "
+            f"{get_distribution_name()} fit"
+        ),
+        zorder=4,
+    )
+
+    ax.plot(
+        return_periods,
+        raw_unseen_analysis[
+            "fitted_return_levels"
+        ],
+        color=RAW_UNSEEN_COLOR,
+        linewidth=2.0,
+        label=(
+            f"Raw UNSEEN "
+            f"{get_distribution_name()} fit"
+        ),
+        zorder=4,
+    )
+
+    if bias_corrected_unseen_analysis is not None:
+
+        ax.plot(
+            return_periods,
+            bias_corrected_unseen_analysis[
+                "fitted_return_levels"
+            ],
+            color=BIAS_CORRECTED_UNSEEN_COLOR,
+            linewidth=2.0,
+            label=(
+                f"Bias-corrected UNSEEN "
+                f"{get_distribution_name()} fit"
+            ),
+            zorder=4,
+        )
+
+    # -------------------------------------------------------------------------
+    # Empirical values
+    # -------------------------------------------------------------------------
+
+    ax.scatter(
+        observation_analysis[
+            "empirical_return_periods"
+        ],
+        observation_analysis[
+            "empirical_values"
+        ],
+        facecolors="none",
+        edgecolors=OBSERVATION_COLOR,
+        linewidths=1.0,
+        s=28,
+        zorder=5,
+        label=(
+            f"{get_reference_label()} empirical values"
+        ),
+    )
+
+    ax.scatter(
+        raw_unseen_analysis[
+            "empirical_return_periods"
+        ],
+        raw_unseen_analysis[
+            "empirical_values"
+        ],
+        facecolors="none",
+        edgecolors=RAW_UNSEEN_COLOR,
+        linewidths=0.7,
+        s=10,
+        alpha=0.35,
+        zorder=2,
+        label="Raw UNSEEN empirical values",
+    )
+
+    if bias_corrected_unseen_analysis is not None:
+
+        ax.scatter(
+            bias_corrected_unseen_analysis[
+                "empirical_return_periods"
+            ],
+            bias_corrected_unseen_analysis[
+                "empirical_values"
+            ],
+            facecolors="none",
+            edgecolors=BIAS_CORRECTED_UNSEEN_COLOR,
+            linewidths=0.7,
+            s=10,
+            alpha=0.35,
+            zorder=2,
+            label="Bias-corrected UNSEEN empirical values",
+        )
+
+    # -------------------------------------------------------------------------
+    # Storm Hans
+    # -------------------------------------------------------------------------
+
+    if hans_value is not None:
+
+        ax.axhline(
+            y=hans_value,
+            color=OBSERVATION_COLOR,
+            linestyle="--",
+            linewidth=1.5,
+            zorder=5,
+            label=(
+                f"Storm Hans "
+                f"({STORM_HANS_DATE})"
+            ),
+        )
+
+    # -------------------------------------------------------------------------
+    # Axes
+    # -------------------------------------------------------------------------
+
+    ax.set_xscale(
+        "log"
+    )
+
+    ax.set_xlim(
+        0.8,
+        MAX_RETURN_PERIOD,
+    )
+
+    ax.set_ylim(
+        bottom=YMIN,
+        top=YMAX,
+    )
+
+    ax.set_xlabel(
+        "Return period (years)",
+        fontsize=AXIS_LABELSIZE,
+    )
+
+    ax.set_ylabel(
+        (
+            f"{X_DAYS}-day accumulated "
+            "precipitation (mm)"
+        ),
+        fontsize=AXIS_LABELSIZE,
+    )
+
+    ax.set_title(
+        (
+            f"{MONTH_NAMES[SELECTED_MONTH - 1]} "
+            f"{X_DAYS}-day precipitation maxima\n"
+            f"{get_reference_label()}, raw UNSEEN, and "
+            f"bias-corrected UNSEEN; "
+            f"{get_distribution_name()} fit"
+        ),
+        fontsize=TITLE_FONTSIZE,
+        pad=8,
+    )
+
+    ax.tick_params(
+        axis="both",
+        labelsize=TICK_LABELSIZE,
+    )
+
+    ax.spines[
+        "top"
+    ].set_visible(
+        False
+    )
+
+    ax.spines[
+        "right"
+    ].set_visible(
+        False
+    )
+
+    ax.legend(
+        frameon=False,
+        fontsize=LEGEND_FONTSIZE,
+    )
+
+    fig.tight_layout()
+
+    if WRITE_TO_FILE:
+
+        fig.savefig(
+            filename_out,
+            dpi=300,
+            bbox_inches="tight",
+        )
+
+        print()
+        print(
+            "Wrote:",
+            filename_out,
+        )
+
+    plt.show()
+
+
+# =============================================================================
+# Main
+# =============================================================================
+
+def main():
+    """Run the observational, raw-UNSEEN, and bias-corrected analysis."""
+
+    validate_user_settings()
+
+    filename_reference = (
+        make_reference_filename()
+    )
+
+    filename_raw_model = (
+        make_raw_model_filename()
+    )
+
+    filename_bias_corrected_model = (
+        make_bias_corrected_model_filename()
+    )
+
+    filename_out = (
+        make_figure_filename()
+    )
+
+    raw_model_variable = (
+        get_raw_model_variable()
+    )
+
+    bias_corrected_model_variable = (
+        get_bias_corrected_model_variable()
+    )
+
+    print(
+        f"Reading {get_reference_label()} file:"
+    )
+    print(
+        filename_reference
+    )
+
+    print()
+    print(
+        "Reading raw UNSEEN file:"
+    )
+    print(
+        filename_raw_model
+    )
+
+    if PLOT_BIAS_CORRECTED_UNSEEN:
+
+        print()
+        print(
+            "Reading bias-corrected UNSEEN file:"
+        )
+        print(
+            filename_bias_corrected_model
+        )
+
+    print()
+    print(
+        f"Raw UNSEEN variable:          "
+        f"{raw_model_variable}"
+    )
+
+    if PLOT_BIAS_CORRECTED_UNSEEN:
+
+        print(
+            f"Bias-corrected variable:      "
+            f"{bias_corrected_model_variable}"
+        )
+
+        print(
+            f"Bias-correction reference:    "
+            f"{get_reference_label()}"
+        )
+
+    print(
+        f"Sampling group:               "
+        f"{MODEL_SAMPLING_GROUP}"
+    )
+
+    print(
+        f"Distribution:                 "
+        f"{get_distribution_name()}"
+    )
+
+    (
+        years,
+        all_reference_values,
+        hans_value,
+    ) = read_reference_data(
+        filename_reference
+    )
+
+    (
+        fit_years,
+        reference_values,
+    ) = create_reference_fit_sample(
+        years,
+        all_reference_values,
+    )
+
+    raw_unseen_values = (
+        read_unseen_values(
+            filename=filename_raw_model,
+            variable=raw_model_variable,
+            dataset_name="raw UNSEEN dataset",
+            check_sample_count=True,
+        )
+    )
+
+    bias_corrected_unseen_values = None
+
+    if PLOT_BIAS_CORRECTED_UNSEEN:
+
+        bias_corrected_unseen_values = (
+            read_unseen_values(
+                filename=filename_bias_corrected_model,
+                variable=bias_corrected_model_variable,
+                dataset_name=(
+                    f"bias-corrected UNSEEN dataset "
+                    f"({get_reference_label()} reference)"
+                ),
+                check_sample_count=False,
+            )
+        )
+
+        if (
+            bias_corrected_unseen_values.size
+            != raw_unseen_values.size
+        ):
+
+            print()
+            print(
+                "Warning: raw and bias-corrected UNSEEN samples "
+                "do not contain the same number of finite values."
+            )
+
+            print(
+                f"Raw sample size:             "
+                f"{raw_unseen_values.size}"
+            )
+
+            print(
+                f"Bias-corrected sample size:  "
+                f"{bias_corrected_unseen_values.size}"
+            )
+
+    return_periods = (
+        make_return_period_grid()
+    )
+
+    observation_analysis = (
+        analyse_distribution(
+            values=reference_values,
+            return_periods=return_periods,
+            random_seed=RANDOM_SEED,
+        )
+    )
+
+    raw_unseen_analysis = (
+        analyse_distribution(
+            values=raw_unseen_values,
+            return_periods=return_periods,
+            random_seed=RANDOM_SEED + 1,
+        )
+    )
+
+    bias_corrected_unseen_analysis = None
+
+    if PLOT_BIAS_CORRECTED_UNSEEN:
+
+        bias_corrected_unseen_analysis = (
+            analyse_distribution(
+                values=bias_corrected_unseen_values,
+                return_periods=return_periods,
+                random_seed=RANDOM_SEED + 2,
+            )
+        )
+
+    print_fit_summary(
+        label=get_reference_label(),
+        analysis=observation_analysis,
+        years=fit_years,
+    )
+
+    print_fit_summary(
+        label=get_raw_model_sampling_label(),
+        analysis=raw_unseen_analysis,
+    )
+
+    if bias_corrected_unseen_analysis is not None:
+
+        print_fit_summary(
+            label=get_bias_corrected_model_sampling_label(),
+            analysis=bias_corrected_unseen_analysis,
+        )
+
+    if hans_value is not None:
+
+        hans_return_period_reference = (
+            calculate_event_return_period(
+                event_value=hans_value,
+                fitted_parameters=observation_analysis[
+                    "fitted_parameters"
+                ],
+            )
+        )
+
+        hans_return_period_raw = (
+            calculate_event_return_period(
+                event_value=hans_value,
+                fitted_parameters=raw_unseen_analysis[
+                    "fitted_parameters"
+                ],
+            )
+        )
+
+        print()
+        print(
+            f"Storm Hans "
+            f"({get_reference_label()}) value: "
+            f"{hans_value:.3f} mm"
+        )
+
+        print(
+            f"Hans return period from "
+            f"{get_reference_label()} fit: "
+            f"{hans_return_period_reference:.2f} years"
+        )
+
+        print(
+            f"Hans return period from "
+            f"raw UNSEEN fit: "
+            f"{hans_return_period_raw:.2f} years"
+        )
+
+        if bias_corrected_unseen_analysis is not None:
+
+            hans_return_period_bc = (
+                calculate_event_return_period(
+                    event_value=hans_value,
+                    fitted_parameters=bias_corrected_unseen_analysis[
+                        "fitted_parameters"
+                    ],
+                )
+            )
+
+            print(
+                f"Hans return period from "
+                f"bias-corrected UNSEEN fit: "
+                f"{hans_return_period_bc:.2f} years"
+            )
+
+    plot_return_period_curves(
+        return_periods=return_periods,
+        observation_analysis=observation_analysis,
+        raw_unseen_analysis=raw_unseen_analysis,
+        bias_corrected_unseen_analysis=bias_corrected_unseen_analysis,
+        hans_value=hans_value,
+        filename_out=filename_out,
+    )
+
+
+if __name__ == "__main__":
+    main()
