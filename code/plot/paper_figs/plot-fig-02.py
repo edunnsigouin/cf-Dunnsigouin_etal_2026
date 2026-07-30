@@ -79,7 +79,7 @@ x_days = 2
 
 forecast_date_range = [
     "2020-01-02",
-    "2023-06-26",
+    "2022-12-29",
 ]
 
 observation_years = [
