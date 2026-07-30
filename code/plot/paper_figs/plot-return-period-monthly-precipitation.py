@@ -1,19 +1,25 @@
 """
-Plot observational and raw-UNSEEN return-period curves for one calendar month.
+Plot observational, raw-UNSEEN, and bias-corrected-UNSEEN extreme-value
+curves for one calendar month, using either return period or AEP on the x-axis.
 
 The observational reference dataset can be either SeNorge or ERA5.
 
 The raw UNSEEN model sample is read from the monthly extreme-sample file
-produced by the lead-bin sample-building script. The model sampling group can
-be selected as:
+produced by the lead-bin sample-building script.
 
-    "full"
-        Complete usable accumulated lead-time distribution.
+The bias-corrected UNSEEN sample is read from the corresponding bias-corrected
+file. The bias-correction reference is ALWAYS the same dataset selected with
+REFERENCE_DATASET:
 
-    "split1", "split2", ...
-        One of the lead-location subsets defined by NUMBER_OF_LEAD_BINS.
+    REFERENCE_DATASET = "senorge"
+        -> observations use SeNorge
+        -> bias-corrected UNSEEN is corrected to SeNorge
 
-For both observations and UNSEEN, this script:
+    REFERENCE_DATASET = "era5"
+        -> observations use ERA5
+        -> bias-corrected UNSEEN is corrected to ERA5
+
+For observations, raw UNSEEN, and bias-corrected UNSEEN, this script:
 
 1. Selects the chosen calendar month.
 2. Fits the same selected stationary extreme-value distribution by maximum
@@ -24,13 +30,12 @@ For both observations and UNSEEN, this script:
    position and plots them as points.
 6. Prints the fitted parameters, log-likelihood, and AIC.
 
-The observational and UNSEEN confidence intervals are drawn with transparent
-shading. Where the two intervals overlap, the two transparent fills naturally
-combine into a darker region, similar in spirit to Kelder et al. (2020)
-Fig. 8.
+All three confidence intervals are drawn with transparent shading. Where the
+bands overlap, the colors naturally combine into darker regions.
 
-Storm Hans is always taken from the August 2023 observational maximum and can
-optionally be plotted as a horizontal line, regardless of SELECTED_MONTH.
+Two horizontal reference lines are plotted: the August 2023 Storm Hans
+maximum and the highest reference-dataset value for SELECTED_MONTH during
+1957-2022.
 
 Important
 ---------
@@ -47,6 +52,8 @@ conventional GEV shape parameter xi:
 import os
 
 import matplotlib.pyplot as plt
+from matplotlib.lines import Line2D
+from matplotlib.ticker import FuncFormatter
 import numpy as np
 import xarray as xr
 from scipy.optimize import minimize
@@ -80,15 +87,15 @@ OBSERVATION_YEARS = [
 EXCLUDE_2023_FROM_FIT = True
 
 SENORGE_VARIABLE = "rr"
-SENORGE_LABEL = "SeNorge"
+SENORGE_LABEL = f"SeNorge {OBSERVATION_YEARS[0]}-{OBSERVATION_YEARS[-1]}"
 
 ERA5_VARIABLE = "tp24"
-ERA5_LABEL = "ERA5"
+ERA5_LABEL = f"ERA5 {OBSERVATION_YEARS[0]}-{OBSERVATION_YEARS[-1]}"
 ERA5_GRID = "0.5x0.5"
 
 
 # -----------------------------------------------------------------------------
-# Raw UNSEEN model sample
+# UNSEEN model sample
 # -----------------------------------------------------------------------------
 
 MODEL_VARIABLE = "tp24"
@@ -112,6 +119,9 @@ NUMBER_OF_LEAD_BINS = 2
 #     ...
 MODEL_SAMPLING_GROUP = "full"
 
+# Plot the bias-corrected UNSEEN sample as the third distribution.
+PLOT_BIAS_CORRECTED_UNSEEN = False
+
 
 # -----------------------------------------------------------------------------
 # Extreme-value distribution
@@ -121,7 +131,7 @@ MODEL_SAMPLING_GROUP = "full"
 #     1 -> GEV
 #     2 -> Gumbel
 #     3 -> GenEx (two-parameter Generalized Exponential)
-EXTREME_VALUE_DISTRIBUTION = 1
+EXTREME_VALUE_DISTRIBUTION = 2
 
 
 # -----------------------------------------------------------------------------
@@ -148,11 +158,35 @@ MONTH_NAMES = [
 
 
 # -----------------------------------------------------------------------------
-# Storm Hans
+# Horizontal reference lines
 # -----------------------------------------------------------------------------
 
+# Both observational reference events are plotted:
+# 1. Storm Hans: August 2023 maximum.
+# 2. Record: highest value for SELECTED_MONTH during 1957-2022.
 STORM_HANS_DATE = "2023-08-08"
-PLOT_STORM_HANS = True
+RECORD_START_YEAR = 1957
+RECORD_END_YEAR = 2022
+
+STORM_HANS_LINESTYLE = "--"
+RECORD_LINESTYLE = ":"
+
+
+# -----------------------------------------------------------------------------
+# X-axis choice
+# -----------------------------------------------------------------------------
+
+# Choose how event rarity is displayed on the x-axis.
+#
+# Options:
+#     "return_period" -> return period in years
+#     "aep"           -> annual exceedance probability in percent
+#
+# The statistical fitting is identical in both cases. AEP is calculated as:
+#
+#     AEP (%) = 100 / return period
+#
+X_AXIS_MODE = "aep"
 
 
 # -----------------------------------------------------------------------------
@@ -160,11 +194,11 @@ PLOT_STORM_HANS = True
 # -----------------------------------------------------------------------------
 
 MIN_RETURN_PERIOD = 1.01
-MAX_RETURN_PERIOD = 10_000.0
+MAX_RETURN_PERIOD = 100000.0
 NUMBER_OF_RETURN_PERIODS = 500
 
 # Use a smaller value while testing and a larger value for the final figure.
-NUMBER_OF_BOOTSTRAPS = 10
+NUMBER_OF_BOOTSTRAPS = 100
 CONFIDENCE_LEVEL = 0.95
 RANDOM_SEED = 42
 
@@ -179,13 +213,14 @@ FIG_HEIGHT_IN = 4.8
 TITLE_FONTSIZE = 11
 AXIS_LABELSIZE = 11
 TICK_LABELSIZE = 10
-LEGEND_FONTSIZE = 9
+LEGEND_FONTSIZE = 12
 
 OBSERVATION_COLOR = "tab:blue"
-UNSEEN_COLOR = "tab:orange"
+RAW_UNSEEN_COLOR = "goldenrod"
+BIAS_CORRECTED_UNSEEN_COLOR = "goldenrod"
 
-# The two transparent confidence intervals will look darker where they overlap.
-CONFIDENCE_ALPHA = 0.20
+# Transparent intervals become darker where they overlap.
+CONFIDENCE_ALPHA = 0.18
 
 YMIN = 0.0
 YMAX = None
@@ -206,6 +241,14 @@ def validate_user_settings():
     }:
         raise ValueError(
             "REFERENCE_DATASET must be 'senorge' or 'era5'."
+        )
+
+    if X_AXIS_MODE not in {
+        "return_period",
+        "aep",
+    }:
+        raise ValueError(
+            "X_AXIS_MODE must be 'return_period' or 'aep'."
         )
 
     if EXTREME_VALUE_DISTRIBUTION not in {
@@ -326,13 +369,33 @@ def get_reference_variable():
     return ERA5_VARIABLE
 
 
+def get_reference_name():
+    """Return the publication-style name of the reference dataset."""
+
+    return {
+        "senorge": "SeNorge",
+        "era5": "ERA5",
+    }[REFERENCE_DATASET]
+
+
 def get_reference_label():
-    """Return a plot-friendly name for the selected reference dataset."""
+    """Return the plot label, including the observational year range."""
 
     if REFERENCE_DATASET == "senorge":
         return SENORGE_LABEL
 
     return ERA5_LABEL
+
+
+def get_bias_correction_reference():
+    """
+    Return the bias-correction reference.
+
+    This is intentionally tied to REFERENCE_DATASET so the bias-corrected
+    UNSEEN sample always uses the same reference as the plotted observations.
+    """
+
+    return REFERENCE_DATASET
 
 
 # =============================================================================
@@ -344,12 +407,7 @@ def split_usable_accumulated_leads(
     last_lead,
     number_of_bins,
 ):
-    """
-    Split usable accumulated ending leads into approximately equal bins.
-
-    Any extra leads are assigned to the later bins, matching the UNSEEN
-    sample-building script.
-    """
+    """Split usable accumulated ending leads into approximately equal bins."""
 
     number_of_leads = (
         last_lead
@@ -449,8 +507,8 @@ def get_selected_model_lead_range():
     ]
 
 
-def get_selected_model_variable():
-    """Return the maximum variable for the selected UNSEEN sample."""
+def get_raw_model_variable():
+    """Return the raw UNSEEN maximum variable."""
 
     lead_start, lead_end = (
         get_selected_model_lead_range()
@@ -459,6 +517,15 @@ def get_selected_model_variable():
     return (
         f"max_value_lead"
         f"{lead_start}_{lead_end}"
+    )
+
+
+def get_bias_corrected_model_variable():
+    """Return the bias-corrected UNSEEN maximum variable."""
+
+    return (
+        f"{get_raw_model_variable()}_bc_"
+        f"{get_bias_correction_reference()}"
     )
 
 
@@ -495,7 +562,7 @@ def lead_split_filename_label():
     )
 
 
-def get_model_sampling_label():
+def get_raw_model_sampling_label():
     """Return a readable name for the selected raw UNSEEN sample."""
 
     lead_start, lead_end = (
@@ -504,7 +571,7 @@ def get_model_sampling_label():
 
     if MODEL_SAMPLING_GROUP == "full":
         return (
-            f"UNSEEN, ending leads "
+            f"Raw UNSEEN, ending leads "
             f"{lead_start}-{lead_end}"
         )
 
@@ -516,8 +583,17 @@ def get_model_sampling_label():
     )
 
     return (
-        f"UNSEEN split {split_number}, "
+        f"Raw UNSEEN split {split_number}, "
         f"ending leads {lead_start}-{lead_end}"
+    )
+
+
+def get_bias_corrected_model_sampling_label():
+    """Return a readable name for the bias-corrected UNSEEN sample."""
+
+    return (
+        f"Bias-corrected UNSEEN "
+        f"({get_reference_label()} reference)"
     )
 
 
@@ -557,7 +633,7 @@ def make_reference_filename():
     )
 
 
-def make_model_filename():
+def make_raw_model_filename():
     """Construct the raw UNSEEN model filename."""
 
     lead_label = (
@@ -580,6 +656,29 @@ def make_model_filename():
     )
 
 
+def make_bias_corrected_model_filename():
+    """
+    Construct the bias-corrected UNSEEN filename.
+
+    The bias-correction script appends ``_bc_<reference>`` to the raw model
+    sample filename.
+    """
+
+    raw_filename = (
+        make_raw_model_filename()
+    )
+
+    stem, extension = os.path.splitext(
+        raw_filename
+    )
+
+    return (
+        f"{stem}_bc_"
+        f"{get_bias_correction_reference()}"
+        f"{extension}"
+    )
+
+
 def make_figure_filename():
     """Construct the output figure filename."""
 
@@ -590,7 +689,7 @@ def make_figure_filename():
     )
 
     filename = (
-        f"return-period-observations-unseen-"
+        f"{X_AXIS_MODE}-observations-raw-bc-unseen-"
         f"{get_distribution_name().lower()}-"
         f"{REFERENCE_DATASET}-"
         f"{CATCHMENT}-"
@@ -628,7 +727,20 @@ def read_reference_data(
     filename,
 ):
     """
-    Read the selected observational month and August 2023 Storm Hans value.
+    Read the selected observational month and the two possible reference events.
+
+    Returns
+    -------
+    years : ndarray
+        Years for SELECTED_MONTH.
+    values : ndarray
+        Finite observational values for SELECTED_MONTH.
+    storm_hans_value : float or None
+        August 2023 maximum from the reference dataset.
+    record_value : float or None
+        Highest value for SELECTED_MONTH during RECORD_START_YEAR-RECORD_END_YEAR.
+    record_year : int or None
+        Year in which record_value occurred.
     """
 
     variable = (
@@ -661,32 +773,46 @@ def read_reference_data(
             .load()
         )
 
-        hans_value = None
+        # Storm Hans is always the August 2023 maximum, independently of
+        # SELECTED_MONTH.
+        storm_hans_value = None
 
-        if PLOT_STORM_HANS:
+        try:
 
-            try:
-
-                hans_data = (
-                    ds[variable]
-                    .sel(
-                        year=2023,
-                        month=8,
-                    )
-                    .load()
+            hans_data = (
+                ds[variable]
+                .sel(
+                    year=2023,
+                    month=8,
                 )
+                .load()
+            )
 
-                candidate = float(
-                    hans_data.values
-                )
+            candidate = float(
+                hans_data.values
+            )
 
-                if np.isfinite(
-                    candidate
-                ):
-                    hans_value = candidate
+            if np.isfinite(
+                candidate
+            ):
+                storm_hans_value = candidate
 
-            except KeyError:
-                hans_value = None
+        except KeyError:
+            storm_hans_value = None
+
+        # "Record" means the highest value for the currently selected calendar
+        # month over 1957-2022.
+        record_data = (
+            ds[variable]
+            .sel(
+                year=slice(
+                    RECORD_START_YEAR,
+                    RECORD_END_YEAR,
+                ),
+                month=SELECTED_MONTH,
+            )
+            .load()
+        )
 
     years = np.asarray(
         selected_month_data[
@@ -703,10 +829,68 @@ def read_reference_data(
         values
     )
 
+    record_years = np.asarray(
+        record_data[
+            "year"
+        ].values
+    )
+
+    record_values = np.asarray(
+        record_data.values,
+        dtype=float,
+    )
+
+    record_finite = np.isfinite(
+        record_values
+    )
+
+    record_value = None
+    record_year = None
+
+    if np.any(
+        record_finite
+    ):
+
+        finite_record_values = (
+            record_values[
+                record_finite
+            ]
+        )
+
+        finite_record_years = (
+            record_years[
+                record_finite
+            ]
+        )
+
+        record_index = int(
+            np.argmax(
+                finite_record_values
+            )
+        )
+
+        record_value = float(
+            finite_record_values[
+                record_index
+            ]
+        )
+
+        record_year = int(
+            finite_record_years[
+                record_index
+            ]
+        )
+
     return (
-        years[finite],
-        values[finite],
-        hans_value,
+        years[
+            finite
+        ],
+        values[
+            finite
+        ],
+        storm_hans_value,
+        record_value,
+        record_year,
     )
 
 
@@ -754,9 +938,13 @@ def create_reference_fit_sample(
 def read_unseen_values(
     filename,
     variable,
+    dataset_name,
+    check_sample_count,
 ):
     """
-    Read finite UNSEEN values for SELECTED_MONTH from the selected model sample.
+    Read finite UNSEEN values for SELECTED_MONTH.
+
+    The same function is used for the raw and bias-corrected model samples.
     """
 
     with xr.open_dataset(
@@ -766,7 +954,7 @@ def read_unseen_values(
         check_variable_exists(
             ds,
             variable,
-            "raw UNSEEN dataset",
+            dataset_name,
         )
 
         values = (
@@ -790,46 +978,48 @@ def read_unseen_values(
 
         if values.size < 10:
             raise ValueError(
-                f"Fewer than 10 finite UNSEEN values were found "
-                f"for month {SELECTED_MONTH}."
+                f"Fewer than 10 finite values were found in "
+                f"{dataset_name} for month {SELECTED_MONTH}."
             )
 
-        sample_count_variable = (
-            get_selected_sample_count_variable()
-        )
+        if check_sample_count:
 
-        if sample_count_variable in ds:
-
-            stored_count = int(
-                ds[
-                    sample_count_variable
-                ]
-                .sel(
-                    month_of_year=SELECTED_MONTH
-                )
-                .values
+            sample_count_variable = (
+                get_selected_sample_count_variable()
             )
 
-            if stored_count != values.size:
+            if sample_count_variable in ds:
 
-                raise ValueError(
-                    f"Stored UNSEEN sample count ({stored_count}) "
-                    f"does not match the number of finite values "
-                    f"read ({values.size})."
+                stored_count = int(
+                    ds[
+                        sample_count_variable
+                    ]
+                    .sel(
+                        month_of_year=SELECTED_MONTH
+                    )
+                    .values
                 )
 
-            print(
-                f"UNSEEN sample-count check: "
-                f"{values.size} values, OK."
-            )
+                if stored_count != values.size:
 
-        else:
+                    raise ValueError(
+                        f"Stored sample count ({stored_count}) does not "
+                        f"match the number of finite values read "
+                        f"({values.size}) from {dataset_name}."
+                    )
 
-            print(
-                f"UNSEEN sample-count variable "
-                f"'{sample_count_variable}' was not found. "
-                f"Using {values.size} finite values."
-            )
+                print(
+                    f"{dataset_name} sample-count check: "
+                    f"{values.size} values, OK."
+                )
+
+            else:
+
+                print(
+                    f"Sample-count variable "
+                    f"'{sample_count_variable}' was not found in "
+                    f"{dataset_name}. Using {values.size} finite values."
+                )
 
     return values
 
@@ -1338,6 +1528,93 @@ def make_return_period_grid():
     )
 
 
+def convert_return_periods_to_plot_x(
+    return_periods,
+):
+    """
+    Convert return periods to the quantity displayed on the x-axis.
+
+    Return-period mode:
+        x = T
+
+    AEP mode:
+        x = 100 / T
+
+    where AEP is expressed as a percentage.
+    """
+
+    return_periods = np.asarray(
+        return_periods,
+        dtype=float,
+    )
+
+    if X_AXIS_MODE == "return_period":
+        return return_periods
+
+    return (
+        100.0
+        / return_periods
+    )
+
+
+def get_x_axis_label():
+    """Return the x-axis label for the selected display mode."""
+
+    if X_AXIS_MODE == "return_period":
+        return "Return period [years]"
+
+    return "Annual exceedance probability, AEP [%]"
+
+
+def format_x_axis(
+    ax,
+):
+    """
+    Apply x-axis scaling and limits.
+
+    Both return period and AEP are shown on logarithmic axes. For AEP, the
+    axis is reversed so common events are on the left and rare events are
+    on the right, matching the visual direction of a return-period plot.
+    """
+
+    ax.set_xscale(
+        "log"
+    )
+
+    if X_AXIS_MODE == "return_period":
+
+        ax.set_xlim(
+            0.8,
+            MAX_RETURN_PERIOD,
+        )
+
+    else:
+
+        minimum_aep = (
+            100.0
+            / MAX_RETURN_PERIOD
+        )
+
+        maximum_aep = (
+            100.0
+            / MIN_RETURN_PERIOD
+        )
+
+        ax.set_xlim(
+            maximum_aep,
+            minimum_aep,
+        )
+
+        def percent_formatter(x, pos):
+            if x <= 0:
+                return ""
+            return f"{x:g}"
+
+        ax.xaxis.set_major_formatter(
+            FuncFormatter(percent_formatter)
+        )
+
+
 def calculate_empirical_return_periods(
     values,
 ):
@@ -1445,14 +1722,8 @@ def parametric_bootstrap_return_levels(
     """
     Estimate uncertainty in a fitted return-level curve.
 
-    The same procedure is used for observations and UNSEEN:
-
-    1. generate a sample from the fitted distribution with the same size as
-       the original sample;
-    2. refit the same distribution;
-    3. calculate its return-level curve;
-    4. repeat;
-    5. take percentile limits at each return period.
+    The same procedure is used for observations, raw UNSEEN, and
+    bias-corrected UNSEEN.
     """
 
     rng = np.random.default_rng(
@@ -1579,9 +1850,7 @@ def analyse_distribution(
     return_periods,
     random_seed,
 ):
-    """
-    Fit one sample and calculate everything needed for plotting/reporting.
-    """
+    """Fit one sample and calculate everything needed for plotting/reporting."""
 
     fitted_parameters = (
         fit_distribution(
@@ -1647,7 +1916,7 @@ def print_fit_summary(
     analysis,
     years=None,
 ):
-    """Print a summary for either the observational or UNSEEN fit."""
+    """Print a summary for one fitted distribution."""
 
     fitted_parameters = (
         analysis[
@@ -1766,11 +2035,16 @@ def print_fit_summary(
 def plot_return_period_curves(
     return_periods,
     observation_analysis,
-    unseen_analysis,
-    hans_value,
+    raw_unseen_analysis,
+    bias_corrected_unseen_analysis,
+    storm_hans_value,
+    record_value,
+    record_year,
     filename_out,
 ):
-    """Overlay observational and raw-UNSEEN return-period distributions."""
+    """
+    Overlay observations, raw UNSEEN, and bias-corrected UNSEEN distributions.
+    """
 
     fig, ax = plt.subplots(
         figsize=(
@@ -1779,9 +2053,48 @@ def plot_return_period_curves(
         )
     )
 
-    # Draw observational uncertainty.
+    # The distribution calculations are always performed in return-period
+    # space. Only the displayed x-coordinates are changed here.
+    plot_x = (
+        convert_return_periods_to_plot_x(
+            return_periods
+        )
+    )
+
+    observation_empirical_x = (
+        convert_return_periods_to_plot_x(
+            observation_analysis[
+                "empirical_return_periods"
+            ]
+        )
+    )
+
+    raw_unseen_empirical_x = (
+        convert_return_periods_to_plot_x(
+            raw_unseen_analysis[
+                "empirical_return_periods"
+            ]
+        )
+    )
+
+    bias_corrected_empirical_x = None
+
+    if bias_corrected_unseen_analysis is not None:
+
+        bias_corrected_empirical_x = (
+            convert_return_periods_to_plot_x(
+                bias_corrected_unseen_analysis[
+                    "empirical_return_periods"
+                ]
+            )
+        )
+
+    # -------------------------------------------------------------------------
+    # Confidence intervals
+    # -------------------------------------------------------------------------
+
     ax.fill_between(
-        return_periods,
+        plot_x,
         observation_analysis[
             "lower_confidence_limit"
         ],
@@ -1791,115 +2104,158 @@ def plot_return_period_curves(
         color=OBSERVATION_COLOR,
         alpha=CONFIDENCE_ALPHA,
         linewidth=0,
-        label=(
-            f"{get_reference_label()} "
-            f"{int(CONFIDENCE_LEVEL * 100)}% interval"
-        ),
+        label="_nolegend_",
         zorder=1,
     )
 
-    # Draw UNSEEN uncertainty on top. Because both fills are transparent,
-    # their overlap appears darker.
     ax.fill_between(
-        return_periods,
-        unseen_analysis[
+        plot_x,
+        raw_unseen_analysis[
             "lower_confidence_limit"
         ],
-        unseen_analysis[
+        raw_unseen_analysis[
             "upper_confidence_limit"
         ],
-        color=UNSEEN_COLOR,
+        color=RAW_UNSEEN_COLOR,
         alpha=CONFIDENCE_ALPHA,
         linewidth=0,
-        label=(
-            f"UNSEEN "
-            f"{int(CONFIDENCE_LEVEL * 100)}% interval"
-        ),
+        label="_nolegend_",
         zorder=1,
     )
 
+    if bias_corrected_unseen_analysis is not None:
+
+        ax.fill_between(
+            plot_x,
+            bias_corrected_unseen_analysis[
+                "lower_confidence_limit"
+            ],
+            bias_corrected_unseen_analysis[
+                "upper_confidence_limit"
+            ],
+            color=BIAS_CORRECTED_UNSEEN_COLOR,
+            alpha=CONFIDENCE_ALPHA,
+            linewidth=0,
+            label="_nolegend_",
+            zorder=1,
+        )
+
+    # -------------------------------------------------------------------------
+    # Fitted curves
+    # -------------------------------------------------------------------------
+
     ax.plot(
-        return_periods,
+        plot_x,
         observation_analysis[
             "fitted_return_levels"
         ],
         color=OBSERVATION_COLOR,
         linewidth=2.0,
-        label=(
-            f"{get_reference_label()} "
-            f"{get_distribution_name()} fit"
-        ),
-        zorder=3,
+        label="_nolegend_",
+        zorder=4,
     )
 
     ax.plot(
-        return_periods,
-        unseen_analysis[
+        plot_x,
+        raw_unseen_analysis[
             "fitted_return_levels"
         ],
-        color=UNSEEN_COLOR,
+        color=RAW_UNSEEN_COLOR,
         linewidth=2.0,
-        label=(
-            f"UNSEEN "
-            f"{get_distribution_name()} fit"
-        ),
-        zorder=3,
+        label="_nolegend_",
+        zorder=4,
     )
+
+    if bias_corrected_unseen_analysis is not None:
+
+        ax.plot(
+            plot_x,
+            bias_corrected_unseen_analysis[
+                "fitted_return_levels"
+            ],
+            color=BIAS_CORRECTED_UNSEEN_COLOR,
+            linewidth=2.0,
+            label="_nolegend_",
+            zorder=4,
+        )
+
+    # -------------------------------------------------------------------------
+    # Empirical values
+    # -------------------------------------------------------------------------
 
     ax.scatter(
-        observation_analysis[
-            "empirical_return_periods"
-        ],
+        observation_empirical_x,
         observation_analysis[
             "empirical_values"
         ],
-        facecolors="none",
+        facecolors='none',
         edgecolors=OBSERVATION_COLOR,
         linewidths=1.0,
         s=28,
-        zorder=4,
-        label=(
-            f"{get_reference_label()} empirical values"
-        ),
+        zorder=5,
+        label="_nolegend_",
     )
 
     ax.scatter(
-        unseen_analysis[
-            "empirical_return_periods"
-        ],
-        unseen_analysis[
+        raw_unseen_empirical_x,
+        raw_unseen_analysis[
             "empirical_values"
         ],
-        facecolors="none",
-        edgecolors=UNSEEN_COLOR,
-        linewidths=0.7,
-        s=10,
-        alpha=0.40,
+        facecolors='none',
+        edgecolors=RAW_UNSEEN_COLOR,
+        linewidths=1.0,
+        s=28,
+        alpha=1.0,
         zorder=2,
-        label="UNSEEN empirical values",
+        label="_nolegend_",
     )
 
-    if hans_value is not None:
+    if bias_corrected_unseen_analysis is not None:
 
-        ax.axhline(
-            y=hans_value,
-            color=OBSERVATION_COLOR,
-            linestyle="--",
-            linewidth=1.5,
-            zorder=4,
-            label=(
-                f"Storm Hans "
-                f"({STORM_HANS_DATE})"
-            ),
+        ax.scatter(
+            bias_corrected_empirical_x,
+            bias_corrected_unseen_analysis[
+                "empirical_values"
+            ],
+            facecolors='none',
+            edgecolors=BIAS_CORRECTED_UNSEEN_COLOR,
+            linewidths=1.0,
+            s=28,
+            alpha=0.35,
+            zorder=2,
+            label="_nolegend_",
         )
 
-    ax.set_xscale(
-        "log"
-    )
+    # -------------------------------------------------------------------------
+    # Observational reference events
+    # -------------------------------------------------------------------------
 
-    ax.set_xlim(
-        MIN_RETURN_PERIOD,
-        MAX_RETURN_PERIOD,
+    if storm_hans_value is not None:
+        ax.axhline(
+            y=storm_hans_value,
+            color=OBSERVATION_COLOR,
+            linestyle=STORM_HANS_LINESTYLE,
+            linewidth=1.5,
+            zorder=5,
+            label="_nolegend_",
+        )
+
+    if record_value is not None:
+        ax.axhline(
+            y=record_value,
+            color=OBSERVATION_COLOR,
+            linestyle=RECORD_LINESTYLE,
+            linewidth=1.8,
+            zorder=5,
+            label="_nolegend_",
+        )
+
+    # -------------------------------------------------------------------------
+    # Axes
+    # -------------------------------------------------------------------------
+
+    format_x_axis(
+        ax
     )
 
     ax.set_ylim(
@@ -1908,14 +2264,13 @@ def plot_return_period_curves(
     )
 
     ax.set_xlabel(
-        "Return period (years)",
+        get_x_axis_label(),
         fontsize=AXIS_LABELSIZE,
     )
 
     ax.set_ylabel(
         (
-            f"{X_DAYS}-day accumulated "
-            "precipitation (mm)"
+            f"Maximum monthly {X_DAYS}-day precipitation [mm]"
         ),
         fontsize=AXIS_LABELSIZE,
     )
@@ -1924,7 +2279,8 @@ def plot_return_period_curves(
         (
             f"{MONTH_NAMES[SELECTED_MONTH - 1]} "
             f"{X_DAYS}-day precipitation maxima\n"
-            f"{get_reference_label()} and raw UNSEEN, "
+            f"{get_reference_label()}, raw UNSEEN, and "
+            f"bias-corrected UNSEEN; "
             f"{get_distribution_name()} fit"
         ),
         fontsize=TITLE_FONTSIZE,
@@ -1948,7 +2304,67 @@ def plot_return_period_curves(
         False
     )
 
+    # Keep the legend deliberately simple and use four spaces throughout.
+    legend_handles = [
+        Line2D(
+            [0],
+            [0],
+            color=OBSERVATION_COLOR,
+            linewidth=2.0,
+            label=get_reference_label(),
+        )
+    ]
+
+    if storm_hans_value is not None:
+        legend_handles.append(
+            Line2D(
+                [0],
+                [0],
+                color=OBSERVATION_COLOR,
+                linestyle=STORM_HANS_LINESTYLE,
+                linewidth=1.5,
+                label=f"{get_reference_name()} Storm Hans 2023",
+            )
+        )
+
+    if record_value is not None:
+        legend_handles.append(
+            Line2D(
+                [0],
+                [0],
+                color=OBSERVATION_COLOR,
+                linestyle=RECORD_LINESTYLE,
+                linewidth=1.8,
+                label=(
+                    f"{get_reference_name()} record "
+                    f"{RECORD_START_YEAR}-{RECORD_END_YEAR}"
+                ),
+            )
+        )
+
+    legend_handles.append(
+        Line2D(
+            [0],
+            [0],
+            color=RAW_UNSEEN_COLOR,
+            linewidth=2.0,
+            label="Model raw",
+        )
+    )
+
+    if bias_corrected_unseen_analysis is not None:
+        legend_handles.append(
+            Line2D(
+                [0],
+                [0],
+                color=BIAS_CORRECTED_UNSEEN_COLOR,
+                linewidth=2.0,
+                label="Model BC",
+            )
+        )
+
     ax.legend(
+        handles=legend_handles,
         frameon=False,
         fontsize=LEGEND_FONTSIZE,
     )
@@ -1977,7 +2393,7 @@ def plot_return_period_curves(
 # =============================================================================
 
 def main():
-    """Run the observational and raw-UNSEEN return-period analysis."""
+    """Run the observational, raw-UNSEEN, and bias-corrected analysis."""
 
     validate_user_settings()
 
@@ -1985,16 +2401,24 @@ def main():
         make_reference_filename()
     )
 
-    filename_model = (
-        make_model_filename()
+    filename_raw_model = (
+        make_raw_model_filename()
+    )
+
+    filename_bias_corrected_model = (
+        make_bias_corrected_model_filename()
     )
 
     filename_out = (
         make_figure_filename()
     )
 
-    model_variable = (
-        get_selected_model_variable()
+    raw_model_variable = (
+        get_raw_model_variable()
+    )
+
+    bias_corrected_model_variable = (
+        get_bias_corrected_model_variable()
     )
 
     print(
@@ -2009,32 +2433,79 @@ def main():
         "Reading raw UNSEEN file:"
     )
     print(
-        filename_model
+        filename_raw_model
     )
+
+    if PLOT_BIAS_CORRECTED_UNSEEN:
+
+        print()
+        print(
+            "Reading bias-corrected UNSEEN file:"
+        )
+        print(
+            filename_bias_corrected_model
+        )
 
     print()
     print(
-        f"UNSEEN variable:  "
-        f"{model_variable}"
+        f"Raw UNSEEN variable:          "
+        f"{raw_model_variable}"
     )
 
+    if PLOT_BIAS_CORRECTED_UNSEEN:
+
+        print(
+            f"Bias-corrected variable:      "
+            f"{bias_corrected_model_variable}"
+        )
+
+        print(
+            f"Bias-correction reference:    "
+            f"{get_reference_label()}"
+        )
+
     print(
-        f"Sampling group:   "
+        f"Sampling group:               "
         f"{MODEL_SAMPLING_GROUP}"
     )
 
     print(
-        f"Distribution:     "
+        f"Distribution:                 "
         f"{get_distribution_name()}"
+    )
+
+    print(
+        f"X-axis:                       "
+        f"{X_AXIS_MODE}"
     )
 
     (
         years,
         all_reference_values,
-        hans_value,
+        storm_hans_value,
+        record_value,
+        record_year,
     ) = read_reference_data(
         filename_reference
     )
+
+    print()
+    if storm_hans_value is not None:
+        print(
+            f"Storm Hans August 2023:        "
+            f"{storm_hans_value:.3f} mm"
+        )
+
+    if record_value is not None:
+        print(
+            f"{MONTH_NAMES[SELECTED_MONTH - 1]} record "
+            f"{RECORD_START_YEAR}-{RECORD_END_YEAR}: "
+            f"{record_value:.3f} mm"
+        )
+        print(
+            f"Record year:                   "
+            f"{record_year}"
+        )
 
     (
         fit_years,
@@ -2044,12 +2515,51 @@ def main():
         all_reference_values,
     )
 
-    unseen_values = (
+    raw_unseen_values = (
         read_unseen_values(
-            filename=filename_model,
-            variable=model_variable,
+            filename=filename_raw_model,
+            variable=raw_model_variable,
+            dataset_name="raw UNSEEN dataset",
+            check_sample_count=True,
         )
     )
+
+    bias_corrected_unseen_values = None
+
+    if PLOT_BIAS_CORRECTED_UNSEEN:
+
+        bias_corrected_unseen_values = (
+            read_unseen_values(
+                filename=filename_bias_corrected_model,
+                variable=bias_corrected_model_variable,
+                dataset_name=(
+                    f"bias-corrected UNSEEN dataset "
+                    f"({get_reference_label()} reference)"
+                ),
+                check_sample_count=False,
+            )
+        )
+
+        if (
+            bias_corrected_unseen_values.size
+            != raw_unseen_values.size
+        ):
+
+            print()
+            print(
+                "Warning: raw and bias-corrected UNSEEN samples "
+                "do not contain the same number of finite values."
+            )
+
+            print(
+                f"Raw sample size:             "
+                f"{raw_unseen_values.size}"
+            )
+
+            print(
+                f"Bias-corrected sample size:  "
+                f"{bias_corrected_unseen_values.size}"
+            )
 
     return_periods = (
         make_return_period_grid()
@@ -2063,14 +2573,25 @@ def main():
         )
     )
 
-    # Use a different reproducible seed for the UNSEEN bootstrap.
-    unseen_analysis = (
+    raw_unseen_analysis = (
         analyse_distribution(
-            values=unseen_values,
+            values=raw_unseen_values,
             return_periods=return_periods,
             random_seed=RANDOM_SEED + 1,
         )
     )
+
+    bias_corrected_unseen_analysis = None
+
+    if PLOT_BIAS_CORRECTED_UNSEEN:
+
+        bias_corrected_unseen_analysis = (
+            analyse_distribution(
+                values=bias_corrected_unseen_values,
+                return_periods=return_periods,
+                random_seed=RANDOM_SEED + 2,
+            )
+        )
 
     print_fit_summary(
         label=get_reference_label(),
@@ -2079,54 +2600,75 @@ def main():
     )
 
     print_fit_summary(
-        label=get_model_sampling_label(),
-        analysis=unseen_analysis,
+        label=get_raw_model_sampling_label(),
+        analysis=raw_unseen_analysis,
     )
 
-    if hans_value is not None:
+    if bias_corrected_unseen_analysis is not None:
 
-        hans_return_period_reference = (
-            calculate_event_return_period(
-                event_value=hans_value,
-                fitted_parameters=observation_analysis[
-                    "fitted_parameters"
-                ],
-            )
+        print_fit_summary(
+            label=get_bias_corrected_model_sampling_label(),
+            analysis=bias_corrected_unseen_analysis,
         )
 
-        hans_return_period_unseen = (
-            calculate_event_return_period(
-                event_value=hans_value,
-                fitted_parameters=unseen_analysis[
-                    "fitted_parameters"
-                ],
-            )
+    reference_events = [
+        ("Storm Hans 2023", storm_hans_value),
+        (
+            f"{MONTH_NAMES[SELECTED_MONTH - 1]} record "
+            f"{RECORD_START_YEAR}-{RECORD_END_YEAR}",
+            record_value,
+        ),
+    ]
+
+    for event_label, event_value in reference_events:
+
+        if event_value is None:
+            continue
+
+        event_return_period_reference = calculate_event_return_period(
+            event_value=event_value,
+            fitted_parameters=observation_analysis["fitted_parameters"],
+        )
+
+        event_return_period_raw = calculate_event_return_period(
+            event_value=event_value,
+            fitted_parameters=raw_unseen_analysis["fitted_parameters"],
         )
 
         print()
+        print(f"{event_label} value: {event_value:.3f} mm")
         print(
-            f"Storm Hans "
-            f"({get_reference_label()}) value: "
-            f"{hans_value:.3f} mm"
-        )
-
-        print(
-            f"Hans return period from "
+            f"{event_label} return period from "
             f"{get_reference_label()} fit: "
-            f"{hans_return_period_reference:.2f} years"
+            f"{event_return_period_reference:.2f} years"
+        )
+        print(
+            f"{event_label} return period from raw UNSEEN fit: "
+            f"{event_return_period_raw:.2f} years"
         )
 
-        print(
-            f"Hans return period from "
-            f"UNSEEN fit: "
-            f"{hans_return_period_unseen:.2f} years"
-        )
+        if bias_corrected_unseen_analysis is not None:
+            event_return_period_bc = calculate_event_return_period(
+                event_value=event_value,
+                fitted_parameters=(
+                    bias_corrected_unseen_analysis["fitted_parameters"]
+                ),
+            )
+            print(
+                f"{event_label} return period from "
+                f"bias-corrected UNSEEN fit: "
+                f"{event_return_period_bc:.2f} years"
+            )
+
 
     plot_return_period_curves(
         return_periods=return_periods,
         observation_analysis=observation_analysis,
-        unseen_analysis=unseen_analysis,
-        hans_value=hans_value,
+        raw_unseen_analysis=raw_unseen_analysis,
+        bias_corrected_unseen_analysis=bias_corrected_unseen_analysis,
+        storm_hans_value=storm_hans_value,
+        record_value=record_value,
+        record_year=record_year,
         filename_out=filename_out,
     )
 

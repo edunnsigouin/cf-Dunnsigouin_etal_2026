@@ -33,8 +33,9 @@ For observations, raw UNSEEN, and bias-corrected UNSEEN, this script:
 All three confidence intervals are drawn with transparent shading. Where the
 bands overlap, the colors naturally combine into darker regions.
 
-Storm Hans is always taken from the August 2023 observational maximum and can
-optionally be plotted as a horizontal line, regardless of SELECTED_MONTH.
+Two horizontal reference lines are plotted: the August 2023 Storm Hans
+maximum and the highest reference-dataset value for SELECTED_MONTH during
+1957-2022.
 
 Important
 ---------
@@ -71,7 +72,7 @@ from Dunnsigouin_etal_2026 import config
 # Options:
 #     "senorge"
 #     "era5"
-REFERENCE_DATASET = "senorge"
+REFERENCE_DATASET = "era5"
 
 CATCHMENT = "regine_drammen"
 X_DAYS = 2
@@ -85,10 +86,10 @@ OBSERVATION_YEARS = [
 EXCLUDE_2023_FROM_FIT = True
 
 SENORGE_VARIABLE = "rr"
-SENORGE_LABEL = "SeNorge"
+SENORGE_LABEL = f"SeNorge {OBSERVATION_YEARS[0]}-{OBSERVATION_YEARS[-1]}"
 
 ERA5_VARIABLE = "tp24"
-ERA5_LABEL = "ERA5"
+ERA5_LABEL = f"ERA5 {OBSERVATION_YEARS[0]}-{OBSERVATION_YEARS[-1]}"
 ERA5_GRID = "0.5x0.5"
 
 
@@ -118,7 +119,7 @@ NUMBER_OF_LEAD_BINS = 2
 MODEL_SAMPLING_GROUP = "full"
 
 # Plot the bias-corrected UNSEEN sample as the third distribution.
-PLOT_BIAS_CORRECTED_UNSEEN = True
+PLOT_BIAS_CORRECTED_UNSEEN = False
 
 
 # -----------------------------------------------------------------------------
@@ -137,7 +138,7 @@ EXTREME_VALUE_DISTRIBUTION = 2
 # -----------------------------------------------------------------------------
 
 # 1 = January, ..., 8 = August, ..., 12 = December.
-SELECTED_MONTH = 8
+SELECTED_MONTH = 5
 
 MONTH_NAMES = [
     "January",
@@ -156,11 +157,18 @@ MONTH_NAMES = [
 
 
 # -----------------------------------------------------------------------------
-# Storm Hans
+# Horizontal reference lines
 # -----------------------------------------------------------------------------
 
+# Both observational reference events are plotted:
+# 1. Storm Hans: August 2023 maximum.
+# 2. Record: highest value for SELECTED_MONTH during 1957-2022.
 STORM_HANS_DATE = "2023-08-08"
-PLOT_STORM_HANS = True
+RECORD_START_YEAR = 1957
+RECORD_END_YEAR = 2022
+
+STORM_HANS_LINESTYLE = "--"
+RECORD_LINESTYLE = ":"
 
 
 # -----------------------------------------------------------------------------
@@ -207,7 +215,7 @@ TICK_LABELSIZE = 10
 LEGEND_FONTSIZE = 12
 
 OBSERVATION_COLOR = "tab:blue"
-RAW_UNSEEN_COLOR = "k"
+RAW_UNSEEN_COLOR = "goldenrod"
 BIAS_CORRECTED_UNSEEN_COLOR = "goldenrod"
 
 # Transparent intervals become darker where they overlap.
@@ -227,7 +235,7 @@ def validate_user_settings():
     """Check user-defined settings before doing any calculations."""
 
     if REFERENCE_DATASET not in {
-        "senorge",
+        "SeNorge",
         "era5",
     }:
         raise ValueError(
@@ -354,7 +362,7 @@ def get_distribution_name():
 def get_reference_variable():
     """Return the variable name for the selected reference dataset."""
 
-    if REFERENCE_DATASET == "senorge":
+    if REFERENCE_DATASET == "SeNorge":
         return SENORGE_VARIABLE
 
     return ERA5_VARIABLE
@@ -363,7 +371,7 @@ def get_reference_variable():
 def get_reference_label():
     """Return a plot-friendly name for the selected reference dataset."""
 
-    if REFERENCE_DATASET == "senorge":
+    if REFERENCE_DATASET == "SeNorge":
         return SENORGE_LABEL
 
     return ERA5_LABEL
@@ -586,7 +594,7 @@ def get_bias_corrected_model_sampling_label():
 def make_reference_filename():
     """Construct the observational reference filename."""
 
-    if REFERENCE_DATASET == "senorge":
+    if REFERENCE_DATASET == "SeNorge":
 
         filename = (
             f"distribution_monthly_extremes_"
@@ -708,7 +716,22 @@ def check_variable_exists(
 def read_reference_data(
     filename,
 ):
-    """Read the selected observational month and August 2023 Storm Hans."""
+    """
+    Read the selected observational month and the two possible reference events.
+
+    Returns
+    -------
+    years : ndarray
+        Years for SELECTED_MONTH.
+    values : ndarray
+        Finite observational values for SELECTED_MONTH.
+    storm_hans_value : float or None
+        August 2023 maximum from the reference dataset.
+    record_value : float or None
+        Highest value for SELECTED_MONTH during RECORD_START_YEAR-RECORD_END_YEAR.
+    record_year : int or None
+        Year in which record_value occurred.
+    """
 
     variable = (
         get_reference_variable()
@@ -740,32 +763,46 @@ def read_reference_data(
             .load()
         )
 
-        hans_value = None
+        # Storm Hans is always the August 2023 maximum, independently of
+        # SELECTED_MONTH.
+        storm_hans_value = None
 
-        if PLOT_STORM_HANS:
+        try:
 
-            try:
-
-                hans_data = (
-                    ds[variable]
-                    .sel(
-                        year=2023,
-                        month=8,
-                    )
-                    .load()
+            hans_data = (
+                ds[variable]
+                .sel(
+                    year=2023,
+                    month=8,
                 )
+                .load()
+            )
 
-                candidate = float(
-                    hans_data.values
-                )
+            candidate = float(
+                hans_data.values
+            )
 
-                if np.isfinite(
-                    candidate
-                ):
-                    hans_value = candidate
+            if np.isfinite(
+                candidate
+            ):
+                storm_hans_value = candidate
 
-            except KeyError:
-                hans_value = None
+        except KeyError:
+            storm_hans_value = None
+
+        # "Record" means the highest value for the currently selected calendar
+        # month over 1957-2022.
+        record_data = (
+            ds[variable]
+            .sel(
+                year=slice(
+                    RECORD_START_YEAR,
+                    RECORD_END_YEAR,
+                ),
+                month=SELECTED_MONTH,
+            )
+            .load()
+        )
 
     years = np.asarray(
         selected_month_data[
@@ -782,10 +819,68 @@ def read_reference_data(
         values
     )
 
+    record_years = np.asarray(
+        record_data[
+            "year"
+        ].values
+    )
+
+    record_values = np.asarray(
+        record_data.values,
+        dtype=float,
+    )
+
+    record_finite = np.isfinite(
+        record_values
+    )
+
+    record_value = None
+    record_year = None
+
+    if np.any(
+        record_finite
+    ):
+
+        finite_record_values = (
+            record_values[
+                record_finite
+            ]
+        )
+
+        finite_record_years = (
+            record_years[
+                record_finite
+            ]
+        )
+
+        record_index = int(
+            np.argmax(
+                finite_record_values
+            )
+        )
+
+        record_value = float(
+            finite_record_values[
+                record_index
+            ]
+        )
+
+        record_year = int(
+            finite_record_years[
+                record_index
+            ]
+        )
+
     return (
-        years[finite],
-        values[finite],
-        hans_value,
+        years[
+            finite
+        ],
+        values[
+            finite
+        ],
+        storm_hans_value,
+        record_value,
+        record_year,
     )
 
 
@@ -1456,9 +1551,9 @@ def get_x_axis_label():
     """Return the x-axis label for the selected display mode."""
 
     if X_AXIS_MODE == "return_period":
-        return "Return period (years)"
+        return "Return period [years]"
 
-    return "Annual exceedance probability, AEP (%)"
+    return "Annual exceedance probability, AEP [%]"
 
 
 def format_x_axis(
@@ -1923,7 +2018,9 @@ def plot_return_period_curves(
     observation_analysis,
     raw_unseen_analysis,
     bias_corrected_unseen_analysis,
-    hans_value,
+    storm_hans_value,
+    record_value,
+    record_year,
     filename_out,
 ):
     """
@@ -2072,7 +2169,7 @@ def plot_return_period_curves(
         observation_analysis[
             "empirical_values"
         ],
-        facecolors="none",
+        facecolors='none',
         edgecolors=OBSERVATION_COLOR,
         linewidths=1.0,
         s=28,
@@ -2085,7 +2182,7 @@ def plot_return_period_curves(
         raw_unseen_analysis[
             "empirical_values"
         ],
-        facecolors="none",
+        facecolors='none',
         edgecolors=RAW_UNSEEN_COLOR,
         linewidths=1.0,
         s=28,
@@ -2101,26 +2198,35 @@ def plot_return_period_curves(
             bias_corrected_unseen_analysis[
                 "empirical_values"
             ],
-            facecolors="none",
+            facecolors='none',
             edgecolors=BIAS_CORRECTED_UNSEEN_COLOR,
             linewidths=1.0,
             s=28,
-            alpha=1.0,
+            alpha=0.35,
             zorder=2,
             label="_nolegend_",
         )
 
     # -------------------------------------------------------------------------
-    # Storm Hans
+    # Observational reference events
     # -------------------------------------------------------------------------
 
-    if hans_value is not None:
-
+    if storm_hans_value is not None:
         ax.axhline(
-            y=hans_value,
+            y=storm_hans_value,
             color=OBSERVATION_COLOR,
-            linestyle="--",
+            linestyle=STORM_HANS_LINESTYLE,
             linewidth=1.5,
+            zorder=5,
+            label="_nolegend_",
+        )
+
+    if record_value is not None:
+        ax.axhline(
+            y=record_value,
+            color=OBSERVATION_COLOR,
+            linestyle=RECORD_LINESTYLE,
+            linewidth=1.8,
             zorder=5,
             label="_nolegend_",
         )
@@ -2145,8 +2251,7 @@ def plot_return_period_curves(
 
     ax.set_ylabel(
         (
-            f"{X_DAYS}-day accumulated "
-            "precipitation (mm)"
+            f"Maximum monthly {X_DAYS}-day precipitation [mm]"
         ),
         fontsize=AXIS_LABELSIZE,
     )
@@ -2180,7 +2285,7 @@ def plot_return_period_curves(
         False
     )
 
-    # Keep the legend deliberately simple: one entry per dataset.
+    # Keep the legend deliberately simple and use four spaces throughout.
     legend_handles = [
         Line2D(
             [0],
@@ -2188,15 +2293,45 @@ def plot_return_period_curves(
             color=OBSERVATION_COLOR,
             linewidth=2.0,
             label=get_reference_label(),
-        ),
+        )
+    ]
+
+    if storm_hans_value is not None:
+        legend_handles.append(
+            Line2D(
+                [0],
+                [0],
+                color=OBSERVATION_COLOR,
+                linestyle=STORM_HANS_LINESTYLE,
+                linewidth=1.5,
+                label=f"{REFERENCE_DATASET} Storm Hans 2023",
+            )
+        )
+
+    if record_value is not None:
+        legend_handles.append(
+            Line2D(
+                [0],
+                [0],
+                color=OBSERVATION_COLOR,
+                linestyle=RECORD_LINESTYLE,
+                linewidth=1.8,
+                label=(
+                    f"{REFERENCE_DATASET} record "
+                    f"{RECORD_START_YEAR}-{RECORD_END_YEAR}"
+                ),
+            )
+        )
+
+    legend_handles.append(
         Line2D(
             [0],
             [0],
             color=RAW_UNSEEN_COLOR,
             linewidth=2.0,
             label="Model raw",
-        ),
-    ]
+        )
+    )
 
     if bias_corrected_unseen_analysis is not None:
         legend_handles.append(
@@ -2328,10 +2463,30 @@ def main():
     (
         years,
         all_reference_values,
-        hans_value,
+        storm_hans_value,
+        record_value,
+        record_year,
     ) = read_reference_data(
         filename_reference
     )
+
+    print()
+    if storm_hans_value is not None:
+        print(
+            f"Storm Hans August 2023:        "
+            f"{storm_hans_value:.3f} mm"
+        )
+
+    if record_value is not None:
+        print(
+            f"{MONTH_NAMES[SELECTED_MONTH - 1]} record "
+            f"{RECORD_START_YEAR}-{RECORD_END_YEAR}: "
+            f"{record_value:.3f} mm"
+        )
+        print(
+            f"Record year:                   "
+            f"{record_year}"
+        )
 
     (
         fit_years,
@@ -2437,68 +2592,64 @@ def main():
             analysis=bias_corrected_unseen_analysis,
         )
 
-    if hans_value is not None:
+    reference_events = [
+        ("Storm Hans 2023", storm_hans_value),
+        (
+            f"{MONTH_NAMES[SELECTED_MONTH - 1]} record "
+            f"{RECORD_START_YEAR}-{RECORD_END_YEAR}",
+            record_value,
+        ),
+    ]
 
-        hans_return_period_reference = (
-            calculate_event_return_period(
-                event_value=hans_value,
-                fitted_parameters=observation_analysis[
-                    "fitted_parameters"
-                ],
-            )
+    for event_label, event_value in reference_events:
+
+        if event_value is None:
+            continue
+
+        event_return_period_reference = calculate_event_return_period(
+            event_value=event_value,
+            fitted_parameters=observation_analysis["fitted_parameters"],
         )
 
-        hans_return_period_raw = (
-            calculate_event_return_period(
-                event_value=hans_value,
-                fitted_parameters=raw_unseen_analysis[
-                    "fitted_parameters"
-                ],
-            )
+        event_return_period_raw = calculate_event_return_period(
+            event_value=event_value,
+            fitted_parameters=raw_unseen_analysis["fitted_parameters"],
         )
 
         print()
+        print(f"{event_label} value: {event_value:.3f} mm")
         print(
-            f"Storm Hans "
-            f"({get_reference_label()}) value: "
-            f"{hans_value:.3f} mm"
-        )
-
-        print(
-            f"Hans return period from "
+            f"{event_label} return period from "
             f"{get_reference_label()} fit: "
-            f"{hans_return_period_reference:.2f} years"
+            f"{event_return_period_reference:.2f} years"
         )
-
         print(
-            f"Hans return period from "
-            f"raw UNSEEN fit: "
-            f"{hans_return_period_raw:.2f} years"
+            f"{event_label} return period from raw UNSEEN fit: "
+            f"{event_return_period_raw:.2f} years"
         )
 
         if bias_corrected_unseen_analysis is not None:
-
-            hans_return_period_bc = (
-                calculate_event_return_period(
-                    event_value=hans_value,
-                    fitted_parameters=bias_corrected_unseen_analysis[
-                        "fitted_parameters"
-                    ],
-                )
+            event_return_period_bc = calculate_event_return_period(
+                event_value=event_value,
+                fitted_parameters=(
+                    bias_corrected_unseen_analysis["fitted_parameters"]
+                ),
             )
-
             print(
-                f"Hans return period from "
+                f"{event_label} return period from "
                 f"bias-corrected UNSEEN fit: "
-                f"{hans_return_period_bc:.2f} years"
+                f"{event_return_period_bc:.2f} years"
             )
+
 
     plot_return_period_curves(
         return_periods=return_periods,
         observation_analysis=observation_analysis,
         raw_unseen_analysis=raw_unseen_analysis,
         bias_corrected_unseen_analysis=bias_corrected_unseen_analysis,
-        hans_value=hans_value,
+        storm_hans_value=storm_hans_value,
+        record_value=record_value,
+        record_year=record_year,
         filename_out=filename_out,
     )
 

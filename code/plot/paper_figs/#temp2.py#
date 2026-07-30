@@ -33,8 +33,8 @@ For observations, raw UNSEEN, and bias-corrected UNSEEN, this script:
 All three confidence intervals are drawn with transparent shading. Where the
 bands overlap, the colors naturally combine into darker regions.
 
-The horizontal dashed reference line can show either the August 2023 Storm
-Hans maximum or the highest reference-dataset value for SELECTED_MONTH during
+Two horizontal reference lines are plotted: the August 2023 Storm Hans
+maximum and the highest reference-dataset value for SELECTED_MONTH during
 1957-2022.
 
 Important
@@ -53,6 +53,7 @@ import os
 
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
+from matplotlib.ticker import FuncFormatter
 import numpy as np
 import xarray as xr
 from scipy.optimize import minimize
@@ -86,10 +87,10 @@ OBSERVATION_YEARS = [
 EXCLUDE_2023_FROM_FIT = True
 
 SENORGE_VARIABLE = "rr"
-SENORGE_LABEL = "SeNorge"
+SENORGE_LABEL = f"SeNorge {OBSERVATION_YEARS[0]}-{OBSERVATION_YEARS[-1]}"
 
 ERA5_VARIABLE = "tp24"
-ERA5_LABEL = "ERA5"
+ERA5_LABEL = f"ERA5 {OBSERVATION_YEARS[0]}-{OBSERVATION_YEARS[-1]}"
 ERA5_GRID = "0.5x0.5"
 
 
@@ -119,7 +120,7 @@ NUMBER_OF_LEAD_BINS = 2
 MODEL_SAMPLING_GROUP = "full"
 
 # Plot the bias-corrected UNSEEN sample as the third distribution.
-PLOT_BIAS_CORRECTED_UNSEEN = True
+PLOT_BIAS_CORRECTED_UNSEEN = False
 
 
 # -----------------------------------------------------------------------------
@@ -157,20 +158,18 @@ MONTH_NAMES = [
 
 
 # -----------------------------------------------------------------------------
-# Horizontal reference line
+# Horizontal reference lines
 # -----------------------------------------------------------------------------
 
-# Choose which observational event to show as the horizontal dashed line.
-#
-# Options:
-#     "storm_hans" -> August 2023 maximum from the reference dataset
-#     "record"     -> highest value for SELECTED_MONTH during 1957-2022
-#
-HORIZONTAL_LINE_EVENT = "record"
-
+# Both observational reference events are plotted:
+# 1. Storm Hans: August 2023 maximum.
+# 2. Record: highest value for SELECTED_MONTH during 1957-2022.
 STORM_HANS_DATE = "2023-08-08"
 RECORD_START_YEAR = 1957
 RECORD_END_YEAR = 2022
+
+STORM_HANS_LINESTYLE = "--"
+RECORD_LINESTYLE = ":"
 
 
 # -----------------------------------------------------------------------------
@@ -187,7 +186,7 @@ RECORD_END_YEAR = 2022
 #
 #     AEP (%) = 100 / return period
 #
-X_AXIS_MODE = "return_period"
+X_AXIS_MODE = "aep"
 
 
 # -----------------------------------------------------------------------------
@@ -217,7 +216,7 @@ TICK_LABELSIZE = 10
 LEGEND_FONTSIZE = 12
 
 OBSERVATION_COLOR = "tab:blue"
-RAW_UNSEEN_COLOR = "k"
+RAW_UNSEEN_COLOR = "goldenrod"
 BIAS_CORRECTED_UNSEEN_COLOR = "goldenrod"
 
 # Transparent intervals become darker where they overlap.
@@ -250,14 +249,6 @@ def validate_user_settings():
     }:
         raise ValueError(
             "X_AXIS_MODE must be 'return_period' or 'aep'."
-        )
-
-    if HORIZONTAL_LINE_EVENT not in {
-        "storm_hans",
-        "record",
-    }:
-        raise ValueError(
-            "HORIZONTAL_LINE_EVENT must be 'storm_hans' or 'record'."
         )
 
     if EXTREME_VALUE_DISTRIBUTION not in {
@@ -378,8 +369,17 @@ def get_reference_variable():
     return ERA5_VARIABLE
 
 
+def get_reference_name():
+    """Return the publication-style name of the reference dataset."""
+
+    return {
+        "senorge": "SeNorge",
+        "era5": "ERA5",
+    }[REFERENCE_DATASET]
+
+
 def get_reference_label():
-    """Return a plot-friendly name for the selected reference dataset."""
+    """Return the plot label, including the observational year range."""
 
     if REFERENCE_DATASET == "senorge":
         return SENORGE_LABEL
@@ -893,40 +893,6 @@ def read_reference_data(
         record_year,
     )
 
-
-def get_horizontal_line_event(
-    storm_hans_value,
-    record_value,
-    record_year,
-):
-    """
-    Return the value and legend label for the selected horizontal reference line.
-    """
-
-    if HORIZONTAL_LINE_EVENT == "storm_hans":
-
-        if storm_hans_value is None:
-            raise ValueError(
-                "HORIZONTAL_LINE_EVENT is 'storm_hans', but no finite "
-                "August 2023 value was found in the reference dataset."
-            )
-
-        return (
-            storm_hans_value,
-            "Storm Hans 2023",
-        )
-
-    if record_value is None:
-        raise ValueError(
-            "HORIZONTAL_LINE_EVENT is 'record', but no finite "
-            f"{RECORD_START_YEAR}-{RECORD_END_YEAR} record was found "
-            "for SELECTED_MONTH."
-        )
-
-    return (
-        record_value,
-        f"Record {RECORD_START_YEAR}-{RECORD_END_YEAR}",
-    )
 
 def create_reference_fit_sample(
     years,
@@ -1597,7 +1563,7 @@ def get_x_axis_label():
     if X_AXIS_MODE == "return_period":
         return "Return period [years]"
 
-    return "Annual exceedance probability, AEP [%]"
+    return "Annual exceedance probability, AEP "
 
 
 def format_x_axis(
@@ -1637,6 +1603,15 @@ def format_x_axis(
         ax.set_xlim(
             maximum_aep,
             minimum_aep,
+        )
+
+        def percent_formatter(x, pos):
+            if x <= 0:
+                return ""
+            return f"{x:g}%"
+
+        ax.xaxis.set_major_formatter(
+            FuncFormatter(percent_formatter)
         )
 
 
@@ -2062,8 +2037,9 @@ def plot_return_period_curves(
     observation_analysis,
     raw_unseen_analysis,
     bias_corrected_unseen_analysis,
-    reference_line_value,
-    reference_line_label,
+    storm_hans_value,
+    record_value,
+    record_year,
     filename_out,
 ):
     """
@@ -2212,7 +2188,7 @@ def plot_return_period_curves(
         observation_analysis[
             "empirical_values"
         ],
-        facecolors="none",
+        facecolors='none',
         edgecolors=OBSERVATION_COLOR,
         linewidths=1.0,
         s=28,
@@ -2225,7 +2201,7 @@ def plot_return_period_curves(
         raw_unseen_analysis[
             "empirical_values"
         ],
-        facecolors="none",
+        facecolors='none',
         edgecolors=RAW_UNSEEN_COLOR,
         linewidths=1.0,
         s=28,
@@ -2241,26 +2217,35 @@ def plot_return_period_curves(
             bias_corrected_unseen_analysis[
                 "empirical_values"
             ],
-            facecolors="none",
+            facecolors='none',
             edgecolors=BIAS_CORRECTED_UNSEEN_COLOR,
             linewidths=1.0,
             s=28,
-            alpha=1.0,
+            alpha=0.35,
             zorder=2,
             label="_nolegend_",
         )
 
     # -------------------------------------------------------------------------
-    # Selected observational reference event
+    # Observational reference events
     # -------------------------------------------------------------------------
 
-    if reference_line_value is not None:
-
+    if storm_hans_value is not None:
         ax.axhline(
-            y=reference_line_value,
+            y=storm_hans_value,
             color=OBSERVATION_COLOR,
-            linestyle="--",
+            linestyle=STORM_HANS_LINESTYLE,
             linewidth=1.5,
+            zorder=5,
+            label="_nolegend_",
+        )
+
+    if record_value is not None:
+        ax.axhline(
+            y=record_value,
+            color=OBSERVATION_COLOR,
+            linestyle=RECORD_LINESTYLE,
+            linewidth=1.8,
             zorder=5,
             label="_nolegend_",
         )
@@ -2319,7 +2304,7 @@ def plot_return_period_curves(
         False
     )
 
-    # Keep the legend deliberately simple: one entry per dataset.
+    # Keep the legend deliberately simple and use four spaces throughout.
     legend_handles = [
         Line2D(
             [0],
@@ -2327,15 +2312,45 @@ def plot_return_period_curves(
             color=OBSERVATION_COLOR,
             linewidth=2.0,
             label=get_reference_label(),
-        ),
+        )
+    ]
+
+    if storm_hans_value is not None:
+        legend_handles.append(
+            Line2D(
+                [0],
+                [0],
+                color=OBSERVATION_COLOR,
+                linestyle=STORM_HANS_LINESTYLE,
+                linewidth=1.5,
+                label=f"{get_reference_name()} Storm Hans 2023",
+            )
+        )
+
+    if record_value is not None:
+        legend_handles.append(
+            Line2D(
+                [0],
+                [0],
+                color=OBSERVATION_COLOR,
+                linestyle=RECORD_LINESTYLE,
+                linewidth=1.8,
+                label=(
+                    f"{get_reference_name()} record "
+                    f"{RECORD_START_YEAR}-{RECORD_END_YEAR}"
+                ),
+            )
+        )
+
+    legend_handles.append(
         Line2D(
             [0],
             [0],
             color=RAW_UNSEEN_COLOR,
             linewidth=2.0,
             label="Model raw",
-        ),
-    ]
+        )
+    )
 
     if bias_corrected_unseen_analysis is not None:
         legend_handles.append(
@@ -2347,17 +2362,6 @@ def plot_return_period_curves(
                 label="Model BC",
             )
         )
-
-    legend_handles.append(
-        Line2D(
-            [0],
-            [0],
-            color=OBSERVATION_COLOR,
-            linestyle="--",
-            linewidth=1.5,
-            label=reference_line_label,
-        )
-    )
 
     ax.legend(
         handles=legend_handles,
@@ -2485,27 +2489,19 @@ def main():
         filename_reference
     )
 
-    (
-        reference_line_value,
-        reference_line_label,
-    ) = get_horizontal_line_event(
-        storm_hans_value=storm_hans_value,
-        record_value=record_value,
-        record_year=record_year,
-    )
-
     print()
-    print(
-        f"Horizontal line:               "
-        f"{reference_line_label}"
-    )
+    if storm_hans_value is not None:
+        print(
+            f"Storm Hans August 2023:        "
+            f"{storm_hans_value:.3f} mm"
+        )
 
-    print(
-        f"Horizontal-line value:         "
-        f"{reference_line_value:.3f} mm"
-    )
-
-    if HORIZONTAL_LINE_EVENT == "record":
+    if record_value is not None:
+        print(
+            f"{MONTH_NAMES[SELECTED_MONTH - 1]} record "
+            f"{RECORD_START_YEAR}-{RECORD_END_YEAR}: "
+            f"{record_value:.3f} mm"
+        )
         print(
             f"Record year:                   "
             f"{record_year}"
@@ -2615,58 +2611,54 @@ def main():
             analysis=bias_corrected_unseen_analysis,
         )
 
-    reference_line_return_period_reference = (
-        calculate_event_return_period(
-            event_value=reference_line_value,
-            fitted_parameters=observation_analysis[
-                "fitted_parameters"
-            ],
-        )
-    )
+    reference_events = [
+        ("Storm Hans 2023", storm_hans_value),
+        (
+            f"{MONTH_NAMES[SELECTED_MONTH - 1]} record "
+            f"{RECORD_START_YEAR}-{RECORD_END_YEAR}",
+            record_value,
+        ),
+    ]
 
-    reference_line_return_period_raw = (
-        calculate_event_return_period(
-            event_value=reference_line_value,
-            fitted_parameters=raw_unseen_analysis[
-                "fitted_parameters"
-            ],
-        )
-    )
+    for event_label, event_value in reference_events:
 
-    print()
-    print(
-        f"{reference_line_label} value: "
-        f"{reference_line_value:.3f} mm"
-    )
+        if event_value is None:
+            continue
 
-    print(
-        f"{reference_line_label} return period from "
-        f"{get_reference_label()} fit: "
-        f"{reference_line_return_period_reference:.2f} years"
-    )
-
-    print(
-        f"{reference_line_label} return period from "
-        f"raw UNSEEN fit: "
-        f"{reference_line_return_period_raw:.2f} years"
-    )
-
-    if bias_corrected_unseen_analysis is not None:
-
-        reference_line_return_period_bc = (
-            calculate_event_return_period(
-                event_value=reference_line_value,
-                fitted_parameters=bias_corrected_unseen_analysis[
-                    "fitted_parameters"
-                ],
-            )
+        event_return_period_reference = calculate_event_return_period(
+            event_value=event_value,
+            fitted_parameters=observation_analysis["fitted_parameters"],
         )
 
+        event_return_period_raw = calculate_event_return_period(
+            event_value=event_value,
+            fitted_parameters=raw_unseen_analysis["fitted_parameters"],
+        )
+
+        print()
+        print(f"{event_label} value: {event_value:.3f} mm")
         print(
-            f"{reference_line_label} return period from "
-            f"bias-corrected UNSEEN fit: "
-            f"{reference_line_return_period_bc:.2f} years"
+            f"{event_label} return period from "
+            f"{get_reference_label()} fit: "
+            f"{event_return_period_reference:.2f} years"
         )
+        print(
+            f"{event_label} return period from raw UNSEEN fit: "
+            f"{event_return_period_raw:.2f} years"
+        )
+
+        if bias_corrected_unseen_analysis is not None:
+            event_return_period_bc = calculate_event_return_period(
+                event_value=event_value,
+                fitted_parameters=(
+                    bias_corrected_unseen_analysis["fitted_parameters"]
+                ),
+            )
+            print(
+                f"{event_label} return period from "
+                f"bias-corrected UNSEEN fit: "
+                f"{event_return_period_bc:.2f} years"
+            )
 
 
     plot_return_period_curves(
@@ -2674,8 +2666,9 @@ def main():
         observation_analysis=observation_analysis,
         raw_unseen_analysis=raw_unseen_analysis,
         bias_corrected_unseen_analysis=bias_corrected_unseen_analysis,
-        reference_line_value=reference_line_value,
-        reference_line_label=reference_line_label,
+        storm_hans_value=storm_hans_value,
+        record_value=record_value,
+        record_year=record_year,
         filename_out=filename_out,
     )
 
