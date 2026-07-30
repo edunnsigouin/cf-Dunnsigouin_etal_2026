@@ -1,6 +1,7 @@
 """
 Plot observational, raw-UNSEEN, and bias-corrected-UNSEEN extreme-value
-curves for one calendar month, using either return period or AEP on the x-axis.
+curves for one calendar month, using either return period or an M-year
+exceedance probability on the x-axis.
 
 The observational reference dataset can be either SeNorge or ERA5.
 
@@ -73,7 +74,7 @@ from Dunnsigouin_etal_2026 import config
 # Options:
 #     "senorge"
 #     "era5"
-REFERENCE_DATASET = "senorge"
+REFERENCE_DATASET = "era5"
 
 CATCHMENT = "regine_drammen"
 X_DAYS = 2
@@ -180,13 +181,20 @@ RECORD_LINESTYLE = ":"
 #
 # Options:
 #     "return_period" -> return period in years
-#     "aep"           -> annual exceedance probability in percent
+#     "aep"           -> probability of at least one exceedance in M years
 #
-# The statistical fitting is identical in both cases. AEP is calculated as:
+# For a stationary distribution with independent years:
 #
-#     AEP (%) = 100 / return period
+#     annual exceedance probability = 1 / return period
+#
+#     M-year exceedance probability
+#         = 1 - (1 - annual exceedance probability) ** M
 #
 X_AXIS_MODE = "aep"
+
+# Number of independent years used for the exceedance-probability axis.
+# Set this to 1 for the standard annual exceedance probability (AEP).
+AEP_YEARS = 1
 
 
 # -----------------------------------------------------------------------------
@@ -217,7 +225,7 @@ LEGEND_FONTSIZE = 12
 
 OBSERVATION_COLOR = "tab:blue"
 RAW_UNSEEN_COLOR = "goldenrod"
-BIAS_CORRECTED_UNSEEN_COLOR = "goldenrod"
+BIAS_CORRECTED_UNSEEN_COLOR = "forestgreen"
 
 # Transparent intervals become darker where they overlap.
 CONFIDENCE_ALPHA = 0.18
@@ -249,6 +257,19 @@ def validate_user_settings():
     }:
         raise ValueError(
             "X_AXIS_MODE must be 'return_period' or 'aep'."
+        )
+
+    if not isinstance(
+        AEP_YEARS,
+        int,
+    ):
+        raise TypeError(
+            "AEP_YEARS must be an integer."
+        )
+
+    if AEP_YEARS < 1:
+        raise ValueError(
+            "AEP_YEARS must be at least 1."
         )
 
     if EXTREME_VALUE_DISTRIBUTION not in {
@@ -682,6 +703,11 @@ def make_bias_corrected_model_filename():
 def make_figure_filename():
     """Construct the output figure filename."""
 
+    if X_AXIS_MODE == "aep":
+        x_axis_filename_label = f"aep-{AEP_YEARS}year"
+    else:
+        x_axis_filename_label = "return_period"
+
     month_name = (
         MONTH_NAMES[
             SELECTED_MONTH - 1
@@ -689,7 +715,7 @@ def make_figure_filename():
     )
 
     filename = (
-        f"{X_AXIS_MODE}-observations-raw-bc-unseen-"
+        f"{x_axis_filename_label}-observations-raw-bc-unseen-"
         f"{get_distribution_name().lower()}-"
         f"{REFERENCE_DATASET}-"
         f"{CATCHMENT}-"
@@ -1538,9 +1564,10 @@ def convert_return_periods_to_plot_x(
         x = T
 
     AEP mode:
-        x = 100 / T
+        p = 1 / T
+        p_M = 1 - (1 - p) ** AEP_YEARS
 
-    where AEP is expressed as a percentage.
+    The plotted probability is 100 * p_M, expressed as a percentage.
     """
 
     return_periods = np.asarray(
@@ -1551,9 +1578,23 @@ def convert_return_periods_to_plot_x(
     if X_AXIS_MODE == "return_period":
         return return_periods
 
+    annual_exceedance_probability = (
+        1.0
+        / return_periods
+    )
+
+    m_year_exceedance_probability = (
+        -np.expm1(
+            AEP_YEARS
+            * np.log1p(
+                -annual_exceedance_probability
+            )
+        )
+    )
+
     return (
         100.0
-        / return_periods
+        * m_year_exceedance_probability
     )
 
 
@@ -1563,7 +1604,13 @@ def get_x_axis_label():
     if X_AXIS_MODE == "return_period":
         return "Return period [years]"
 
-    return "Annual exceedance probability, AEP [%]"
+    if AEP_YEARS == 1:
+        return "Annual exceedance probability, AEP [%]"
+
+    return (
+        f"Probability of at least one exceedance "
+        f"in {AEP_YEARS} years [%]"
+    )
 
 
 def format_x_axis(
@@ -1572,9 +1619,10 @@ def format_x_axis(
     """
     Apply x-axis scaling and limits.
 
-    Both return period and AEP are shown on logarithmic axes. For AEP, the
-    axis is reversed so common events are on the left and rare events are
-    on the right, matching the visual direction of a return-period plot.
+    Both return period and M-year exceedance probability are shown on
+    logarithmic axes. For exceedance probability, the axis is reversed so
+    common events are on the left and rare events are on the right, matching
+    the visual direction of a return-period plot.
     """
 
     ax.set_xscale(
@@ -1590,25 +1638,32 @@ def format_x_axis(
 
     else:
 
-        minimum_aep = (
-            100.0
-            / MAX_RETURN_PERIOD
+        minimum_probability = float(
+            convert_return_periods_to_plot_x(
+                np.array(
+                    [
+                        MAX_RETURN_PERIOD,
+                    ]
+                )
+            )[0]
         )
 
-        maximum_aep = (
-            100.0
-            / MIN_RETURN_PERIOD
+        maximum_probability = float(
+            convert_return_periods_to_plot_x(
+                np.array(
+                    [
+                        MIN_RETURN_PERIOD,
+                    ]
+                )
+            )[0]
         )
 
-        ax.set_xlim(
-            maximum_aep,
-            minimum_aep,
-        )
+        ax.set_xlim(120,minimum_probability)
 
         def percent_formatter(x, pos):
             if x <= 0:
                 return ""
-            return f"{x:g}"
+            return f"{x:g}%"
 
         ax.xaxis.set_major_formatter(
             FuncFormatter(percent_formatter)
@@ -1706,6 +1761,39 @@ def calculate_event_return_period(
     return (
         1.0
         / exceedance_probability
+    )
+
+
+def calculate_m_year_exceedance_probability(
+    return_period,
+):
+    """
+    Convert a fitted return period to the probability of at least one
+    exceedance during AEP_YEARS independent years.
+
+        p_M = 1 - (1 - 1 / T) ** AEP_YEARS
+    """
+
+    if (
+        not np.isfinite(
+            return_period
+        )
+        or return_period <= 0
+    ):
+        return 0.0
+
+    annual_exceedance_probability = (
+        1.0
+        / return_period
+    )
+
+    return float(
+        -np.expm1(
+            AEP_YEARS
+            * np.log1p(
+                -annual_exceedance_probability
+            )
+        )
     )
 
 
@@ -2479,6 +2567,12 @@ def main():
         f"{X_AXIS_MODE}"
     )
 
+    if X_AXIS_MODE == "aep":
+        print(
+            f"AEP time horizon:              "
+            f"{AEP_YEARS} year(s)"
+        )
+
     (
         years,
         all_reference_values,
@@ -2635,30 +2729,65 @@ def main():
             fitted_parameters=raw_unseen_analysis["fitted_parameters"],
         )
 
+        event_aep_reference = calculate_m_year_exceedance_probability(
+            event_return_period_reference
+        )
+
+        event_aep_raw = calculate_m_year_exceedance_probability(
+            event_return_period_raw
+        )
+
         print()
         print(f"{event_label} value: {event_value:.3f} mm")
+
         print(
             f"{event_label} return period from "
             f"{get_reference_label()} fit: "
             f"{event_return_period_reference:.2f} years"
         )
+
+        print(
+            f"{event_label} probability of at least one exceedance "
+            f"in {AEP_YEARS} years from {get_reference_label()} fit: "
+            f"{100.0 * event_aep_reference:.3f}%"
+        )
+
         print(
             f"{event_label} return period from raw UNSEEN fit: "
             f"{event_return_period_raw:.2f} years"
         )
 
+        print(
+            f"{event_label} probability of at least one exceedance "
+            f"in {AEP_YEARS} years from raw UNSEEN fit: "
+            f"{100.0 * event_aep_raw:.3f}%"
+        )
+
         if bias_corrected_unseen_analysis is not None:
+
             event_return_period_bc = calculate_event_return_period(
                 event_value=event_value,
                 fitted_parameters=(
                     bias_corrected_unseen_analysis["fitted_parameters"]
                 ),
             )
+
+            event_aep_bc = calculate_m_year_exceedance_probability(
+                event_return_period_bc
+            )
+
             print(
                 f"{event_label} return period from "
                 f"bias-corrected UNSEEN fit: "
                 f"{event_return_period_bc:.2f} years"
             )
+
+            print(
+                f"{event_label} probability of at least one exceedance "
+                f"in {AEP_YEARS} years from bias-corrected UNSEEN fit: "
+                f"{100.0 * event_aep_bc:.3f}%"
+            )
+
 
 
     plot_return_period_curves(
