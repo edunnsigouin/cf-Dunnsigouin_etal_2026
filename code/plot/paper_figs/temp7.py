@@ -1,9 +1,11 @@
 """Compare exceedance probabilities for one user-selected event threshold across
 observational reference data and one selected UNSEEN model form.
 
-A single panel is plotted with two x-axis groups:
-    Reference
-    Model raw or Model BC, according to MODEL_DATA_MODE
+A single panel is plotted with four x-axis groups:
+    Reference, N-year AEP
+    Model raw or Model BC, N-year AEP
+    Reference, M-year AEP
+    Model raw or Model BC, M-year AEP
 
 Within each group, SeNorge is plotted slightly left of the group tick with
 filled black markers, while ERA5 is plotted slightly right with open black
@@ -53,8 +55,12 @@ RECORD_END_YEAR = 2022
 #     "calendar_record" -> SELECTED_MONTH record over RECORD_START_YEAR-RECORD_END_YEAR
 EVENT_THRESHOLD = "storm_hans"
 
-# Probability of at least one exceedance in this many independent years.
-AEP_YEARS = 10
+# First probability horizon shown on the x-axis.
+# Set to 1 for annual exceedance probability.
+N_AEP_YEARS = 1
+
+# Second probability horizon shown on the x-axis.
+M_AEP_YEARS = 10
 
 CATCHMENT = "regine_drammen"
 X_DAYS = 2
@@ -125,13 +131,13 @@ MODEL_SAMPLING_GROUP = "full"
 # Plot settings
 # -----------------------------------------------------------------------------
 
-FIG_WIDTH_IN = 4.0
-FIG_HEIGHT_IN = 5.0
+FIG_WIDTH_IN = 12.0
+FIG_HEIGHT_IN = 8.5
 FIGURE_DPI = 300
 
-POINT_SIZE = 55
+POINT_SIZE = 48
 
-# Horizontal spacing between the Reference and Model groups.
+# Horizontal spacing between the four AEP groups.
 GROUP_SPACING = 1.4
 
 # Dataset offset from each group tick. SeNorge is plotted to the left and ERA5
@@ -148,10 +154,10 @@ METHOD_MARKERS = {
 SENORGE_COLOR = "tab:red"
 ERA5_COLOR = "tab:blue"
 
-AXIS_LABELSIZE = 11
-TICK_LABELSIZE = 10
-TITLE_FONTSIZE = 11
-ANNOTATION_FONTSIZE = 9
+AXIS_LABELSIZE = 10
+TICK_LABELSIZE = 9
+TITLE_FONTSIZE = 10
+ANNOTATION_FONTSIZE = 8
 
 # Logarithmic AEP axis limits in percent. Leave either as None to determine
 # that limit automatically from the plotted point estimates.
@@ -205,10 +211,14 @@ def validate_user_settings():
             "RECORD_START_YEAR."
         )
 
-    if not isinstance(AEP_YEARS, int) or AEP_YEARS < 1:
-        raise ValueError(
-            "AEP_YEARS must be a positive integer."
-        )
+    for parameter_name, years in [
+        ("N_AEP_YEARS", N_AEP_YEARS),
+        ("M_AEP_YEARS", M_AEP_YEARS),
+    ]:
+        if not isinstance(years, int) or years < 1:
+            raise ValueError(
+                f"{parameter_name} must be a positive integer."
+            )
 
     if X_DAYS < 1:
         raise ValueError(
@@ -381,7 +391,7 @@ def make_figure_filename():
     )
 
     filename = (
-        f"{threshold_label}-aep-{AEP_YEARS}year-"
+        f"{threshold_label}-aep-{N_AEP_YEARS}year-{M_AEP_YEARS}year-"
         f"reference-model-{model_label}-senorge-era5-"
         f"gev-gumbel-genex-empirical-{CATCHMENT}-"
         f"{X_DAYS}dayacc-log-y.png"
@@ -933,10 +943,11 @@ def calculate_event_exceedance_probability(
     )
 
 
-def calculate_m_year_aep(
+def calculate_horizon_aep(
     annual_exceedance_probability,
+    horizon_years,
 ):
-    """Convert annual exceedance probability to M-year AEP."""
+    """Convert annual exceedance probability to a horizon-year AEP."""
 
     annual_exceedance_probability = float(
         np.clip(
@@ -948,7 +959,7 @@ def calculate_m_year_aep(
 
     return float(
         -np.expm1(
-            AEP_YEARS
+            horizon_years
             * np.log1p(
                 -annual_exceedance_probability
             )
@@ -970,13 +981,10 @@ def analyse_event_aep(
         distribution_name=distribution_name,
     )
     return_period = np.inf if annual_probability <= 0 else 1.0 / annual_probability
-    estimate = calculate_m_year_aep(annual_probability)
-
     return {
         "fitted_parameters": fitted_parameters,
         "annual_exceedance_probability": annual_probability,
         "return_period": return_period,
-        "aep": estimate,
     }
 
 
@@ -1023,15 +1031,10 @@ def analyse_empirical_event_aep(
     annual_probability = rank / sample_values.size
     return_period = sample_values.size / rank
 
-    estimate = calculate_m_year_aep(
-        annual_probability
-    )
-
     return {
         "fitted_parameters": None,
         "annual_exceedance_probability": annual_probability,
         "return_period": return_period,
-        "aep": estimate,
         "empirical_rank": rank,
         "sample_size": sample_values.size,
     }
@@ -1062,17 +1065,27 @@ def analyse_method_event_aep(
 # =============================================================================
 
 def print_result(group_name, threshold_dataset, method_name, event_label, analysis):
-    """Print only the return period and AEP for one calculation."""
+    """Print the return period plus the N-year and M-year AEPs."""
 
     return_period = analysis["return_period"]
     return_period_text = (
         f"{return_period:.3f} years" if np.isfinite(return_period) else "infinite"
     )
+    annual_probability = analysis["annual_exceedance_probability"]
+    n_year_aep = calculate_horizon_aep(
+        annual_probability,
+        N_AEP_YEARS,
+    )
+    m_year_aep = calculate_horizon_aep(
+        annual_probability,
+        M_AEP_YEARS,
+    )
     print(
         f"{event_label} | {group_name} | "
         f"{get_reference_name(threshold_dataset)} | {method_name}: "
         f"return period = {return_period_text}; "
-        f"{AEP_YEARS}-year AEP = {100.0 * analysis['aep']:.6g}%"
+        f"{N_AEP_YEARS}-year AEP = {100.0 * n_year_aep:.6g}%; "
+        f"{M_AEP_YEARS}-year AEP = {100.0 * m_year_aep:.6g}%"
     )
 
 
@@ -1090,11 +1103,13 @@ def display_aep_percent(aep):
 
 
 def build_plot_groups(model_label):
-    """Return the two shared x-axis groups."""
+    """Return Reference and Model groups for the N-year and M-year AEPs."""
 
     return [
-        ("reference", "Reference"),
-        ("model", model_label),
+        ("reference", N_AEP_YEARS, f"Reference\n{N_AEP_YEARS}-year EP"),
+        ("model", N_AEP_YEARS, f"{model_label}\n{N_AEP_YEARS}-year EP"),
+        ("reference", M_AEP_YEARS, f"Reference\n{M_AEP_YEARS}-year EP"),
+        ("model", M_AEP_YEARS, f"{model_label}\n{M_AEP_YEARS}-year EP"),
     ]
 
 
@@ -1122,7 +1137,7 @@ def get_threshold_title(reference_data):
 
 
 def plot_results(results, model_label, threshold_title, filename_out):
-    """Plot one selected threshold in a single panel with two x-axis groups."""
+    """Plot one selected threshold in a single panel with four x-axis groups."""
 
     groups = build_plot_groups(model_label)
     group_x = GROUP_SPACING * np.arange(len(groups), dtype=float)
@@ -1138,7 +1153,7 @@ def plot_results(results, model_label, threshold_title, filename_out):
     fig, ax = plt.subplots(figsize=(FIG_WIDTH_IN, FIG_HEIGHT_IN))
     plotted_values = []
 
-    for group_index, (group_key, _) in enumerate(groups):
+    for group_index, (group_key, horizon_years, _) in enumerate(groups):
         for threshold_dataset in REFERENCE_DATASETS:
             point_x = group_x[group_index] + dataset_offsets[threshold_dataset]
 
@@ -1151,7 +1166,12 @@ def plot_results(results, model_label, threshold_title, filename_out):
                     continue
 
                 analysis = results[(group_key, threshold_dataset, method_name)]
-                estimate = display_aep_percent(analysis["aep"])
+                estimate = display_aep_percent(
+                    calculate_horizon_aep(
+                        analysis["annual_exceedance_probability"],
+                        horizon_years,
+                    )
+                )
                 plotted_values.append(estimate)
 
                 ax.plot(
@@ -1203,11 +1223,14 @@ def plot_results(results, model_label, threshold_title, filename_out):
 
     ax.set_yscale("log")
     ax.set_ylim(plot_ymin, plot_ymax)
-    ax.set_ylabel(f"{AEP_YEARS}-year AEP [%]", fontsize=AXIS_LABELSIZE)
+    ax.set_ylabel("Exceedance probability [%]", fontsize=AXIS_LABELSIZE)
     ax.set_title(threshold_title, fontsize=TITLE_FONTSIZE, fontweight="normal", pad=8)
 
     ax.set_xticks(group_x)
-    ax.set_xticklabels([label for _, label in groups], fontsize=TICK_LABELSIZE)
+    ax.set_xticklabels(
+        [label for _, _, label in groups],
+        fontsize=TICK_LABELSIZE,
+    )
     ax.tick_params(axis="x", length=0)
     ax.tick_params(axis="y", labelsize=TICK_LABELSIZE)
     ax.set_xlim(
@@ -1280,13 +1303,25 @@ def plot_results(results, model_label, threshold_title, filename_out):
 
 
 # =============================================================================
-# Main
+# Four-panel publication figure
 # =============================================================================
 
-def main():
-    """Calculate and plot one selected threshold for references and model."""
+PANEL_CONFIGURATIONS = [
+    ("a", 8, "storm_hans"),
+    ("b", 5, "storm_hans"),
+    ("c", 8, "calendar_record"),
+    ("d", 5, "calendar_record"),
+]
 
-    validate_user_settings()
+
+def calculate_panel(panel_label, month, threshold_type):
+    """Calculate one month/threshold panel using the existing workflow."""
+
+    global SELECTED_MONTH
+    global EVENT_THRESHOLD
+
+    SELECTED_MONTH = month
+    EVENT_THRESHOLD = threshold_type
 
     reference_data = {
         dataset: read_reference_data(dataset)
@@ -1297,7 +1332,7 @@ def main():
     thresholds = {
         dataset: (
             reference_data[dataset]["storm_hans_value"]
-            if EVENT_THRESHOLD == "storm_hans"
+            if threshold_type == "storm_hans"
             else reference_data[dataset]["record_value"]
         )
         for dataset in REFERENCE_DATASETS
@@ -1305,9 +1340,9 @@ def main():
     event_labels = {
         dataset: (
             f"Storm Hans {STORM_HANS_YEAR}"
-            if EVENT_THRESHOLD == "storm_hans"
+            if threshold_type == "storm_hans"
             else (
-                f"{MONTH_NAMES[SELECTED_MONTH - 1]} record "
+                f"{MONTH_NAMES[month - 1]} record "
                 f"{reference_data[dataset]['record_year']}"
             )
         )
@@ -1318,10 +1353,12 @@ def main():
         ("reference", dataset): reference_data[dataset]["fit_values"]
         for dataset in REFERENCE_DATASETS
     }
-    samples.update({
-        ("model", dataset): model_data["samples"][dataset]
-        for dataset in REFERENCE_DATASETS
-    })
+    samples.update(
+        {
+            ("model", dataset): model_data["samples"][dataset]
+            for dataset in REFERENCE_DATASETS
+        }
+    )
 
     group_labels = {
         "reference": "Reference",
@@ -1347,7 +1384,9 @@ def main():
                     event_value=event_value,
                     method_name=method_name,
                 )
-                results[(group_key, threshold_dataset, method_name)] = analysis
+                results[
+                    (group_key, threshold_dataset, method_name)
+                ] = analysis
                 print_result(
                     group_name=group_labels[group_key],
                     threshold_dataset=threshold_dataset,
@@ -1356,11 +1395,347 @@ def main():
                     analysis=analysis,
                 )
 
-    plot_results(
-        results=results,
-        model_label=model_data["label"],
-        threshold_title=get_threshold_title(reference_data),
-        filename_out=make_figure_filename(),
+    month_name = MONTH_NAMES[month - 1]
+    if threshold_type == "storm_hans":
+        title = (
+            f"{month_name} fits; Storm Hans threshold "
+            f"(August {STORM_HANS_YEAR})"
+        )
+    else:
+        record_years = sorted(
+            {
+                reference_data[dataset]["record_year"]
+                for dataset in REFERENCE_DATASETS
+            }
+        )
+        year_text = (
+            str(record_years[0])
+            if len(record_years) == 1
+            else "/".join(str(year) for year in record_years)
+        )
+        title = f"{month_name} record threshold ({year_text})"
+
+    return {
+        "panel_label": panel_label,
+        "title": title,
+        "results": results,
+        "model_label": model_data["label"],
+    }
+
+
+def make_four_panel_figure_filename():
+    """Construct the publication figure filename."""
+
+    model_label = "raw" if MODEL_DATA_MODE == "raw" else "bc"
+    filename = (
+        f"four-panel-storm-hans-record-aep-"
+        f"{N_AEP_YEARS}year-{M_AEP_YEARS}year-"
+        f"august-may-reference-model-{model_label}-"
+        f"{CATCHMENT}-{X_DAYS}dayacc.png"
+    )
+    return os.path.join(config.dirs["fig"], filename)
+
+
+def plot_four_panels(panel_outputs, model_label, filename_out):
+    """Plot the four calculations as a shared-axis 2 by 2 figure."""
+
+    plt.rcParams.update(
+        {
+            "font.family": "sans-serif",
+            "font.size": TICK_LABELSIZE,
+            "axes.linewidth": 0.8,
+            "xtick.major.width": 0.8,
+            "ytick.major.width": 0.8,
+            "pdf.fonttype": 42,
+            "ps.fonttype": 42,
+        }
+    )
+
+    groups = build_plot_groups(model_label)
+    group_x = GROUP_SPACING * np.arange(len(groups), dtype=float)
+    dataset_offsets = {
+        "senorge": -DATASET_X_OFFSET,
+        "era5": DATASET_X_OFFSET,
+    }
+    dataset_facecolors = {
+        "senorge": "black",
+        "era5": "none",
+    }
+
+    all_values = []
+    for panel_output in panel_outputs:
+        results = panel_output["results"]
+        for group_key, horizon_years, _ in groups:
+            for threshold_dataset in REFERENCE_DATASETS:
+                for method_name in METHODS:
+                    if (
+                        group_key == "reference"
+                        and method_name == "Empirical"
+                        and not PLOT_REFERENCE_EMPIRICAL
+                    ):
+                        continue
+                    analysis = results[
+                        (group_key, threshold_dataset, method_name)
+                    ]
+                    all_values.append(
+                        display_aep_percent(
+                            calculate_horizon_aep(
+                                analysis["annual_exceedance_probability"],
+                                horizon_years,
+                            )
+                        )
+                    )
+
+    positive_values = np.asarray(
+        [
+            value
+            for value in all_values
+            if np.isfinite(value) and value > 0
+        ],
+        dtype=float,
+    )
+    if positive_values.size == 0:
+        raise ValueError(
+            "No positive AEP values are available for the log axis."
+        )
+
+    plot_ymin = (
+        YMIN_PADDING_FACTOR * positive_values.min()
+        if YMIN_PERCENT is None
+        else YMIN_PERCENT
+    )
+    plot_ymax = (
+        YMAX_PADDING_FACTOR * positive_values.max()
+        if YMAX_PERCENT is None
+        else YMAX_PERCENT
+    )
+
+    fig, axes = plt.subplots(
+        2,
+        2,
+        figsize=(FIG_WIDTH_IN, FIG_HEIGHT_IN),
+        sharex=True,
+        sharey=True,
+        constrained_layout=True,
+    )
+    axes = axes.ravel()
+
+    for ax, panel_output in zip(axes, panel_outputs):
+        results = panel_output["results"]
+
+        for group_index, (
+            group_key,
+            horizon_years,
+            _,
+        ) in enumerate(groups):
+            for threshold_dataset in REFERENCE_DATASETS:
+                point_x = (
+                    group_x[group_index]
+                    + dataset_offsets[threshold_dataset]
+                )
+
+                for method_name in METHODS:
+                    if (
+                        group_key == "reference"
+                        and method_name == "Empirical"
+                        and not PLOT_REFERENCE_EMPIRICAL
+                    ):
+                        continue
+
+                    analysis = results[
+                        (group_key, threshold_dataset, method_name)
+                    ]
+                    estimate = display_aep_percent(
+                        calculate_horizon_aep(
+                            analysis["annual_exceedance_probability"],
+                            horizon_years,
+                        )
+                    )
+
+                    ax.plot(
+                        point_x,
+                        estimate,
+                        marker=METHOD_MARKERS[method_name],
+                        markersize=np.sqrt(POINT_SIZE),
+                        markerfacecolor=(
+                            dataset_facecolors[threshold_dataset]
+                        ),
+                        markeredgecolor="black",
+                        markeredgewidth=1.0,
+                        color="black",
+                        linestyle="none",
+                        zorder=(
+                            4
+                            if threshold_dataset == "senorge"
+                            else 3
+                        ),
+                    )
+
+                    if SHOW_POINT_LABELS:
+                        ax.annotate(
+                            f"{estimate:.3g}%",
+                            (point_x, estimate),
+                            xytext=(
+                                -5
+                                if threshold_dataset == "senorge"
+                                else 5,
+                                4,
+                            ),
+                            textcoords="offset points",
+                            ha=(
+                                "right"
+                                if threshold_dataset == "senorge"
+                                else "left"
+                            ),
+                            fontsize=ANNOTATION_FONTSIZE,
+                        )
+
+        ax.set_yscale("log")
+        ax.set_ylim(plot_ymin, plot_ymax)
+        ax.set_xlim(
+            group_x.min() - 0.5 * GROUP_SPACING,
+            group_x.max() + 0.5 * GROUP_SPACING,
+        )
+        ax.set_xticks(group_x)
+        ax.set_xticklabels(
+            [label for _, _, label in groups],
+            fontsize=TICK_LABELSIZE,
+        )
+        ax.tick_params(axis="x", length=0, pad=5)
+        ax.tick_params(axis="y", labelsize=TICK_LABELSIZE)
+        ax.yaxis.set_major_formatter(
+            FuncFormatter(
+                lambda y, position: (
+                    "" if y <= 0 else f"{y:g}%"
+                )
+            )
+        )
+        ax.spines["top"].set_visible(False)
+        ax.spines["right"].set_visible(False)
+        ax.grid(
+            axis="y",
+            which="major",
+            linestyle=":",
+            linewidth=0.6,
+            alpha=0.45,
+        )
+
+        ax.set_title(
+            panel_output["title"],
+            fontsize=TITLE_FONTSIZE,
+            fontweight="normal",
+            pad=8,
+        )
+        ax.text(
+            0.01,
+            0.98,
+            f"{panel_output['panel_label']})",
+            transform=ax.transAxes,
+            ha="left",
+            va="top",
+            fontsize=TITLE_FONTSIZE + 1,
+            fontweight="bold",
+        )
+
+    axes[0].set_ylabel(
+        "Exceedance probability [%]",
+        fontsize=AXIS_LABELSIZE,
+    )
+    axes[2].set_ylabel(
+        "Exceedance probability [%]",
+        fontsize=AXIS_LABELSIZE,
+    )
+
+    method_handles = [
+        Line2D(
+            [0],
+            [0],
+            marker=METHOD_MARKERS[method],
+            linestyle="none",
+            color="black",
+            markerfacecolor="black",
+            markeredgecolor="black",
+            markersize=np.sqrt(POINT_SIZE),
+            label=method,
+        )
+        for method in METHODS
+    ]
+    dataset_handles = [
+        Line2D(
+            [0],
+            [0],
+            marker="o",
+            linestyle="none",
+            color="black",
+            markerfacecolor="black",
+            markeredgecolor="black",
+            markersize=np.sqrt(POINT_SIZE),
+            label="SeNorge",
+        ),
+        Line2D(
+            [0],
+            [0],
+            marker="o",
+            linestyle="none",
+            color="black",
+            markerfacecolor="none",
+            markeredgecolor="black",
+            markeredgewidth=1.0,
+            markersize=np.sqrt(POINT_SIZE),
+            label="ERA5",
+        ),
+    ]
+
+    fig.legend(
+        handles=method_handles + dataset_handles,
+        loc="outside lower center",
+        frameon=False,
+        fontsize=TICK_LABELSIZE,
+        ncol=6,
+        columnspacing=1.5,
+        handletextpad=0.5,
+    )
+
+    if WRITE_TO_FILE:
+        fig.savefig(
+            filename_out,
+            dpi=FIGURE_DPI,
+            bbox_inches="tight",
+            facecolor="white",
+        )
+        print(f"Wrote: {filename_out}")
+
+    plt.show()
+
+
+def main():
+    """Calculate and plot the four publication panels."""
+
+    validate_user_settings()
+
+    panel_outputs = [
+        calculate_panel(
+            panel_label=panel_label,
+            month=month,
+            threshold_type=threshold_type,
+        )
+        for panel_label, month, threshold_type
+        in PANEL_CONFIGURATIONS
+    ]
+
+    model_labels = {
+        panel_output["model_label"]
+        for panel_output in panel_outputs
+    }
+    if len(model_labels) != 1:
+        raise RuntimeError(
+            "All panels must use the same model configuration."
+        )
+
+    plot_four_panels(
+        panel_outputs=panel_outputs,
+        model_label=panel_outputs[0]["model_label"],
+        filename_out=make_four_panel_figure_filename(),
     )
 
 

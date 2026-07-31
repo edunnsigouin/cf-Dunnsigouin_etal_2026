@@ -1,44 +1,19 @@
-"""
-Compare the M-year exceedance probabilities of Storm Hans and the
-1957-2022 August observational record across:
+"""Compare exceedance probabilities for one user-selected event threshold across
+observational reference data and one selected UNSEEN model form.
 
-1. observational reference data,
-2. raw UNSEEN model data, and
-3. bias-corrected UNSEEN model data.
+A single panel is plotted with four x-axis groups:
+    Reference, N-year AEP
+    Model raw or Model BC, N-year AEP
+    Reference, M-year AEP
+    Model raw or Model BC, M-year AEP
 
-For each group, GEV, Gumbel, and GenEx distributions are fitted, and a
-fourth empirical estimate is calculated directly from the event rank.
-
-Threshold logic
----------------
-Reference:
-    SeNorge fits use the SeNorge August 2023 Storm Hans threshold.
-    ERA5 fits use the ERA5 August 2023 Storm Hans threshold.
-
-Model raw:
-    The same raw model sample is evaluated twice:
-    first using the SeNorge threshold and then using the ERA5 threshold.
-
-Model BC:
-    SeNorge-bias-corrected model data use the SeNorge threshold.
-    ERA5-bias-corrected model data use the ERA5 threshold.
-
-For every dataset/method position, Storm Hans is shown with a filled marker
-and the 1957-2022 August observational record is shown with the same marker
-but no face color. Vertical error bars are percentile confidence intervals
-from a parametric bootstrap: simulate from the fitted distribution, refit the
-same distribution, and recalculate the probability of exceeding the fixed
-threshold.
-
-Colors identify the threshold / bias-correction reference:
-    SeNorge = tab:red
-    ERA5    = tab:blue
-
-Markers identify the calculation method:
-    GEV       = circle
-    Gumbel    = square
-    GenEx     = diamond
-    Empirical = triangle
+Within each group, SeNorge is plotted slightly left of the group tick with
+filled black markers, while ERA5 is plotted slightly right with open black
+markers. GEV, Gumbel, GenEx, and empirical estimates are distinguished by
+marker shape. EVENT_THRESHOLD selects either the Storm Hans threshold or the
+historical SELECTED_MONTH record threshold. PLOT_REFERENCE_EMPIRICAL controls
+whether empirical estimates are included for the Reference group; model
+empirical estimates remain included.
 
 SciPy's genextreme shape c has the opposite sign from conventional GEV xi:
 xi = -c.
@@ -63,7 +38,7 @@ from Dunnsigouin_etal_2026 import config
 
 # Distribution month fitted to the observational monthly maxima.
 # 1 = January, ..., 8 = August, ..., 12 = December.
-SELECTED_MONTH = 1
+SELECTED_MONTH = 5
 
 # Storm Hans is always read from August 2023.
 STORM_HANS_YEAR = 2023
@@ -74,8 +49,18 @@ STORM_HANS_MONTH = 8
 RECORD_START_YEAR = 1957
 RECORD_END_YEAR = 2022
 
-# Probability of at least one exceedance in this many independent years.
-AEP_YEARS = 1
+# Event threshold used for every calculation and plotted point.
+# Options:
+#     "storm_hans"     -> August 2023 Storm Hans threshold
+#     "calendar_record" -> SELECTED_MONTH record over RECORD_START_YEAR-RECORD_END_YEAR
+EVENT_THRESHOLD = "storm_hans"
+
+# First probability horizon shown on the x-axis.
+# Set to 1 for annual exceedance probability.
+N_AEP_YEARS = 1
+
+# Second probability horizon shown on the x-axis.
+M_AEP_YEARS = 10
 
 CATCHMENT = "regine_drammen"
 X_DAYS = 2
@@ -104,8 +89,12 @@ METHODS = [
     "Empirical",
 ]
 
+# Plot the empirical estimate for the observational Reference group.
+# The model empirical estimate is always calculated and plotted.
+PLOT_REFERENCE_EMPIRICAL = True
+
 # Parametric distributions only. The empirical method is calculated directly
-# from the event rank and is not fitted or parametrically bootstrapped.
+# from the event rank and is not fitted.
 DISTRIBUTIONS = [
     "GEV",
     "Gumbel",
@@ -113,21 +102,16 @@ DISTRIBUTIONS = [
 ]
 
 
-# -----------------------------------------------------------------------------
-# Parametric bootstrap
-# -----------------------------------------------------------------------------
-
-NUMBER_OF_BOOTSTRAPS = 10
-CONFIDENCE_LEVEL = 0.95
-RANDOM_SEED = 42
-MINIMUM_BOOTSTRAP_SUCCESS_FRACTION = 0.90
 
 
 # -----------------------------------------------------------------------------
 # Raw and bias-corrected UNSEEN inputs retained for later use
 # -----------------------------------------------------------------------------
 
-# Model data are required for the full reference/raw/bias-corrected figure.
+# Select exactly one model form for calculation and plotting:
+#     "raw" or "bias_corrected"
+MODEL_DATA_MODE = "raw"
+
 READ_MODEL_DATA = True
 
 MODEL_VARIABLE = "tp24"
@@ -147,26 +131,18 @@ MODEL_SAMPLING_GROUP = "full"
 # Plot settings
 # -----------------------------------------------------------------------------
 
-FIG_WIDTH_IN = 13.0
-FIG_HEIGHT_IN = 6.0
+FIG_WIDTH_IN = 7.0
+FIG_HEIGHT_IN = 5.0
 FIGURE_DPI = 300
 
 POINT_SIZE = 55
-ERRORBAR_LINEWIDTH = 1.6
-ERRORBAR_CAPSIZE = 4
-GROUP_SEPARATOR_LINEWIDTH = 0.8
 
-# Horizontal x-axis spacing controls.
-#
-# ESTIMATE_SPACING controls the distance between every adjacent estimate
-# within a group. Each group contains eight estimates:
-#   SeNorge: GEV, Gumbel, GenEx, Empirical
-#   ERA5:    GEV, Gumbel, GenEx, Empirical
-#
-# GROUP_SPACING controls the empty horizontal gap between the final estimate
-# of one group and the first estimate of the next group.
-ESTIMATE_SPACING = 0.55
-GROUP_SPACING = 1.40
+# Horizontal spacing between the four AEP groups.
+GROUP_SPACING = 1.4
+
+# Dataset offset from each group tick. SeNorge is plotted to the left and ERA5
+# to the right.
+DATASET_X_OFFSET = 0.16
 
 METHOD_MARKERS = {
     "GEV": "o",
@@ -184,7 +160,7 @@ TITLE_FONTSIZE = 11
 ANNOTATION_FONTSIZE = 9
 
 # Logarithmic AEP axis limits in percent. Leave either as None to determine
-# that limit automatically from the plotted estimates and confidence intervals.
+# that limit automatically from the plotted point estimates.
 YMIN_PERCENT = 0.0001
 YMAX_PERCENT = 100
 
@@ -235,30 +211,20 @@ def validate_user_settings():
             "RECORD_START_YEAR."
         )
 
-    if not isinstance(AEP_YEARS, int) or AEP_YEARS < 1:
-        raise ValueError(
-            "AEP_YEARS must be a positive integer."
-        )
+    for parameter_name, years in [
+        ("N_AEP_YEARS", N_AEP_YEARS),
+        ("M_AEP_YEARS", M_AEP_YEARS),
+    ]:
+        if not isinstance(years, int) or years < 1:
+            raise ValueError(
+                f"{parameter_name} must be a positive integer."
+            )
 
     if X_DAYS < 1:
         raise ValueError(
             "X_DAYS must be at least 1."
         )
 
-    if NUMBER_OF_BOOTSTRAPS < 1:
-        raise ValueError(
-            "NUMBER_OF_BOOTSTRAPS must be at least 1."
-        )
-
-    if not 0 < CONFIDENCE_LEVEL < 1:
-        raise ValueError(
-            "CONFIDENCE_LEVEL must lie between 0 and 1."
-        )
-
-    if not 0 < MINIMUM_BOOTSTRAP_SUCCESS_FRACTION <= 1:
-        raise ValueError(
-            "MINIMUM_BOOTSTRAP_SUCCESS_FRACTION must lie in (0, 1]."
-        )
 
     if YMIN_PERCENT is not None and YMIN_PERCENT <= 0:
         raise ValueError(
@@ -284,14 +250,31 @@ def validate_user_settings():
             "YMIN_PADDING_FACTOR and YMAX_PADDING_FACTOR must be positive."
         )
 
-    if ESTIMATE_SPACING <= 0:
+    if MODEL_DATA_MODE not in {"raw", "bias_corrected"}:
         raise ValueError(
-            "ESTIMATE_SPACING must be greater than zero."
+            'MODEL_DATA_MODE must be either "raw" or "bias_corrected".'
+        )
+
+    if EVENT_THRESHOLD not in {"storm_hans", "calendar_record"}:
+        raise ValueError(
+            'EVENT_THRESHOLD must be either "storm_hans" or '
+            '"calendar_record".'
+        )
+
+    if not isinstance(PLOT_REFERENCE_EMPIRICAL, bool):
+        raise TypeError(
+            "PLOT_REFERENCE_EMPIRICAL must be either True or False."
         )
 
     if GROUP_SPACING <= 0:
         raise ValueError(
             "GROUP_SPACING must be greater than zero."
+        )
+
+    if DATASET_X_OFFSET <= 0 or DATASET_X_OFFSET >= 0.5 * GROUP_SPACING:
+        raise ValueError(
+            "DATASET_X_OFFSET must be positive and less than half "
+            "GROUP_SPACING."
         )
 
     first_usable_lead = FIRST_INPUT_LEAD + X_DAYS - 1
@@ -400,18 +383,21 @@ def make_figure_filename():
     """Construct output figure filename."""
 
     month_name = MONTH_NAMES[SELECTED_MONTH - 1].lower()
+    model_label = "raw" if MODEL_DATA_MODE == "raw" else "bc"
+    threshold_label = (
+        "storm-hans"
+        if EVENT_THRESHOLD == "storm_hans"
+        else f"{month_name}-record"
+    )
 
     filename = (
-        f"storm-hans-and-record-aep-{AEP_YEARS}year-"
-        f"{month_name}-reference-raw-bc-"
-        f"senorge-era5-gev-gumbel-genex-empirical-"
-        f"{CATCHMENT}-{X_DAYS}dayacc-log-y.png"
+        f"{threshold_label}-aep-{N_AEP_YEARS}year-{M_AEP_YEARS}year-"
+        f"reference-model-{model_label}-senorge-era5-"
+        f"gev-gumbel-genex-empirical-{CATCHMENT}-"
+        f"{X_DAYS}dayacc-log-y.png"
     )
 
-    return os.path.join(
-        config.dirs["fig"],
-        filename,
-    )
+    return os.path.join(config.dirs["fig"], filename)
 
 
 # =============================================================================
@@ -575,53 +561,47 @@ def read_model_month(
 
 
 def read_model_data():
-    """Read raw and both bias-corrected UNSEEN samples."""
+    """Read only the user-selected UNSEEN model form."""
 
     if not READ_MODEL_DATA:
-        raise ValueError(
-            "READ_MODEL_DATA must be True for this comparison."
-        )
+        raise ValueError("READ_MODEL_DATA must be True for this comparison.")
 
-    raw_filename = make_raw_model_filename()
-
-    model_data = {
-        "raw": read_model_month(
-            filename=raw_filename,
+    if MODEL_DATA_MODE == "raw":
+        filename = make_raw_model_filename()
+        values = read_model_month(
+            filename=filename,
             variable=get_raw_model_variable(),
             month=SELECTED_MONTH,
             dataset_name="raw UNSEEN dataset",
-        ),
-        "bias_corrected": {},
-        "filenames": {
-            "raw": raw_filename,
-            "bias_corrected": {},
-        },
-    }
+        )
+        return {
+            "mode": "raw",
+            "label": "Model raw",
+            "samples": {dataset: values for dataset in REFERENCE_DATASETS},
+            "filenames": {dataset: filename for dataset in REFERENCE_DATASETS},
+        }
 
+    samples = {}
+    filenames = {}
     for reference_dataset in REFERENCE_DATASETS:
-        bc_filename = make_bias_corrected_model_filename(
-            reference_dataset
+        filename = make_bias_corrected_model_filename(reference_dataset)
+        samples[reference_dataset] = read_model_month(
+            filename=filename,
+            variable=get_bias_corrected_model_variable(reference_dataset),
+            month=SELECTED_MONTH,
+            dataset_name=(
+                f"bias-corrected UNSEEN dataset "
+                f"({get_reference_name(reference_dataset)} reference)"
+            ),
         )
+        filenames[reference_dataset] = filename
 
-        model_data["bias_corrected"][reference_dataset] = (
-            read_model_month(
-                filename=bc_filename,
-                variable=get_bias_corrected_model_variable(
-                    reference_dataset
-                ),
-                month=SELECTED_MONTH,
-                dataset_name=(
-                    f"bias-corrected UNSEEN dataset "
-                    f"({get_reference_name(reference_dataset)} reference)"
-                ),
-            )
-        )
-
-        model_data["filenames"]["bias_corrected"][
-            reference_dataset
-        ] = bc_filename
-
-    return model_data
+    return {
+        "mode": "bias_corrected",
+        "label": "Model BC",
+        "samples": samples,
+        "filenames": filenames,
+    }
 
 
 # =============================================================================
@@ -670,7 +650,7 @@ def read_reference_data(dataset):
                     RECORD_START_YEAR,
                     RECORD_END_YEAR,
                 ),
-                month=STORM_HANS_MONTH,
+                month=SELECTED_MONTH,
             )
             .load()
         )
@@ -703,7 +683,7 @@ def read_reference_data(dataset):
 
     if not np.any(record_finite):
         raise ValueError(
-            f"No finite {get_reference_name(dataset)} August values were "
+            f"No finite {get_reference_name(dataset)} {MONTH_NAMES[SELECTED_MONTH - 1]} values were "
             f"found from {RECORD_START_YEAR} to {RECORD_END_YEAR}."
         )
 
@@ -963,10 +943,11 @@ def calculate_event_exceedance_probability(
     )
 
 
-def calculate_m_year_aep(
+def calculate_horizon_aep(
     annual_exceedance_probability,
+    horizon_years,
 ):
-    """Convert annual exceedance probability to M-year AEP."""
+    """Convert annual exceedance probability to a horizon-year AEP."""
 
     annual_exceedance_probability = float(
         np.clip(
@@ -978,7 +959,7 @@ def calculate_m_year_aep(
 
     return float(
         -np.expm1(
-            AEP_YEARS
+            horizon_years
             * np.log1p(
                 -annual_exceedance_probability
             )
@@ -986,198 +967,24 @@ def calculate_m_year_aep(
     )
 
 
-def generate_random_sample(
-    fitted_parameters,
-    distribution_name,
-    sample_size,
-    rng,
-):
-    """Generate one parametric-bootstrap sample."""
-
-    if distribution_name == "GEV":
-        shape_c, location, scale = fitted_parameters
-
-        return genextreme.rvs(
-            shape_c,
-            loc=location,
-            scale=scale,
-            size=sample_size,
-            random_state=rng,
-        )
-
-    if distribution_name == "Gumbel":
-        location, scale = fitted_parameters
-
-        return gumbel_r.rvs(
-            loc=location,
-            scale=scale,
-            size=sample_size,
-            random_state=rng,
-        )
-
-    if distribution_name == "GenEx":
-        shape, scale = fitted_parameters
-
-        uniforms = rng.uniform(
-            np.finfo(float).eps,
-            1.0 - np.finfo(float).eps,
-            size=sample_size,
-        )
-
-        return (
-            -scale
-            * np.log1p(
-                -np.power(
-                    uniforms,
-                    1.0 / shape,
-                )
-            )
-        )
-
-    raise ValueError(
-        f"Unsupported distribution: {distribution_name}"
-    )
-
-
-# =============================================================================
-# Bootstrap and analysis
-# =============================================================================
-
-def bootstrap_event_aep(
-    sample_values,
-    event_value,
-    fitted_parameters,
-    distribution_name,
-    random_seed,
-):
-    """Parametric-bootstrap confidence interval for fitted event AEP."""
-
-    rng = np.random.default_rng(random_seed)
-
-    bootstrap_aeps = np.full(
-        NUMBER_OF_BOOTSTRAPS,
-        np.nan,
-        dtype=float,
-    )
-
-    successful_fits = 0
-
-    for bootstrap_number in range(NUMBER_OF_BOOTSTRAPS):
-        simulated_values = generate_random_sample(
-            fitted_parameters=fitted_parameters,
-            distribution_name=distribution_name,
-            sample_size=sample_values.size,
-            rng=rng,
-        )
-
-        try:
-            bootstrap_parameters = fit_distribution(
-                simulated_values,
-                distribution_name,
-            )
-
-            annual_probability = (
-                calculate_event_exceedance_probability(
-                    event_value=event_value,
-                    fitted_parameters=bootstrap_parameters,
-                    distribution_name=distribution_name,
-                )
-            )
-
-            bootstrap_aep = calculate_m_year_aep(
-                annual_probability
-            )
-
-        except (
-            RuntimeError,
-            ValueError,
-            FloatingPointError,
-        ):
-            continue
-
-        if not np.isfinite(bootstrap_aep):
-            continue
-
-        bootstrap_aeps[bootstrap_number] = bootstrap_aep
-        successful_fits += 1
-
-    minimum_successful_fits = int(
-        np.ceil(
-            MINIMUM_BOOTSTRAP_SUCCESS_FRACTION
-            * NUMBER_OF_BOOTSTRAPS
-        )
-    )
-
-    if successful_fits < minimum_successful_fits:
-        raise RuntimeError(
-            f"Only {successful_fits} of {NUMBER_OF_BOOTSTRAPS} bootstrap "
-            f"fits succeeded for {distribution_name}."
-        )
-
-    alpha = 1.0 - CONFIDENCE_LEVEL
-
-    lower = float(
-        np.nanpercentile(
-            bootstrap_aeps,
-            100.0 * alpha / 2.0,
-        )
-    )
-
-    upper = float(
-        np.nanpercentile(
-            bootstrap_aeps,
-            100.0 * (1.0 - alpha / 2.0),
-        )
-    )
-
-    return lower, upper, successful_fits
-
-
 def analyse_event_aep(
     sample_values,
     event_value,
     distribution_name,
-    random_seed,
 ):
-    """Fit one distribution and calculate event AEP with uncertainty."""
+    """Fit one distribution and calculate a single event AEP estimate."""
 
-    fitted_parameters = fit_distribution(
-        sample_values,
-        distribution_name,
-    )
-
+    fitted_parameters = fit_distribution(sample_values, distribution_name)
     annual_probability = calculate_event_exceedance_probability(
         event_value=event_value,
         fitted_parameters=fitted_parameters,
         distribution_name=distribution_name,
     )
-
-    return_period = (
-        np.inf
-        if annual_probability <= 0
-        else 1.0 / annual_probability
-    )
-
-    estimate = calculate_m_year_aep(
-        annual_probability
-    )
-
-    lower, upper, successful_fits = bootstrap_event_aep(
-        sample_values=sample_values,
-        event_value=event_value,
-        fitted_parameters=fitted_parameters,
-        distribution_name=distribution_name,
-        random_seed=random_seed,
-    )
-
+    return_period = np.inf if annual_probability <= 0 else 1.0 / annual_probability
     return {
         "fitted_parameters": fitted_parameters,
         "annual_exceedance_probability": annual_probability,
         "return_period": return_period,
-        "aep": estimate,
-        "lower": lower,
-        "upper": upper,
-        "successful_bootstraps": successful_fits,
     }
 
 
@@ -1199,8 +1006,6 @@ def analyse_empirical_event_aep(
     Therefore, an event larger than all values in a 66-value sample has rank 1,
     annual exceedance probability 1/66, and return period 66 years.
 
-    No parametric confidence interval is assigned to the empirical estimate;
-    lower and upper are set equal to the point estimate for plotting.
     """
 
     sample_values = np.asarray(
@@ -1226,18 +1031,10 @@ def analyse_empirical_event_aep(
     annual_probability = rank / sample_values.size
     return_period = sample_values.size / rank
 
-    estimate = calculate_m_year_aep(
-        annual_probability
-    )
-
     return {
         "fitted_parameters": None,
         "annual_exceedance_probability": annual_probability,
         "return_period": return_period,
-        "aep": estimate,
-        "lower": estimate,
-        "upper": estimate,
-        "successful_bootstraps": None,
         "empirical_rank": rank,
         "sample_size": sample_values.size,
     }
@@ -1247,7 +1044,6 @@ def analyse_method_event_aep(
     sample_values,
     event_value,
     method_name,
-    random_seed,
 ):
     """Run either one fitted distribution or the empirical rank method."""
 
@@ -1261,7 +1057,6 @@ def analyse_method_event_aep(
         sample_values=sample_values,
         event_value=event_value,
         distribution_name=method_name,
-        random_seed=random_seed,
     )
 
 
@@ -1269,661 +1064,233 @@ def analyse_method_event_aep(
 # Reporting and plotting
 # =============================================================================
 
-def print_result(
-    group_name,
-    threshold_dataset,
-    distribution_name,
-    sample_values,
-    event_value,
-    event_label,
-    analysis,
-):
-    """Print one fitted probability result."""
+def print_result(group_name, threshold_dataset, method_name, event_label, analysis):
+    """Print the return period plus the N-year and M-year AEPs."""
 
-    print()
-    print(
-        f"{group_name} — {get_reference_name(threshold_dataset)} threshold "
-        f"— {distribution_name} — {event_label}"
+    return_period = analysis["return_period"]
+    return_period_text = (
+        f"{return_period:.3f} years" if np.isfinite(return_period) else "infinite"
+    )
+    annual_probability = analysis["annual_exceedance_probability"]
+    n_year_aep = calculate_horizon_aep(
+        annual_probability,
+        N_AEP_YEARS,
+    )
+    m_year_aep = calculate_horizon_aep(
+        annual_probability,
+        M_AEP_YEARS,
     )
     print(
-        "-" * 72
-    )
-    print(
-        f"Fitted month:                 "
-        f"{MONTH_NAMES[SELECTED_MONTH - 1]}"
-    )
-    print(
-        f"Sample size:                  "
-        f"{sample_values.size}"
-    )
-    print(
-        f"Event threshold:              "
-        f"{event_value:.3f} mm "
-        f"({get_reference_name(threshold_dataset)})"
+        f"{event_label} | {group_name} | "
+        f"{get_reference_name(threshold_dataset)} | {method_name}: "
+        f"return period = {return_period_text}; "
+        f"{N_AEP_YEARS}-year AEP = {100.0 * n_year_aep:.6g}%; "
+        f"{M_AEP_YEARS}-year AEP = {100.0 * m_year_aep:.6g}%"
     )
 
-    if np.isfinite(analysis["return_period"]):
-        print(
-            f"Return period:                "
-            f"{analysis['return_period']:.3f} years"
-        )
-    else:
-        print(
-            "Return period:                infinite"
-        )
 
-    print(
-        f"{AEP_YEARS}-year AEP:                 "
-        f"{100.0 * analysis['aep']:.3f}%"
-    )
-    print(
-        f"{CONFIDENCE_LEVEL:.0%} bootstrap interval:      "
-        f"{100.0 * analysis['lower']:.3f}% to "
-        f"{100.0 * analysis['upper']:.3f}%"
-    )
-    if distribution_name == "Empirical":
-        print(
-            f"Empirical rank:               "
-            f"{analysis['empirical_rank']}/"
-            f"{analysis['sample_size']}"
-        )
-        print(
-            "Confidence interval:          not calculated "
-            "for the empirical rank estimate"
-        )
-    else:
-        print(
-            f"Successful bootstrap fits:    "
-            f"{analysis['successful_bootstraps']}/"
-            f"{NUMBER_OF_BOOTSTRAPS}"
-        )
+def display_aep_percent(aep):
+    """Convert AEP to percent and place exact zeros at the plot minimum."""
 
-
-def build_plot_records(
-    results,
-):
-    """Build one x-axis record containing both events at each position."""
-
-    records = []
-
-    group_definitions = [
-        (
-            "Reference",
-            "reference",
-        ),
-        (
-            "Model raw",
-            "raw",
-        ),
-        (
-            "Model BC",
-            "bias_corrected",
-        ),
-    ]
-
-    for group_label, group_key in group_definitions:
-        for threshold_dataset in REFERENCE_DATASETS:
-            for distribution_name in METHODS:
-                records.append(
-                    {
-                        "group_label": group_label,
-                        "group_key": group_key,
-                        "threshold_dataset": threshold_dataset,
-                        "distribution_name": distribution_name,
-                        "storm_hans_analysis": results[
-                            (
-                                group_key,
-                                threshold_dataset,
-                                distribution_name,
-                                "storm_hans",
-                            )
-                        ],
-                        "record_analysis": results[
-                            (
-                                group_key,
-                                threshold_dataset,
-                                distribution_name,
-                                "record",
-                            )
-                        ],
-                    }
-                )
-
-    return records
-
-
-def calculate_plot_positions(
-    records,
-):
-    """
-    Assign sequential, non-overlapping positions to every estimate.
-
-    Every adjacent estimate within a major group is separated by
-    ESTIMATE_SPACING. The empty gap between major groups is GROUP_SPACING.
-    Group tick locations are placed at the midpoint of each complete group.
-    """
-
-    group_order = [
-        "reference",
-        "raw",
-        "bias_corrected",
-    ]
-
-    positions = np.full(
-        len(records),
-        np.nan,
-        dtype=float,
-    )
-
-    group_centers = {}
-    group_bounds = {}
-
-    next_x = 0.0
-
-    for group_key in group_order:
-        group_indices = [
-            index
-            for index, record in enumerate(records)
-            if record["group_key"] == group_key
-        ]
-
-        if not group_indices:
+    percent = 100.0 * float(aep)
+    if percent == 0.0:
+        if YMIN_PERCENT is None:
             raise ValueError(
-                f"No plotting records were found for group '{group_key}'."
+                "YMIN_PERCENT must be set when an AEP can equal zero on a log axis."
             )
+        return float(YMIN_PERCENT)
+    return percent
 
-        group_positions = (
-            next_x
-            + ESTIMATE_SPACING
-            * np.arange(
-                len(group_indices),
-                dtype=float,
-            )
-        )
 
-        for index, position in zip(
-            group_indices,
-            group_positions,
-        ):
-            positions[index] = position
+def build_plot_groups(model_label):
+    """Return Reference and Model groups for the N-year and M-year AEPs."""
 
-        group_start = float(
-            group_positions[0]
-        )
-        group_end = float(
-            group_positions[-1]
-        )
+    return [
+        ("reference", N_AEP_YEARS, f"Reference\n{N_AEP_YEARS}-year EP"),
+        ("model", N_AEP_YEARS, f"{model_label}\n{N_AEP_YEARS}-year EP"),
+        ("reference", M_AEP_YEARS, f"Reference\n{M_AEP_YEARS}-year EP"),
+        ("model", M_AEP_YEARS, f"{model_label}\n{M_AEP_YEARS}-year EP"),
+    ]
 
-        group_bounds[group_key] = (
-            group_start,
-            group_end,
-        )
 
-        group_centers[group_key] = (
-            0.5
-            * (
-                group_start
-                + group_end
-            )
-        )
+def get_threshold_title(reference_data):
+    """Return a concise title for the selected event threshold."""
 
-        next_x = (
-            group_end
-            + GROUP_SPACING
-        )
+    if EVENT_THRESHOLD == "storm_hans":
+        return f"Storm Hans threshold (August {STORM_HANS_YEAR})"
 
-    if not np.isfinite(positions).all():
-        raise RuntimeError(
-            "One or more plotting positions were not assigned."
-        )
+    record_years = sorted(
+        {
+            reference_data[dataset]["record_year"]
+            for dataset in REFERENCE_DATASETS
+        }
+    )
+    if len(record_years) == 1:
+        year_text = str(record_years[0])
+    else:
+        year_text = "/".join(str(year) for year in record_years)
 
     return (
-        positions,
-        group_centers,
-        group_bounds,
+        f"{MONTH_NAMES[SELECTED_MONTH - 1]} record threshold "
+        f"({year_text})"
     )
 
 
-def plot_results(
-    results,
-    filename_out,
-):
-    """Plot Storm Hans and historical-record estimates at shared x positions."""
+def plot_results(results, model_label, threshold_title, filename_out):
+    """Plot one selected threshold in a single panel with four x-axis groups."""
 
-    records = build_plot_records(
-        results
-    )
+    groups = build_plot_groups(model_label)
+    group_x = GROUP_SPACING * np.arange(len(groups), dtype=float)
+    dataset_offsets = {
+        "senorge": -DATASET_X_OFFSET,
+        "era5": DATASET_X_OFFSET,
+    }
+    dataset_facecolors = {
+        "senorge": "black",
+        "era5": "none",
+    }
 
-    x, group_centers, group_bounds = calculate_plot_positions(
-        records
-    )
+    fig, ax = plt.subplots(figsize=(FIG_WIDTH_IN, FIG_HEIGHT_IN))
+    plotted_values = []
 
-    plotted_bounds = []
+    for group_index, (group_key, horizon_years, _) in enumerate(groups):
+        for threshold_dataset in REFERENCE_DATASETS:
+            point_x = group_x[group_index] + dataset_offsets[threshold_dataset]
 
-    fig, ax = plt.subplots(
-        figsize=(
-            FIG_WIDTH_IN,
-            FIG_HEIGHT_IN,
-        )
-    )
+            for method_name in METHODS:
+                if (
+                    group_key == "reference"
+                    and method_name == "Empirical"
+                    and not PLOT_REFERENCE_EMPIRICAL
+                ):
+                    continue
 
-    event_definitions = [
-        (
-            "storm_hans_analysis",
-            "Storm Hans, August 2023",
-            True,
-            4,
-        ),
-        (
-            "record_analysis",
-            (
-                f"August record "
-                f"{RECORD_START_YEAR}-{RECORD_END_YEAR}"
-            ),
-            False,
-            3,
-        ),
-    ]
-
-    for index, record in enumerate(records):
-        threshold_dataset = record["threshold_dataset"]
-        method_name = record["distribution_name"]
-
-        color = get_reference_color(
-            threshold_dataset
-        )
-
-        marker = METHOD_MARKERS[
-            method_name
-        ]
-
-        for (
-            analysis_key,
-            event_label,
-            filled_marker,
-            zorder,
-        ) in event_definitions:
-            analysis = record[
-                analysis_key
-            ]
-
-            estimate = (
-                100.0
-                * analysis["aep"]
-            )
-
-            lower = (
-                100.0
-                * analysis["lower"]
-            )
-
-            upper = (
-                100.0
-                * analysis["upper"]
-            )
-
-            lower_error = max(
-                0.0,
-                estimate - lower,
-            )
-
-            upper_error = max(
-                0.0,
-                upper - estimate,
-            )
-
-            plotted_bounds.append(
-                (
-                    lower,
-                    upper,
+                analysis = results[(group_key, threshold_dataset, method_name)]
+                estimate = display_aep_percent(
+                    calculate_horizon_aep(
+                        analysis["annual_exceedance_probability"],
+                        horizon_years,
+                    )
                 )
-            )
+                plotted_values.append(estimate)
 
-            marker_facecolor = (
-                color
-                if filled_marker
-                else "none"
-            )
-
-            if method_name == "Empirical":
                 ax.plot(
-                    x[index],
+                    point_x,
                     estimate,
-                    marker=marker,
+                    marker=METHOD_MARKERS[method_name],
                     markersize=np.sqrt(POINT_SIZE),
-                    markerfacecolor=marker_facecolor,
-                    markeredgecolor=color,
-                    markeredgewidth=ERRORBAR_LINEWIDTH,
-                    color=color,
+                    markerfacecolor=dataset_facecolors[threshold_dataset],
+                    markeredgecolor="black",
+                    markeredgewidth=1.2,
+                    color="black",
                     linestyle="none",
-                    zorder=zorder,
-                )
-            else:
-                ax.errorbar(
-                    x[index],
-                    estimate,
-                    yerr=np.array(
-                        [
-                            [lower_error],
-                            [upper_error],
-                        ]
-                    ),
-                    fmt=marker,
-                    markersize=np.sqrt(POINT_SIZE),
-                    markerfacecolor=marker_facecolor,
-                    markeredgecolor=color,
-                    markeredgewidth=ERRORBAR_LINEWIDTH,
-                    color=color,
-                    ecolor=color,
-                    elinewidth=ERRORBAR_LINEWIDTH,
-                    capsize=ERRORBAR_CAPSIZE,
-                    capthick=ERRORBAR_LINEWIDTH,
-                    linestyle="none",
-                    zorder=zorder,
+                    zorder=4 if threshold_dataset == "senorge" else 3,
                 )
 
-            if SHOW_POINT_LABELS:
-                vertical_offset = (
-                    6
-                    if filled_marker
-                    else -8
-                )
+                if SHOW_POINT_LABELS:
+                    horizontal_offset = -5 if threshold_dataset == "senorge" else 5
+                    horizontal_alignment = "right" if threshold_dataset == "senorge" else "left"
+                    ax.annotate(
+                        f"{estimate:.3g}%",
+                        (point_x, estimate),
+                        xytext=(horizontal_offset, 4),
+                        textcoords="offset points",
+                        ha=horizontal_alignment,
+                        fontsize=ANNOTATION_FONTSIZE,
+                    )
 
-                vertical_alignment = (
-                    "bottom"
-                    if filled_marker
-                    else "top"
-                )
-
-                ax.annotate(
-                    f"{estimate:.2f}%",
-                    xy=(
-                        x[index],
-                        estimate,
-                    ),
-                    xytext=(
-                        0,
-                        vertical_offset,
-                    ),
-                    textcoords="offset points",
-                    ha="center",
-                    va=vertical_alignment,
-                    fontsize=ANNOTATION_FONTSIZE,
-                )
-
-    # Draw separators at the midpoint of the user-defined gaps.
-    group_boundaries = [
-        0.5
-        * (
-            group_bounds["reference"][1]
-            + group_bounds["raw"][0]
-        ),
-        0.5
-        * (
-            group_bounds["raw"][1]
-            + group_bounds["bias_corrected"][0]
-        ),
-    ]
-
-    for boundary in group_boundaries:
-        ax.axvline(
-            boundary,
-            color="0.78",
-            linewidth=GROUP_SEPARATOR_LINEWIDTH,
-            zorder=0,
-        )
-
-    ax.set_xticks(
-        [
-            group_centers["reference"],
-            group_centers["raw"],
-            group_centers["bias_corrected"],
-        ]
-    )
-
-    ax.set_xticklabels(
-        [
-            "Reference",
-            "Model raw",
-            "Model BC",
-        ],
-        fontsize=TICK_LABELSIZE,
-    )
-
-    ax.set_xlim(
-        x.min() - ESTIMATE_SPACING,
-        x.max() + ESTIMATE_SPACING,
-    )
-
-    ax.set_ylabel(
-        (
-            f"Probability of at least one exceedance "
-            f"in {AEP_YEARS} years [%]"
-        ),
-        fontsize=AXIS_LABELSIZE,
-    )
-
-    ax.set_title(
-        (
-            f"August 2023 Storm Hans and "
-            f"{RECORD_START_YEAR}-{RECORD_END_YEAR} August record"
-        ),
-        fontsize=TITLE_FONTSIZE,
-        fontweight="normal",
-        pad=8,
-    )
-
-    ax.set_yscale(
-        "log"
-    )
-
-    lower_bounds = np.asarray(
-        [
-            lower
-            for lower, upper in plotted_bounds
-        ],
+    positive_values = np.asarray(
+        [value for value in plotted_values if np.isfinite(value) and value > 0],
         dtype=float,
     )
-
-    upper_bounds = np.asarray(
-        [
-            upper
-            for lower, upper in plotted_bounds
-        ],
-        dtype=float,
-    )
-
-    positive_lower_bounds = lower_bounds[
-        np.isfinite(lower_bounds)
-        & (lower_bounds > 0)
-    ]
-
-    positive_upper_bounds = upper_bounds[
-        np.isfinite(upper_bounds)
-        & (upper_bounds > 0)
-    ]
-
-    if positive_lower_bounds.size == 0:
-        raise ValueError(
-            "No positive lower confidence limits are available "
-            "for the logarithmic y-axis."
-        )
-
-    if positive_upper_bounds.size == 0:
-        raise ValueError(
-            "No positive upper confidence limits are available "
-            "for the logarithmic y-axis."
-        )
-
-    automatic_ymin = (
-        YMIN_PADDING_FACTOR
-        * np.min(
-            positive_lower_bounds
-        )
-    )
-
-    automatic_ymax = (
-        YMAX_PADDING_FACTOR
-        * np.max(
-            positive_upper_bounds
-        )
-    )
+    if positive_values.size == 0:
+        raise ValueError("No positive AEP values are available for the log axis.")
 
     plot_ymin = (
-        automatic_ymin
+        YMIN_PADDING_FACTOR * positive_values.min()
         if YMIN_PERCENT is None
         else YMIN_PERCENT
     )
-
     plot_ymax = (
-        automatic_ymax
+        YMAX_PADDING_FACTOR * positive_values.max()
         if YMAX_PERCENT is None
         else YMAX_PERCENT
     )
-
     if plot_ymax <= plot_ymin:
         raise ValueError(
             "The final logarithmic y-axis maximum must exceed its minimum."
         )
 
-    ax.set_ylim(
-        bottom=plot_ymin,
-        top=plot_ymax,
+    ax.set_yscale("log")
+    ax.set_ylim(plot_ymin, plot_ymax)
+    ax.set_ylabel("Exceedance probability [%]", fontsize=AXIS_LABELSIZE)
+    ax.set_title(threshold_title, fontsize=TITLE_FONTSIZE, fontweight="normal", pad=8)
+
+    ax.set_xticks(group_x)
+    ax.set_xticklabels(
+        [label for _, _, label in groups],
+        fontsize=TICK_LABELSIZE,
+    )
+    ax.tick_params(axis="x", length=0)
+    ax.tick_params(axis="y", labelsize=TICK_LABELSIZE)
+    ax.set_xlim(
+        group_x.min() - 0.5 * GROUP_SPACING,
+        group_x.max() + 0.5 * GROUP_SPACING,
     )
 
     ax.yaxis.set_major_formatter(
-        FuncFormatter(
-            lambda y, position: (
-                ""
-                if y <= 0
-                else f"{y:g}%"
-            )
-        )
+        FuncFormatter(lambda y, position: "" if y <= 0 else f"{y:g}%")
     )
-
-    ax.tick_params(
-        axis="y",
-        labelsize=TICK_LABELSIZE,
-        direction="out",
-        length=3.5,
-        width=0.8,
-    )
-
-    ax.tick_params(
-        axis="x",
-        length=0,
-    )
-
-    ax.spines["top"].set_visible(
-        False
-    )
-    ax.spines["right"].set_visible(
-        False
-    )
-    ax.spines["left"].set_linewidth(
-        0.8
-    )
-    ax.spines["bottom"].set_linewidth(
-        0.8
-    )
-
-    color_handles = [
-        Line2D(
-            [0],
-            [0],
-            marker="o",
-            linestyle="none",
-            color=get_reference_color(
-                dataset
-            ),
-            markerfacecolor=get_reference_color(
-                dataset
-            ),
-            markeredgecolor=get_reference_color(
-                dataset
-            ),
-            markersize=np.sqrt(
-                POINT_SIZE
-            ),
-            label=(
-                f"{get_reference_name(dataset)} threshold / "
-                f"bias correction"
-            ),
-        )
-        for dataset in REFERENCE_DATASETS
-    ]
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
 
     method_handles = [
         Line2D(
-            [0],
-            [0],
-            marker=METHOD_MARKERS[
-                method_name
-            ],
+            [0], [0],
+            marker=METHOD_MARKERS[method],
             linestyle="none",
-            color="0.25",
-            markerfacecolor="0.25",
-            markeredgecolor="0.25",
-            markersize=np.sqrt(
-                POINT_SIZE
-            ),
-            label=method_name,
+            color="black",
+            markerfacecolor="black",
+            markeredgecolor="black",
+            markersize=np.sqrt(POINT_SIZE),
+            label=method,
         )
-        for method_name in METHODS
+        for method in METHODS
     ]
-
-    event_handles = [
+    dataset_handles = [
         Line2D(
-            [0],
-            [0],
+            [0], [0],
             marker="o",
             linestyle="none",
-            color="0.25",
-            markerfacecolor="0.25",
-            markeredgecolor="0.25",
-            markersize=np.sqrt(
-                POINT_SIZE
-            ),
-            label="Storm Hans, August 2023",
+            color="black",
+            markerfacecolor="black",
+            markeredgecolor="black",
+            markersize=np.sqrt(POINT_SIZE),
+            label="SeNorge",
         ),
         Line2D(
-            [0],
-            [0],
+            [0], [0],
             marker="o",
             linestyle="none",
-            color="0.25",
+            color="black",
             markerfacecolor="none",
-            markeredgecolor="0.25",
-            markeredgewidth=ERRORBAR_LINEWIDTH,
-            markersize=np.sqrt(
-                POINT_SIZE
-            ),
-            label=(
-                f"August record "
-                f"{RECORD_START_YEAR}-{RECORD_END_YEAR}"
-            ),
+            markeredgecolor="black",
+            markeredgewidth=1.2,
+            markersize=np.sqrt(POINT_SIZE),
+            label="ERA5",
         ),
     ]
-
-    legend_handles = (
-        color_handles
-        + method_handles
-        + event_handles
-    )
-
     ax.legend(
-        handles=legend_handles,
+        handles=method_handles + dataset_handles,
         loc="upper left",
         frameon=False,
         fontsize=TICK_LABELSIZE,
-        ncol=4,
-        columnspacing=1.6,
-        handletextpad=0.6,
-        labelspacing=0.5,
+        ncol=3,
+        columnspacing=1.5,
+        handletextpad=0.5,
     )
 
     fig.tight_layout()
-
     if WRITE_TO_FILE:
         fig.savefig(
             filename_out,
@@ -1931,13 +1298,7 @@ def plot_results(
             bbox_inches="tight",
             facecolor="white",
         )
-
-        print()
-        print(
-            "Wrote:",
-            filename_out,
-        )
-
+        print(f"Wrote: {filename_out}")
     plt.show()
 
 
@@ -1946,170 +1307,82 @@ def plot_results(
 # =============================================================================
 
 def main():
-    """Run Storm Hans and historical-record calculations for all samples."""
+    """Calculate and plot one selected threshold for references and model."""
 
     validate_user_settings()
 
-    if SELECTED_MONTH != STORM_HANS_MONTH:
-        print()
-        print(
-            "Warning: SELECTED_MONTH differs from STORM_HANS_MONTH. "
-            "Both August event thresholds will be evaluated against the "
-            "selected calendar-month distributions."
-        )
-
-    reference_data = {}
-
-    for dataset in REFERENCE_DATASETS:
-        reference_data[dataset] = read_reference_data(
-            dataset
-        )
-
-        print()
-        print(
-            f"Reading {get_reference_name(dataset)}:"
-        )
-        print(
-            reference_data[dataset]["filename"]
-        )
-        print(
-            f"  Storm Hans August {STORM_HANS_YEAR}: "
-            f"{reference_data[dataset]['storm_hans_value']:.3f} mm"
-        )
-        print(
-            f"  August record {RECORD_START_YEAR}-{RECORD_END_YEAR}: "
-            f"{reference_data[dataset]['record_value']:.3f} mm "
-            f"({reference_data[dataset]['record_year']})"
-        )
-
+    reference_data = {
+        dataset: read_reference_data(dataset)
+        for dataset in REFERENCE_DATASETS
+    }
     model_data = read_model_data()
 
-    print()
-    print(
-        "Reading raw UNSEEN:"
-    )
-    print(
-        model_data["filenames"]["raw"]
-    )
-
-    for dataset in REFERENCE_DATASETS:
-        print()
-        print(
-            f"Reading {get_reference_name(dataset)}-bias-corrected UNSEEN:"
+    thresholds = {
+        dataset: (
+            reference_data[dataset]["storm_hans_value"]
+            if EVENT_THRESHOLD == "storm_hans"
+            else reference_data[dataset]["record_value"]
         )
-        print(
-            model_data["filenames"]["bias_corrected"][dataset]
-        )
-
-    event_thresholds = {
-        dataset: {
-            "storm_hans": reference_data[dataset]["storm_hans_value"],
-            "record": reference_data[dataset]["record_value"],
-        }
         for dataset in REFERENCE_DATASETS
     }
-
     event_labels = {
-        dataset: {
-            "storm_hans": (
-                f"Storm Hans, August {STORM_HANS_YEAR}"
-            ),
-            "record": (
-                f"August record {RECORD_START_YEAR}-{RECORD_END_YEAR} "
-                f"({reference_data[dataset]['record_year']})"
-            ),
-        }
+        dataset: (
+            f"Storm Hans {STORM_HANS_YEAR}"
+            if EVENT_THRESHOLD == "storm_hans"
+            else (
+                f"{MONTH_NAMES[SELECTED_MONTH - 1]} record "
+                f"{reference_data[dataset]['record_year']}"
+            )
+        )
         for dataset in REFERENCE_DATASETS
     }
 
+    samples = {
+        ("reference", dataset): reference_data[dataset]["fit_values"]
+        for dataset in REFERENCE_DATASETS
+    }
+    samples.update({
+        ("model", dataset): model_data["samples"][dataset]
+        for dataset in REFERENCE_DATASETS
+    })
+
+    group_labels = {
+        "reference": "Reference",
+        "model": model_data["label"],
+    }
     results = {}
-    seed_counter = 0
 
-    def calculate_group(
-        group_key,
-        group_label,
-        threshold_dataset,
-        sample_values,
-    ):
-        """Calculate both events for every method in one sample."""
+    for group_key in ["reference", "model"]:
+        for threshold_dataset in REFERENCE_DATASETS:
+            sample_values = samples[(group_key, threshold_dataset)]
+            event_value = thresholds[threshold_dataset]
 
-        nonlocal seed_counter
-
-        for method_name in METHODS:
-            for event_key in [
-                "storm_hans",
-                "record",
-            ]:
-                event_value = event_thresholds[
-                    threshold_dataset
-                ][
-                    event_key
-                ]
+            for method_name in METHODS:
+                if (
+                    group_key == "reference"
+                    and method_name == "Empirical"
+                    and not PLOT_REFERENCE_EMPIRICAL
+                ):
+                    continue
 
                 analysis = analyse_method_event_aep(
                     sample_values=sample_values,
                     event_value=event_value,
                     method_name=method_name,
-                    random_seed=RANDOM_SEED + seed_counter,
                 )
-
-                results[
-                    (
-                        group_key,
-                        threshold_dataset,
-                        method_name,
-                        event_key,
-                    )
-                ] = analysis
-
+                results[(group_key, threshold_dataset, method_name)] = analysis
                 print_result(
-                    group_name=group_label,
+                    group_name=group_labels[group_key],
                     threshold_dataset=threshold_dataset,
-                    distribution_name=method_name,
-                    sample_values=sample_values,
-                    event_value=event_value,
-                    event_label=event_labels[
-                        threshold_dataset
-                    ][
-                        event_key
-                    ],
+                    method_name=method_name,
+                    event_label=event_labels[threshold_dataset],
                     analysis=analysis,
                 )
 
-                if method_name != "Empirical":
-                    seed_counter += 1
-
-    # 1. Reference samples and their matching event thresholds.
-    for dataset in REFERENCE_DATASETS:
-        calculate_group(
-            group_key="reference",
-            group_label="Reference",
-            threshold_dataset=dataset,
-            sample_values=reference_data[dataset]["fit_values"],
-        )
-
-    # 2. One raw model sample evaluated against both reference thresholds.
-    for threshold_dataset in REFERENCE_DATASETS:
-        calculate_group(
-            group_key="raw",
-            group_label="Model raw",
-            threshold_dataset=threshold_dataset,
-            sample_values=model_data["raw"],
-        )
-
-    # 3. Each bias-corrected sample uses events from its correction reference.
-    for reference_dataset in REFERENCE_DATASETS:
-        calculate_group(
-            group_key="bias_corrected",
-            group_label="Model BC",
-            threshold_dataset=reference_dataset,
-            sample_values=model_data["bias_corrected"][
-                reference_dataset
-            ],
-        )
-
     plot_results(
         results=results,
+        model_label=model_data["label"],
+        threshold_title=get_threshold_title(reference_data),
         filename_out=make_figure_filename(),
     )
 
