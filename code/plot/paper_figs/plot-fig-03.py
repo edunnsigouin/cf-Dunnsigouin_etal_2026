@@ -80,7 +80,7 @@ X_AXIS_MODE = "return_period"
 # Options:
 #     "senorge"
 #     "era5"
-REFERENCE_DATASET = "senorge"
+REFERENCE_DATASET = "era5"
 
 CATCHMENT = "regine_drammen"
 X_DAYS = 2
@@ -230,7 +230,7 @@ XMAX_AEP = 100.0
 YMIN = 0.0
 YMAX = 200
 
-WRITE_TO_FILE = True
+WRITE_TO_FILE = False
 FIGURE_DPI = 300
 
 

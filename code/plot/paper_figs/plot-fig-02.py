@@ -123,10 +123,10 @@ USE_BIAS_CORRECTED_MODEL = False
 # Options:
 #     "era5"
 #     "senorge"
-BIAS_CORRECTION_REFERENCE = "era5"
+BIAS_CORRECTION_REFERENCE = "senorge"
 
 
-write2file = False
+write2file = True
 
 
 # =============================================================================
