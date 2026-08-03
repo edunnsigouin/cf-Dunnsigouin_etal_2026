@@ -74,7 +74,7 @@ from Dunnsigouin_etal_2026 import config
 # Options:
 #     "senorge"
 #     "era5"
-REFERENCE_DATASET = "era5"
+REFERENCE_DATASET = "senorge"
 
 CATCHMENT = "regine_drammen"
 X_DAYS = 2
@@ -190,7 +190,7 @@ RECORD_LINESTYLE = ":"
 #     M-year exceedance probability
 #         = 1 - (1 - annual exceedance probability) ** M
 #
-X_AXIS_MODE = "aep"
+X_AXIS_MODE = "return period"
 
 # Number of independent years used for the exceedance-probability axis.
 # Set this to 1 for the standard annual exceedance probability (AEP).

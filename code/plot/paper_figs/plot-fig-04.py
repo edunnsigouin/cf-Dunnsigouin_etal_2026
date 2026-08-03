@@ -1,4 +1,8 @@
-"""Create a five-panel publication figure of exceedance probabilities.
+"""Create a five-panel publication figure of AEPs or return periods.
+
+Set PLOT_METRIC to:
+    "aep"           -> plot N_AEP_YEARS exceedance probability [%]
+    "return_period" -> plot annual return period [years]
 
 Panels a-d reproduce the four-panel workflow:
     a) left month, top threshold
@@ -6,8 +10,8 @@ Panels a-d reproduce the four-panel workflow:
     c) left month, bottom threshold
     d) right month, bottom threshold
 
-Panel e spans the full figure width and shows January-December AEP medians for
-both Storm Hans and calendar-record thresholds.
+Panel e spans the full figure width and shows January-December medians for both
+Storm Hans and calendar-record thresholds.
 
 Panels a-d use one shared legend. Panel e has its own legend:
     - color distinguishes Reference and Model;
@@ -15,11 +19,11 @@ Panels a-d use one shared legend. Panel e has its own legend:
       thresholds.
 
 For panel e, Reference medians use GEV, Gumbel, and GenEx. Model medians use
-the methods listed in METHODS. No min-max ranges are plotted.
+the methods listed in METHODS.
 
-Only the user-selected N_AEP_YEARS probability horizon is plotted. Values below
-YMIN_PERCENT are plotted at YMIN_PERCENT, and the lowest y-axis tick is labeled
-with a leading "<".
+Both AEP and return-period figures use logarithmic y-axes. Values outside the
+configured plotting limits are clamped to the nearest limit. The boundary tick
+is marked with "<" for AEP and ">" for return period.
 
 SciPy's genextreme shape parameter c has the opposite sign from conventional
 GEV xi: xi = -c.
@@ -89,7 +93,13 @@ RECORD_END_YEAR = 2022
 SELECTED_MONTH = LEFT_PANEL_MONTH
 EVENT_THRESHOLD = TOP_ROW_THRESHOLD
 
-# Probability horizon shown in every panel.
+# Quantity shown on the y-axis.
+# Options:
+#     "aep"           -> N_AEP_YEARS exceedance probability [%]
+#     "return_period" -> annual return period [years]
+PLOT_METRIC = "return_period"
+
+# Probability horizon used only when PLOT_METRIC = "aep".
 # Set to 1 for annual exceedance probability.
 N_AEP_YEARS = 1
 
@@ -163,7 +173,7 @@ MODEL_SAMPLING_GROUP = "full"
 # -----------------------------------------------------------------------------
 
 FIG_WIDTH_IN = 10
-FIG_HEIGHT_IN = 16
+FIG_HEIGHT_IN = 14
 FIGURE_DPI = 300
 
 POINT_SIZE = 60
@@ -192,12 +202,17 @@ TITLE_FONTSIZE = 12
 LEGEND_LABELSIZE = 10
 ANNOTATION_FONTSIZE = 8
 
-# Logarithmic AEP axis limits in percent. Leave either as None to determine
-# that limit automatically from the plotted point estimates.
-YMIN_PERCENT = 0.0001
-YMAX_PERCENT = 100
+# AEP axis limits in percent.
+# Values below AEP_YMIN_PERCENT are plotted at the lower boundary.
+AEP_YMIN_PERCENT = 0.0001
+AEP_YMAX_PERCENT = 100
 
-# Multiplicative padding applied when an automatic log-axis limit is used.
+# Return-period axis limits in years.
+# Infinite or larger return periods are plotted at RETURN_PERIOD_YMAX_YEARS.
+RETURN_PERIOD_YMIN_YEARS = 1
+RETURN_PERIOD_YMAX_YEARS = 1_000_000
+
+# Multiplicative padding used when a selected automatic limit is None.
 YMIN_PADDING_FACTOR = 0.5
 YMAX_PADDING_FACTOR = 2.0
 
@@ -275,6 +290,11 @@ def validate_user_settings():
                 f"{parameter_name} must be one of {REFERENCE_DATASETS}."
             )
 
+    if PLOT_METRIC not in {"aep", "return_period"}:
+        raise ValueError(
+            'PLOT_METRIC must be either "aep" or "return_period".'
+        )
+
     if RECORD_END_YEAR < RECORD_START_YEAR:
         raise ValueError(
             "RECORD_END_YEAR must be greater than or equal to "
@@ -298,23 +318,34 @@ def validate_user_settings():
         )
 
 
-    if YMIN_PERCENT is not None and YMIN_PERCENT <= 0:
-        raise ValueError(
-            "YMIN_PERCENT must be greater than zero on a logarithmic axis."
-        )
+    for parameter_name, value in [
+        ("AEP_YMIN_PERCENT", AEP_YMIN_PERCENT),
+        ("AEP_YMAX_PERCENT", AEP_YMAX_PERCENT),
+        ("RETURN_PERIOD_YMIN_YEARS", RETURN_PERIOD_YMIN_YEARS),
+        ("RETURN_PERIOD_YMAX_YEARS", RETURN_PERIOD_YMAX_YEARS),
+    ]:
+        if value is not None and value <= 0:
+            raise ValueError(
+                f"{parameter_name} must be greater than zero."
+            )
 
-    if YMAX_PERCENT is not None and YMAX_PERCENT <= 0:
+    if (
+        AEP_YMIN_PERCENT is not None
+        and AEP_YMAX_PERCENT is not None
+        and AEP_YMAX_PERCENT <= AEP_YMIN_PERCENT
+    ):
         raise ValueError(
-            "YMAX_PERCENT must be greater than zero on a logarithmic axis."
+            "AEP_YMAX_PERCENT must exceed AEP_YMIN_PERCENT."
         )
 
     if (
-        YMIN_PERCENT is not None
-        and YMAX_PERCENT is not None
-        and YMAX_PERCENT <= YMIN_PERCENT
+        RETURN_PERIOD_YMIN_YEARS is not None
+        and RETURN_PERIOD_YMAX_YEARS is not None
+        and RETURN_PERIOD_YMAX_YEARS <= RETURN_PERIOD_YMIN_YEARS
     ):
         raise ValueError(
-            "YMAX_PERCENT must exceed YMIN_PERCENT."
+            "RETURN_PERIOD_YMAX_YEARS must exceed "
+            "RETURN_PERIOD_YMIN_YEARS."
         )
 
     if YMIN_PADDING_FACTOR <= 0 or YMAX_PADDING_FACTOR <= 0:
@@ -454,7 +485,12 @@ def make_figure_filename():
         else f"{month_name}-record"
     )
 
-    filename = 'fig-04.png'
+    metric_label = (
+        f"{N_AEP_YEARS}year-aep"
+        if PLOT_METRIC == "aep"
+        else "return-period"
+    )
+    filename = f"fig-04-{metric_label}.png"
 
 
     return os.path.join(config.dirs["fig"], filename)
@@ -1144,20 +1180,64 @@ def print_result(group_name, threshold_dataset, method_name, event_label, analys
     )
 
 
-def display_aep_percent(aep):
-    """Convert AEP to percent and apply the lower plotting limit."""
+def get_metric_value(analysis):
+    """Return the selected plotting quantity from one analysis."""
 
-    percent = 100.0 * float(aep)
+    if PLOT_METRIC == "aep":
+        value = 100.0 * calculate_horizon_aep(
+            analysis["annual_exceedance_probability"],
+            N_AEP_YEARS,
+        )
 
-    if YMIN_PERCENT is None:
-        if percent <= 0.0:
+        if AEP_YMIN_PERCENT is not None:
+            value = max(value, float(AEP_YMIN_PERCENT))
+        if AEP_YMAX_PERCENT is not None:
+            value = min(value, float(AEP_YMAX_PERCENT))
+
+        return float(value)
+
+    return_period = float(analysis["return_period"])
+
+    if not np.isfinite(return_period):
+        if RETURN_PERIOD_YMAX_YEARS is None:
             raise ValueError(
-                "YMIN_PERCENT must be set when an AEP can be zero "
-                "or negative on a logarithmic axis."
+                "RETURN_PERIOD_YMAX_YEARS must be set when an infinite "
+                "return period is present."
             )
-        return percent
+        return_period = float(RETURN_PERIOD_YMAX_YEARS)
 
-    return max(percent, float(YMIN_PERCENT))
+    if RETURN_PERIOD_YMIN_YEARS is not None:
+        return_period = max(
+            return_period,
+            float(RETURN_PERIOD_YMIN_YEARS),
+        )
+    if RETURN_PERIOD_YMAX_YEARS is not None:
+        return_period = min(
+            return_period,
+            float(RETURN_PERIOD_YMAX_YEARS),
+        )
+
+    return return_period
+
+
+def get_metric_axis_label():
+    """Return the selected y-axis label."""
+
+    if PLOT_METRIC == "aep":
+        return (
+            f"{N_AEP_YEARS}-year exceedance probability [%]"
+        )
+
+    return "Return period [years]"
+
+
+def get_metric_title_term():
+    """Return wording used in panel titles."""
+
+    if PLOT_METRIC == "aep":
+        return "exceedance probability"
+
+    return "return period"
 
 
 def build_plot_groups(model_label):
@@ -1273,12 +1353,12 @@ def calculate_panel(panel_label, month, threshold_type):
     month_name = MONTH_NAMES[month - 1]
     if threshold_type == "storm_hans":
         title = (
-            f"{month_name} exceedance probability\nfor Storm Hans 2023"
+            f"{month_name} {get_metric_title_term()} for\n Storm Hans 2023"
         )
     else:
         title = (
-            f"{month_name} exceedance probability\nfor "
-            f"{month_name} {RECORD_START_YEAR}-{RECORD_END_YEAR} record"
+            f"{month_name} {get_metric_title_term()} for "
+            f"{month_name}\n {RECORD_START_YEAR}-{RECORD_END_YEAR} record"
         )
 
     return {
@@ -1293,7 +1373,12 @@ def make_five_panel_figure_filename():
     """Construct the publication figure filename."""
 
     model_label = "raw" if MODEL_DATA_MODE == "raw" else "bc"
-    filename = 'fig-04.png'
+    metric_label = (
+        f"{N_AEP_YEARS}year-aep"
+        if PLOT_METRIC == "aep"
+        else "return-period"
+    )
+    filename = f"fig-04-{metric_label}.png"
 
     return os.path.join(config.dirs["fig"], filename)
 
@@ -1397,8 +1482,7 @@ def calculate_panel_e():
     return {
         "panel_label": "e",
         "title": (
-            "e) Median monthly exceedance probability for Storm Hans "
-            "and calendar-month records"
+            f"e) Median monthly {get_metric_title_term()}"
         ),
         "monthly_outputs": monthly_outputs,
         "model_label": model_data["label"],
@@ -1414,16 +1498,11 @@ def calculate_panel_e():
 
 
 def get_panel_e_median(results, group_key, methods):
-    """Return the median panel e AEP across selected methods."""
+    """Return the median selected metric across methods."""
 
     values = [
-        display_aep_percent(
-            calculate_horizon_aep(
-                results[(group_key, method)][
-                    "annual_exceedance_probability"
-                ],
-                N_AEP_YEARS,
-            )
+        get_metric_value(
+            results[(group_key, method)]
         )
         for method in methods
     ]
@@ -1431,31 +1510,37 @@ def get_panel_e_median(results, group_key, methods):
     return float(np.median(values))
 
 
-def probability_tick_formatter(y, position, ymin):
-    """Format probability ticks and mark the lower plotting bound."""
+def metric_tick_formatter(y, position, ymin, ymax):
+    """Format ticks and mark the clamped plotting boundary."""
 
     if y <= 0:
         return ""
 
-    label = f"{y:g}%"
-    if np.isclose(y, ymin):
-        return f"<{label}"
+    if PLOT_METRIC == "aep":
+        label = f"{y:g}%"
+        if np.isclose(y, ymin):
+            return f"<{label}"
+        return label
 
+    label = f"{y:g}"
+    if np.isclose(y, ymax):
+        return f">{label}"
     return label
 
 
-def configure_probability_axis(ax, ymin, ymax):
-    """Apply shared logarithmic probability-axis formatting."""
+def configure_metric_axis(ax, ymin, ymax):
+    """Apply shared logarithmic metric-axis formatting."""
 
     ax.set_yscale("log")
-    ax.set_ylim(ymin, ymax)
+    ax.set_ylim(0.7*ymin, ymax*1.3)
     ax.tick_params(axis="y", labelsize=TICK_LABELSIZE)
     ax.yaxis.set_major_formatter(
         FuncFormatter(
-            lambda y, position: probability_tick_formatter(
+            lambda y, position: metric_tick_formatter(
                 y,
                 position,
                 ymin,
+                ymax,
             )
         )
     )
@@ -1539,14 +1624,14 @@ def plot_panel_e(ax, panel_e_output, ymin, ymax):
                 zorder=4,
             )
 
-    configure_probability_axis(ax, ymin, ymax)
+    configure_metric_axis(ax, ymin, ymax)
     ax.set_xlim(0.5, 12.5)
     ax.set_xticks(month_x)
     ax.set_xticklabels(
         [month[:3] for month in MONTH_NAMES],
         fontsize=TICK_LABELSIZE,
     )
-    ax.set_xlabel("Calendar month", fontsize=AXIS_LABELSIZE)
+    ax.set_xlabel("Month", fontsize=AXIS_LABELSIZE)
     ax.set_title(
         panel_e_output["title"],
         fontsize=TITLE_FONTSIZE,
@@ -1603,9 +1688,15 @@ def plot_panel_e(ax, panel_e_output, ymin, ymax):
         ),
     ]
 
+    panel_e_legend_location = (
+        "upper left"
+        if PLOT_METRIC == "aep"
+        else "lower left"
+    )
+
     ax.legend(
         handles=panel_e_handles,
-        loc="upper left",
+        loc=panel_e_legend_location,
         frameon=False,
         fontsize=LEGEND_LABELSIZE,
         ncol=2,
@@ -1656,12 +1747,7 @@ def plot_five_panels(panel_outputs, panel_e_output, model_label, filename_out):
                         (group_key, threshold_dataset, method_name)
                     ]
                     all_values.append(
-                        display_aep_percent(
-                            calculate_horizon_aep(
-                                analysis["annual_exceedance_probability"],
-                                N_AEP_YEARS,
-                            )
-                        )
+                        get_metric_value(analysis)
                     )
 
     for monthly_output in panel_e_output["monthly_outputs"]:
@@ -1695,18 +1781,25 @@ def plot_five_panels(panel_outputs, panel_e_output, model_label, filename_out):
     )
     if positive_values.size == 0:
         raise ValueError(
-            "No positive AEP values are available for the log axis."
+            "No positive metric values are available for the log axis."
         )
+
+    if PLOT_METRIC == "aep":
+        configured_ymin = AEP_YMIN_PERCENT
+        configured_ymax = AEP_YMAX_PERCENT
+    else:
+        configured_ymin = RETURN_PERIOD_YMIN_YEARS
+        configured_ymax = RETURN_PERIOD_YMAX_YEARS
 
     plot_ymin = (
         YMIN_PADDING_FACTOR * positive_values.min()
-        if YMIN_PERCENT is None
-        else YMIN_PERCENT
+        if configured_ymin is None
+        else configured_ymin
     )
     plot_ymax = (
         YMAX_PADDING_FACTOR * positive_values.max()
-        if YMAX_PERCENT is None
-        else YMAX_PERCENT
+        if configured_ymax is None
+        else configured_ymax
     )
 
     fig = plt.figure(
@@ -1762,18 +1855,13 @@ def plot_five_panels(panel_outputs, panel_e_output, model_label, filename_out):
                     analysis = results[
                         (group_key, threshold_dataset, method_name)
                     ]
-                    estimate = display_aep_percent(
-                        calculate_horizon_aep(
-                            analysis["annual_exceedance_probability"],
-                            N_AEP_YEARS,
-                        )
-                    )
+                    estimate = get_metric_value(analysis)
 
                     ax.plot(
                         point_x,
                         estimate,
                         marker=METHOD_MARKERS[method_name],
-                        markersize=np.sqrt(POINT_SIZE),
+                        markersize=np.sqrt(POINT_SIZE)*0.85,
                         markerfacecolor=(
                             dataset_facecolors[threshold_dataset]
                         ),
@@ -1790,7 +1878,11 @@ def plot_five_panels(panel_outputs, panel_e_output, model_label, filename_out):
 
                     if SHOW_POINT_LABELS:
                         ax.annotate(
-                            f"{estimate:.3g}%",
+                            (
+                                f"{estimate:.3g}%"
+                                if PLOT_METRIC == "aep"
+                                else f"{estimate:.3g} y"
+                            ),
                             (point_x, estimate),
                             xytext=(
                                 -5
@@ -1808,7 +1900,7 @@ def plot_five_panels(panel_outputs, panel_e_output, model_label, filename_out):
                         )
 
         ax.set_yscale("log")
-        ax.set_ylim(plot_ymin, plot_ymax)
+        ax.set_ylim(0.7*plot_ymin, plot_ymax*1.3)
         ax.set_xlim(
             group_x.min() - 0.5 * GROUP_SPACING,
             group_x.max() + 0.5 * GROUP_SPACING,
@@ -1822,10 +1914,11 @@ def plot_five_panels(panel_outputs, panel_e_output, model_label, filename_out):
         ax.tick_params(axis="y", labelsize=TICK_LABELSIZE)
         ax.yaxis.set_major_formatter(
             FuncFormatter(
-                lambda y, position: probability_tick_formatter(
+                lambda y, position: metric_tick_formatter(
                     y,
                     position,
                     plot_ymin,
+                    plot_ymax,
                 )
             )
         )
@@ -1848,11 +1941,11 @@ def plot_five_panels(panel_outputs, panel_e_output, model_label, filename_out):
         )
         
     axes[0].set_ylabel(
-        f"{N_AEP_YEARS}-year exceedance probability [%]",
+        get_metric_axis_label(),
         fontsize=AXIS_LABELSIZE,
     )
     axes[2].set_ylabel(
-        f"{N_AEP_YEARS}-year exceedance probability [%]",
+        get_metric_axis_label(),
         fontsize=AXIS_LABELSIZE,
     )
 
@@ -1865,7 +1958,7 @@ def plot_five_panels(panel_outputs, panel_e_output, model_label, filename_out):
             color="black",
             markerfacecolor="black",
             markeredgecolor="black",
-            markersize=np.sqrt(POINT_SIZE),
+            markersize=np.sqrt(POINT_SIZE)*0.85,
             label=method,
         )
         for method in METHODS
@@ -1879,7 +1972,7 @@ def plot_five_panels(panel_outputs, panel_e_output, model_label, filename_out):
             color="black",
             markerfacecolor="black",
             markeredgecolor="black",
-            markersize=np.sqrt(POINT_SIZE),
+            markersize=np.sqrt(POINT_SIZE)*0.85,
             label="SeNorge",
         ),
         Line2D(
@@ -1891,14 +1984,20 @@ def plot_five_panels(panel_outputs, panel_e_output, model_label, filename_out):
             markerfacecolor="none",
             markeredgecolor="black",
             markeredgewidth=1.0,
-            markersize=np.sqrt(POINT_SIZE),
+            markersize=np.sqrt(POINT_SIZE)*0.85,
             label="ERA5",
         ),
     ]
 
+    panel_a_legend_location = (
+        "upper left"
+        if PLOT_METRIC == "aep"
+        else "lower left"
+    )
+
     axes[0].legend(
         handles=method_handles + dataset_handles,
-        loc="upper left",
+        loc=panel_a_legend_location,
         frameon=False,
         fontsize=LEGEND_LABELSIZE,
         ncol=3,
@@ -1914,7 +2013,7 @@ def plot_five_panels(panel_outputs, panel_e_output, model_label, filename_out):
         ymax=plot_ymax,
     )
     ax_e.set_ylabel(
-        f"{N_AEP_YEARS}-year exceedance probability [%]",
+        get_metric_axis_label(),
         fontsize=AXIS_LABELSIZE,
     )
 

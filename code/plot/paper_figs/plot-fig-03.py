@@ -70,7 +70,7 @@ PANEL_M_YEARS = [
 # Options:
 #     "return_period" -> return period in years
 #     "aep"           -> probability of at least one exceedance in M years
-X_AXIS_MODE = "aep"
+X_AXIS_MODE = "return_period"
 
 
 # -----------------------------------------------------------------------------
@@ -619,7 +619,7 @@ def make_figure_filename():
         for m_years in PANEL_M_YEARS
     )
 
-    filename = 'fig-03.png'
+    filename = f'fig-03-{X_AXIS_MODE}.png'
 
     return os.path.join(
         config.dirs["fig"],
@@ -1418,21 +1418,13 @@ def convert_return_periods_to_plot_x(
     return 100.0 * m_year_probability
 
 
-def get_panel_x_axis_label(
-    m_years,
-):
+def get_panel_x_axis_label(m_years):
     """Return the x-axis label for one panel."""
 
     if X_AXIS_MODE == "return_period":
         return "Return period [years]"
 
-    if m_years == 1:
-        return "Annual exceedance probability [%]"
-
-    return (
-        f"Probability of at least one exceedance "
-        f"in {m_years} years [%]"
-    )
+    return f"{m_years}-year exceedance probability [%]"
 
 
 def get_shared_x_axis_label():
@@ -1441,7 +1433,7 @@ def get_shared_x_axis_label():
     if X_AXIS_MODE == "return_period":
         return "Return period [years]"
 
-    return "Exceedance probability [%]"
+    return "M-year exceedance probability [%]"
 
 
 def get_y_axis_label(
@@ -1499,7 +1491,7 @@ def format_x_axis(
             if x <= 0:
                 return ""
 
-            return f"{x:g}%"
+            return f"{x:g}"
 
         ax.xaxis.set_major_formatter(
             FuncFormatter(percent_formatter)
