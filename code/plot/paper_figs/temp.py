@@ -1,0 +1,453 @@
+"""Recreate debug.ipynb Out[62] (the fidelity heatmap).
+
+This is a standalone extraction of the calculations used by:
+  get_era5_2d -> get_s2s_2d -> test_fidelity -> make_fidelity_plot
+
+Edit the values in the User settings section below, then run:
+
+    python recreate_fidelity_plot.py
+
+The script reads the S2S and reference NetCDF files, recreates the fidelity
+table and heatmap, and optionally writes the results to disk.
+"""
+
+from __future__ import annotations
+
+import copy
+from pathlib import Path
+
+import matplotlib.pyplot as plt
+from matplotlib import colormaps
+import numpy as np
+import pandas as pd
+import scipy.stats as st
+import xarray as xr
+
+
+# =============================================================================
+# User settings
+# =============================================================================
+
+# Input files
+S2S_FILE = Path(
+    "/nird/datapeak/NS9873K/sipa/Hans-Oct/preprocessed/"
+    "sipa_preprocessed_s2s_drammen.nc"
+)
+
+REFERENCE_FILE = Path(
+    "/nird/datapeak/NS9873K/sipa/Hans-Oct/preprocessed/"
+    "sipa_preprocessed_era5_drammen.nc"
+)
+
+
+# Output files
+OUTPUT_PLOT = Path(
+    "fidelity_plot.png"
+)
+
+OUTPUT_CSV = Path(
+    "fidelity_counts.csv"
+)
+
+
+# Analysis settings
+N_SAMPLES = 10000
+N_DAYS = 2
+
+
+# Output behavior
+WRITE_PLOT = False
+WRITE_CSV = False
+SHOW_PLOT = True
+
+
+# =============================================================================
+# Fixed calculation settings
+# =============================================================================
+
+CORRECTION_NAMES = [
+    "raw",
+    "q corrected",
+    "doy corrected",
+    "ld corrected",
+    "q_doy corrected",
+]
+STATISTICS = {
+    "mean": np.mean,
+    "std": np.std,
+    "skew": st.skew,
+    "kurtosis": st.kurtosis,
+}
+
+
+def wrapped_rolling_mean(window_size: int, da: xr.DataArray, dim: str) -> xr.DataArray:
+    half = window_size // 2
+    wrapped = xr.concat(
+        [da.isel({dim: slice(-half, None)}), da, da.isel({dim: slice(0, half)})],
+        dim=dim,
+    )
+    rolled = wrapped.rolling({dim: window_size}, center=True).mean()
+    return rolled.isel({dim: slice(half, -half)})
+
+
+def add_doy_quantile(ds: xr.Dataset, qs: np.ndarray, delta: int = 0,
+                     reference: bool = False) -> xr.Dataset:
+    if reference:
+        data_dims = ("date",)
+    else:
+        data_dims = ("lead_day", "number", "i_date")
+
+    quantiles_by_doy = []
+    for doy in range(1, 367):
+        subset = ds.where((ds.doy >= doy - delta) & (ds.doy <= doy + delta), drop=True)
+        quantiles_by_doy.append(subset.quantile(qs))
+
+    q_by_doy = xr.concat(quantiles_by_doy, "doy").assign_coords(doy=np.arange(1, 367))
+
+    if reference:
+        thresholds = q_by_doy.tp24[ds.doy - 1].T.values[::-1, :]
+        values = ds.tp24.values[np.newaxis, :]
+    else:
+        thresholds = q_by_doy.tp24[ds.doy - 1].T.values[::-1, :, np.newaxis, :]
+        thresholds = np.repeat(thresholds, ds.sizes["number"], axis=2)
+        values = ds.tp24.values[np.newaxis, :, :, :]
+
+    comparisons = np.repeat(values, len(qs), axis=0) >= thresholds
+    allocation = (len(qs) - 1) - np.argmax(comparisons, axis=0)
+    return ds.assign_coords(quantile_doy=(data_dims, allocation))
+
+
+def add_global_quantile_reference(ds: xr.Dataset, qs: np.ndarray) -> xr.Dataset:
+    quantiles = np.quantile(ds.tp24.values, qs)
+    comparisons = np.repeat(ds.tp24.values[:, np.newaxis], len(qs), axis=1) >= np.repeat(
+        quantiles[np.newaxis, ::-1], ds.sizes["date"], axis=0
+    )
+    allocation = (len(qs) - 1) - np.argmax(comparisons, axis=1)
+    return ds.assign_coords(quantile_global=("date", allocation))
+
+
+def add_global_quantile_s2s(ds: xr.Dataset, qs: np.ndarray) -> xr.Dataset:
+    flat = ds.tp24.values.ravel()
+    quantiles = np.quantile(flat[~np.isnan(flat)], qs)
+    d0, d1, d2 = ds.tp24.shape
+    comparisons = np.repeat(ds.tp24.values[:, :, :, np.newaxis], len(qs), axis=3) >= np.repeat(
+        quantiles[np.newaxis, np.newaxis, np.newaxis, ::-1], d0, axis=0
+    ).repeat(d1, axis=1).repeat(d2, axis=2)
+    allocation = (len(qs) - 1) - np.argmax(comparisons, axis=3)
+    return ds.assign_coords(
+        quantile_global=(("lead_day", "number", "i_date"), allocation)
+    )
+
+
+def load_reference(path: Path, qs: np.ndarray, ndays: int = 2, delta: int = 30) -> xr.Dataset:
+    with xr.open_dataset(path) as opened:
+        ds = opened.load()
+    ds = ds.rolling(date=ndays).sum().shift(date=-(ndays - 1)).dropna("date")
+    ds = ds.assign_coords(month=ds.date.dt.month, doy=ds.date.dt.dayofyear)
+    ds = add_doy_quantile(ds, qs, delta=delta, reference=True)
+    return add_global_quantile_reference(ds, qs)
+
+
+def load_s2s(path: Path, qs: np.ndarray, ndays: int = 2) -> xr.Dataset:
+    with xr.open_dataset(path) as opened:
+        ds = opened.load()
+    ds = ds.rolling(lead_day=ndays).sum().shift(lead_day=-(ndays - 1))
+    # This reproduces the notebook: calendar month is assigned using the
+    # valid date at the 16th lead_day position (isel index 15).
+    month = ds.isel(lead_day=15).f_date.dt.month.drop_vars(["lead_day", "f_date"])
+    doy = ds.f_date.dt.dayofyear.drop_vars(["lead_day", "f_date"])
+    ds = ds.assign_coords(month=month, doy=doy)
+    ds = add_doy_quantile(ds, qs, delta=0, reference=False)
+    return add_global_quantile_s2s(ds, qs)
+
+
+def mean_by_doy_quantile(ds: xr.Dataset, delta: int = 0) -> xr.DataArray:
+    q_indices = np.unique(ds.quantile_doy.values)
+    q_indices.sort()
+    q_edges = np.hstack([q_indices / len(q_indices), [1]])
+    out = []
+    for doy in range(1, 367):
+        values = ds.where((ds.doy >= doy - delta) & (ds.doy <= doy + delta), drop=True).tp24.values.ravel()
+        values = np.sort(values[~np.isnan(values)])
+        n = len(values)
+        means = np.array([
+            np.mean(values[int(np.floor(q_edges[i] * n)):int(np.floor(q_edges[i + 1] * n))])
+            for i in range(len(q_indices))
+        ])
+        out.append(xr.DataArray(means, dims="quantile_doy", coords={"quantile_doy": q_indices / len(q_indices)}))
+    return xr.concat(out, "doy").assign_coords(doy=np.arange(1, 367))
+
+
+def correction_factors(method: str, reference: xr.Dataset, s2s: xr.Dataset,
+                       q_cutoff: int = 3, reference_window: int = 61,
+                       s2s_window: int = 15, rolling_window: int = 15):
+    if method == "raw":
+        return 1
+    if method == "q":
+        factors = reference.groupby("quantile_global").mean() / s2s.groupby("quantile_global").mean()
+        factors.tp24[-(q_cutoff - 1):] = factors.tp24[-q_cutoff]
+        return factors.tp24.drop_vars("number")[s2s.quantile_global]
+    if method == "doy":
+        ref_mean = reference.groupby("doy").mean().tp24
+        s2s_mean = s2s.groupby("doy").mean().mean("number").tp24
+        ref_roll = wrapped_rolling_mean(reference_window, ref_mean, "doy")
+        s2s_roll = wrapped_rolling_mean(s2s_window, s2s_mean, "doy")
+        factors = ref_roll.values / s2s_roll.values
+        return np.repeat(factors[s2s.doy - 1].T[:, np.newaxis, :], s2s.sizes["number"], axis=1)
+    if method == "ld":
+        factors = reference.mean("date").tp24 / s2s.mean("number").mean("i_date").tp24
+        return np.repeat(
+            np.repeat(factors.values[:, np.newaxis, np.newaxis], s2s.sizes["number"], axis=1),
+            s2s.sizes["i_date"], axis=2,
+        )
+    if method == "q_doy":
+        ref_q = mean_by_doy_quantile(reference, delta=(reference_window - 1) // 2)
+        s2s_q = mean_by_doy_quantile(s2s)
+        factors = wrapped_rolling_mean(rolling_window, ref_q, "doy") / wrapped_rolling_mean(
+            rolling_window, s2s_q, "doy"
+        )
+        factors.values[:, -(q_cutoff - 1):] = np.repeat(
+            factors.values[:, -q_cutoff][:, np.newaxis], q_cutoff - 1, axis=1
+        )
+        return factors[s2s.doy - 1, s2s.quantile_doy]
+    raise ValueError(f"Unknown correction method: {method}")
+
+
+def corrected_monthly_maxima(method: str, reference: xr.Dataset, s2s: xr.Dataset) -> xr.DataArray:
+    factors = correction_factors(method, reference, s2s)
+    return (factors * s2s.tp24).max("lead_day")
+
+
+def split_to_months(da: xr.DataArray) -> list[np.ndarray]:
+    result = []
+    for month in range(1, 13):
+        values = da.where(da.month == month, drop=True).values.ravel()
+        result.append(values[~np.isnan(values)])
+    return result
+
+
+def monthly_reference_maxima(reference: xr.Dataset) -> list[np.ndarray]:
+    by_year = reference.assign_coords(year=reference.date.dt.year).groupby(["month", "year"]).max()
+    result = []
+    for month in range(1, 13):
+        values = by_year.sel(month=month).tp24.values
+        result.append(values[~np.isnan(values)])
+    return result
+
+
+def bootstrap_interval(values: np.ndarray, sample_size: int, statistic,
+                       seed: int, n_samples: int) -> np.ndarray:
+    # RandomState reproduces the legacy np.random.seed / np.random.randint sequence.
+    rng = np.random.RandomState(seed)
+    sampled = values[rng.randint(0, len(values), size=(n_samples, sample_size))]
+    boot = statistic(sampled, axis=1)
+    return np.quantile(boot, [0.025, 0.975])
+
+
+def count_months_within(reference_lists: dict[str, list[np.ndarray]],
+                        s2s_lists: dict[str, list[np.ndarray]], statistic,
+                        n_samples: int) -> dict[str, np.ndarray]:
+    counts = {name: np.zeros(len(reference_lists), dtype=int) for name in s2s_lists}
+    for month in range(12):
+        sample_size = len(next(iter(reference_lists.values()))[month])
+        for i, (name, monthly) in enumerate(s2s_lists.items()):
+            low, high = bootstrap_interval(monthly[month], sample_size, statistic,
+                                           seed=(month + 1) * (i + 1), n_samples=n_samples)
+            for j, ref_monthly in enumerate(reference_lists.values()):
+                value = statistic(ref_monthly[month])
+                counts[name][j] += int(low <= value <= high)
+    return counts
+
+
+def calculate_fidelity(reference: xr.Dataset, s2s: xr.Dataset,
+                       n_samples: int = 10_000) -> pd.DataFrame:
+    ref_with_hans = monthly_reference_maxima(reference)
+    ref_without_hans = copy.deepcopy(ref_with_hans)
+    # Exact notebook behavior: Hans is assumed to be the last August maximum.
+    ref_without_hans[7] = ref_without_hans[7][:-1]
+    references = {"Reference with Hans": ref_with_hans, "Reference w/o Hans": ref_without_hans}
+
+    corrected = {}
+    for label in CORRECTION_NAMES:
+        method = label.split(" ")[0]
+        print(f"Computing {label} data ...", flush=True)
+        corrected[label] = split_to_months(corrected_monthly_maxima(method, reference, s2s))
+
+    table = {}
+    # Out[62] uses the second reference row: the reference series without Hans.
+    for stat_name, statistic in STATISTICS.items():
+        print(f"Bootstrapping {stat_name} ({n_samples:,} samples) ...", flush=True)
+        counts = count_months_within(references, corrected, statistic, n_samples)
+        table[stat_name] = [counts[label][1] for label in CORRECTION_NAMES]
+    return pd.DataFrame(table, index=CORRECTION_NAMES)
+
+
+def make_fidelity_plot(
+    table: pd.DataFrame,
+    output: Path,
+    write2file: bool = True,
+    show: bool = False,
+) -> None:
+    """Create the fidelity heatmap and optionally write it to disk."""
+
+    plt.figure()
+
+    image = plt.imshow(
+        12 - table.values,
+        cmap=colormaps["Blues"],
+        vmin=0,
+        vmax=6,
+    )
+
+    for (row, col), value in np.ndenumerate(
+        table.values
+    ):
+        plt.text(
+            col,
+            row,
+            int(value),
+            ha="center",
+            va="center",
+        )
+
+    image.axes.set_xticks(
+        range(4),
+        table.columns,
+    )
+
+    image.axes.set_yticks(
+        range(5),
+        table.index,
+    )
+
+    if write2file:
+        plt.savefig(
+            output,
+            bbox_inches="tight",
+            dpi=400,
+        )
+
+        print(
+            "Wrote:",
+            output,
+        )
+
+    if show:
+        plt.show()
+
+    plt.close()
+
+
+def main() -> None:
+    """Run the complete fidelity calculation and plotting workflow."""
+
+    for path, label in [
+        (
+            S2S_FILE,
+            "S2S",
+        ),
+        (
+            REFERENCE_FILE,
+            "reference",
+        ),
+    ]:
+        if not path.is_file():
+            raise FileNotFoundError(
+                f"{label} file not found: {path}"
+            )
+
+    if N_SAMPLES < 1:
+        raise ValueError(
+            "N_SAMPLES must be at least 1."
+        )
+
+    if N_DAYS < 1:
+        raise ValueError(
+            "N_DAYS must be at least 1."
+        )
+
+    qs = np.arange(
+        0,
+        0.96,
+        0.05,
+    )
+
+    print(
+        "Input files"
+    )
+    print(
+        "-----------"
+    )
+    print(
+        "S2S:      ",
+        S2S_FILE,
+    )
+    print(
+        "Reference:",
+        REFERENCE_FILE,
+    )
+
+    print()
+    print(
+        "Analysis settings"
+    )
+    print(
+        "-----------------"
+    )
+    print(
+        "Accumulation days:",
+        N_DAYS,
+    )
+    print(
+        "Bootstrap samples:",
+        f"{N_SAMPLES:,}",
+    )
+
+    reference = load_reference(
+        REFERENCE_FILE,
+        qs,
+        ndays=N_DAYS,
+        delta=30,
+    )
+
+    s2s = load_s2s(
+        S2S_FILE,
+        qs,
+        ndays=N_DAYS,
+    )
+
+    table = calculate_fidelity(
+        reference,
+        s2s,
+        n_samples=N_SAMPLES,
+    )
+
+    print()
+    print(
+        "Fidelity counts "
+        "(months out of 12):"
+    )
+    print(
+        table
+    )
+
+    if WRITE_CSV:
+        table.to_csv(
+            OUTPUT_CSV
+        )
+
+        print(
+            "Wrote:",
+            OUTPUT_CSV,
+        )
+
+    make_fidelity_plot(
+        table,
+        OUTPUT_PLOT,
+        write2file=WRITE_PLOT,
+        show=SHOW_PLOT,
+    )
+
+
+if __name__ == "__main__":
+    main()
