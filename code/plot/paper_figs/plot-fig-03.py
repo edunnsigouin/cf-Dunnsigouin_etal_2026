@@ -160,7 +160,7 @@ RECORD_LINESTYLE = ":"
 # -----------------------------------------------------------------------------
 
 MIN_RETURN_PERIOD = 1.01
-MAX_RETURN_PERIOD = 1000000.0
+MAX_RETURN_PERIOD = 10000000.0
 NUMBER_OF_RETURN_PERIODS = 500
 
 NUMBER_OF_BOOTSTRAPS = 100
@@ -217,6 +217,15 @@ REFERENCE_LINEWIDTH = 2
 RECORD_LINEWIDTH = 2
 MARKER_SIZE = 35
 MARKER_LINEWIDTH = 1.0
+
+# X-axis limits for return-period mode [years].
+XMIN_RETURN_PERIOD = 1.0
+XMAX_RETURN_PERIOD = 1.0e6
+
+# X-axis limits for AEP mode [%].
+# For example, 0.01 means 0.01%, not a fractional probability of 0.01.
+XMIN_AEP = 0.0001
+XMAX_AEP = 100.0
 
 YMIN = 0.0
 YMAX = 200
@@ -360,6 +369,31 @@ def validate_user_settings():
     if MAX_RETURN_PERIOD <= MIN_RETURN_PERIOD:
         raise ValueError(
             "MAX_RETURN_PERIOD must exceed MIN_RETURN_PERIOD."
+        )
+
+    if XMIN_RETURN_PERIOD <= 0:
+        raise ValueError(
+            "XMIN_RETURN_PERIOD must be greater than 0 for a logarithmic axis."
+        )
+
+    if XMAX_RETURN_PERIOD <= XMIN_RETURN_PERIOD:
+        raise ValueError(
+            "XMAX_RETURN_PERIOD must exceed XMIN_RETURN_PERIOD."
+        )
+
+    if XMIN_AEP <= 0:
+        raise ValueError(
+            "XMIN_AEP must be greater than 0 for a logarithmic axis."
+        )
+
+    if XMAX_AEP <= XMIN_AEP:
+        raise ValueError(
+            "XMAX_AEP must exceed XMIN_AEP."
+        )
+
+    if XMAX_AEP > 100:
+        raise ValueError(
+            "XMAX_AEP cannot exceed 100%."
         )
 
     if NUMBER_OF_BOOTSTRAPS < 1:
@@ -1466,26 +1500,16 @@ def format_x_axis(
 
     if X_AXIS_MODE == "return_period":
         ax.set_xlim(
-            0.8,
-            MAX_RETURN_PERIOD,
+            XMIN_RETURN_PERIOD,
+            XMAX_RETURN_PERIOD,
         )
 
     else:
-        minimum_probability = float(
-            convert_return_periods_to_plot_x(
-                np.array([MAX_RETURN_PERIOD]),
-                m_years,
-            )[0]
+        # AEP decreases as return period increases, so reverse the axis.
+        ax.set_xlim(
+            XMAX_AEP,
+            XMIN_AEP,
         )
-
-        maximum_probability = float(
-            convert_return_periods_to_plot_x(
-                np.array([MIN_RETURN_PERIOD]),
-                m_years,
-            )[0]
-        )
-
-        ax.set_xlim(120,minimum_probability)
 
         def percent_formatter(x, pos):
             if x <= 0:
