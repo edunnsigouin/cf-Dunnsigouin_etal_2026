@@ -30,6 +30,7 @@ era5_processed            = processed + 'era5/'
 era5_land_processed       = processed + 'era5_land/'
 senorge_processed         = processed + 'senorge/'
 senorge_regrid_processed  = processed + 'senorge_regrid/'
+sipa_processed            = processed + 'sipa/'
 
 dirs = {"proj":proj,
         "data_interim":data_interim,
@@ -52,4 +53,5 @@ dirs = {"proj":proj,
         "senorge_processed":senorge_processed,
         "senorge_regrid_processed":senorge_regrid_processed,
         "senorge_continuous_daily_regrid":senorge_continuous_daily_regrid,
+        "sipa_processed":sipa_processed,
 }        
