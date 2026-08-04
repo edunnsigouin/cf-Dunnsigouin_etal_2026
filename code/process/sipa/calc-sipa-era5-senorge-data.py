@@ -31,9 +31,9 @@ from Dunnsigouin_etal_2026 import config, misc
 # User settings
 # =============================================================================
 
-dataset    = "senorge"
-variable   = "rr"
-years      = np.arange(2000, 2024)
+dataset    = "era5"
+variable   = "tp24"
+date_range = ["2000-01-01","2023-08-10"]
 x_days     = 1
 catchment  = "regine_drammen"
 write2file = True
@@ -214,10 +214,22 @@ def get_config(dataset: str, variable: str) -> dict:
 def make_input_filename(cfg: dict, year: int) -> str:
     """Create input filename for one year."""
 
+
     return cfg["path_in"] + cfg["file_pattern"].format(
         grid=cfg["grid"],
         year=int(year),
     )
+
+
+
+def years_from_date_range(date_range) -> np.ndarray:
+    start=np.datetime64(date_range[0])
+    end=np.datetime64(date_range[1])
+    return np.arange(start.astype("datetime64[Y]").astype(int)+1970,
+                     end.astype("datetime64[Y]").astype(int)+1971)
+
+def subset_date_range(da: xr.DataArray,date_range)->xr.DataArray:
+    return da.sel(time=slice(date_range[0],date_range[1]))
 
 
 # =============================================================================
@@ -421,7 +433,7 @@ def load_yearly_data(cfg: dict, year: int) -> xr.DataArray:
 
 def load_era5_like(
     cfg: dict,
-    years: np.ndarray,
+    date_range,
     domain: str | None = None,
 ) -> xr.DataArray:
     """Load all ERA5 or ERA5-Land files at once."""
@@ -531,7 +543,7 @@ def xday_accumulation(
 def build_daily_catchment_mean(
     dataset: str,
     variable: str,
-    years: np.ndarray,
+    date_range,
     catchment: str,
     domain: str | None = None,
 ) -> tuple[xr.DataArray, dict]:
@@ -577,7 +589,7 @@ def build_daily_catchment_mean(
 
         da = load_era5_like(
             cfg=cfg,
-            years=years,
+            date_range=date_range,
             domain=domain,
         )
 
@@ -599,14 +611,12 @@ def build_daily_catchment_mean(
 # Output
 # =============================================================================
 
-def make_year_label(
-    years: np.ndarray,
+def make_date_label(
+    date_range,
 ) -> str:
     """Return a compact filename label for the selected years."""
 
-    first_year = int(
-        years[0]
-    )
+    return f"{date_range[0]}_{date_range[1]}"
 
     last_year = int(
         years[-1]
@@ -623,23 +633,12 @@ def make_year_label(
     )
 
 
-def make_output_filename(
-    years: np.ndarray,
-) -> str:
-    """Create the requested output filename."""
-
-    year_label = (
-        make_year_label(
-            years
-        )
-    )
-
+def make_output_filename(date_range) -> str:
     return (
         f"{output_directory}"
         f"sipa_preprocessed_{dataset}_drammen_"
-        f"{year_label}.nc"
+        f"{date_range[0]}_{date_range[1]}.nc"
     )
-
 
 def format_like_sipa_preprocessed_era5(
     da_out: xr.DataArray,
@@ -710,7 +709,7 @@ def format_like_sipa_preprocessed_era5(
 
 def write_output(
     da_out: xr.DataArray,
-    years: np.ndarray,
+    date_range,
     number_value: int,
     write2file: bool = True,
 ) -> xr.Dataset:
@@ -723,10 +722,7 @@ def write_output(
 
     if write2file:
 
-        filename_out = (
-            make_output_filename(
-                years=years,
-            )
+        filename_out = (make_output_filename(date_range)
         )
 
         encoding = {
@@ -778,13 +774,17 @@ if __name__ == "__main__":
 
     use_domain = domain if dataset in {"era5", "era5_land"} else None
 
+    years = years_from_date_range(date_range)
+
     ts_daily, cfg = build_daily_catchment_mean(
         dataset=dataset,
         variable=variable,
-        years=years,
+        date_range=date_range,
         catchment=catchment,
         domain=use_domain,
     )
+
+    ts_daily = subset_date_range(ts_daily, date_range)
 
     da_acc = xday_accumulation(
         ts=ts_daily,
@@ -795,7 +795,7 @@ if __name__ == "__main__":
 
     out = write_output(
         da_out=da_acc,
-        years=years,
+        date_range=date_range,
         number_value=number_value,
         write2file=write2file,
     )

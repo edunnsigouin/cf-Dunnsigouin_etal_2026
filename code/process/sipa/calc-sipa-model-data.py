@@ -66,7 +66,7 @@ minimum_acceptable_hindcast_lead = 15
 
 # Write the forecast-only and hindcast-only files in addition to the
 # combined output file.
-write_separate_files = False
+write_separate_files = True
 
 write2file = True
 
@@ -778,23 +778,29 @@ def concatenate_initializations(
     datasets,
     label,
 ):
-    """Concatenate preprocessed datasets along i_date."""
+    """
+    Concatenate preprocessed datasets along i_date.
+
+    The input-list order is preserved deliberately to match the original
+    preprocess_s2s.py organization. No chronological sorting is applied.
+
+    Consequently:
+
+    - the forecast-only output follows forecast-file order;
+    - the hindcast-only output follows accepted hindcast-file order;
+    - the combined output contains all forecasts first, followed by all
+      accepted hindcasts.
+    """
 
     if not datasets:
         raise ValueError(
             f"No {label} datasets were available for concatenation."
         )
 
-    combined = xr.concat(
+    return xr.concat(
         datasets,
         dim="i_date",
     )
-
-    combined = combined.sortby(
-        "i_date"
-    )
-
-    return combined
 
 
 def build_output_datasets(

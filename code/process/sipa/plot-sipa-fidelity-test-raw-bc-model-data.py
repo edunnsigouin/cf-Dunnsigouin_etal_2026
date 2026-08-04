@@ -4,7 +4,7 @@ Reproduce the fidelity heatmap shown in debug.ipynb Out[62].
 The script reads:
 
 1. A preprocessed reference file created by the reference preprocessing script:
-       sipa_preprocessed_<reference_dataset>_<file_id>_<firstyear>-<lastyear>.nc
+       sipa_preprocessed_<reference_dataset>_<file_id>_<startdate>_<enddate>.nc
 
 2. A preprocessed S2S model file created by the model preprocessing script:
        sipa_preprocessed_s2s_<file_id>_<startdate>_<enddate>.nc
@@ -59,13 +59,16 @@ from Dunnsigouin_etal_2026 import config
 #     "senorge_regrid"
 reference_dataset = "era5"
 
-# Years used to create the reference file.
-reference_years = np.arange(1957,2023)
+# Calendar-date range used to create the reference file.
+reference_date_range = [
+    "2000-01-01",
+    "2023-08-10",
+]
 
 # Forecast initialization dates used to create the S2S model file.
 model_forecast_date_range = [
     "2020-01-02",
-    "2022-12-29",
+    "2023-06-26",
 ]
 
 # Catchment used by both preprocessing scripts.
@@ -105,7 +108,7 @@ quantile_doy_rolling_window = 15
 # This reproduces the exact "without Hans" behavior used by Out[62].
 REMOVE_HANS = True
 
-# Input/output directory containing the sipa_preprocessed files.
+# Input/Output Directory Containing The Sipa_Preprocessed Files.
 path_in = Path(
     config.dirs[
         "sipa_processed"
@@ -163,6 +166,21 @@ STATISTICS = {
     "kurtosis": st.kurtosis,
 }
 
+MONTH_LABELS = [
+    "January",
+    "February",
+    "March",
+    "April",
+    "May",
+    "June",
+    "July",
+    "August",
+    "September",
+    "October",
+    "November",
+    "December",
+]
+
 
 # =============================================================================
 # Catchment and filename helpers
@@ -191,27 +209,14 @@ def get_file_id(
     return catchment
 
 
-def make_year_label(
-    years,
+def make_date_label(
+    date_range,
 ):
-    """Return the year label used by the reference preprocessing script."""
-
-    first_year = int(
-        years[0]
-    )
-
-    last_year = int(
-        years[-1]
-    )
-
-    if first_year == last_year:
-        return str(
-            first_year
-        )
+    """Return the date-range label used by the reference preprocessing script."""
 
     return (
-        f"{first_year}-"
-        f"{last_year}"
+        f"{date_range[0]}_"
+        f"{date_range[1]}"
     )
 
 
@@ -227,20 +232,12 @@ def make_reference_filename():
         catchment
     )
 
-    year_label = make_year_label(
-        reference_years
+    date_label = make_date_label(
+        reference_date_range
     )
 
-    return (
-        path_in
-        / (
-            f"sipa_preprocessed_"
-            f"{reference_dataset}_"
-            f"{file_id}_"
-            f"{year_label}.nc"
-        )
-    )
-
+    return (path_in/(f"sipa_preprocessed_{reference_dataset}_{file_id}_{date_label}.nc"))
+    #return (path_in/(f"original/sipa_preprocessed_{reference_dataset}_{file_id}.nc"))
 
 def make_model_filename():
     """Create or return the selected S2S model filename."""
@@ -254,16 +251,8 @@ def make_model_filename():
         catchment
     )
 
-    return (
-        path_in
-        / (
-            f"sipa_preprocessed_s2s_"
-            f"{file_id}_"
-            f"{model_forecast_date_range[0]}_"
-            f"{model_forecast_date_range[1]}.nc"
-        )
-    )
-
+    return (path_in/(f"sipa_preprocessed_s2s_{file_id}_{model_forecast_date_range[0]}_{model_forecast_date_range[1]}.nc"))
+    #return (path_in/(f"original/sipa_preprocessed_s2s_{file_id}.nc")) 
 
 # =============================================================================
 # User-setting validation
@@ -302,9 +291,25 @@ def validate_user_settings():
             "n_bootstrap_samples must be at least 1."
         )
 
-    if len(reference_years) == 0:
+    if len(
+        reference_date_range
+    ) != 2:
         raise ValueError(
-            "reference_years must contain at least one year."
+            "reference_date_range must contain exactly two values: "
+            "a start date and an end date."
+        )
+
+    if (
+        np.datetime64(
+            reference_date_range[0]
+        )
+        >
+        np.datetime64(
+            reference_date_range[1]
+        )
+    ):
+        raise ValueError(
+            "The reference start date must not be later than the end date."
         )
 
     if (
@@ -1355,7 +1360,11 @@ def count_months_within(
     statistic,
     n_samples,
 ):
-    """Count months whose reference statistic lies in the bootstrap interval."""
+    """
+    Count passing months and retain month-level diagnostics.
+
+    Diagnostics are stored for every model version and reference series.
+    """
 
     counts = {
         name: np.zeros(
@@ -1365,6 +1374,14 @@ def count_months_within(
             dtype=int,
         )
         for name in model_lists
+    }
+
+    diagnostics = {
+        model_name: {
+            reference_name: []
+            for reference_name in reference_lists
+        }
+        for model_name in model_lists
     }
 
     for month in range(
@@ -1382,7 +1399,7 @@ def count_months_within(
         )
 
         for model_index, (
-            name,
+            model_name,
             monthly_values,
         ) in enumerate(
             model_lists.items()
@@ -1403,27 +1420,140 @@ def count_months_within(
                 n_samples=n_samples,
             )
 
-            for reference_index, reference_values in enumerate(
-                reference_lists.values()
+            for reference_index, (
+                reference_name,
+                reference_values,
+            ) in enumerate(
+                reference_lists.items()
             ):
 
-                reference_value = statistic(
-                    reference_values[
-                        month
-                    ]
+                reference_value = float(
+                    statistic(
+                        reference_values[
+                            month
+                        ]
+                    )
                 )
 
-                counts[
-                    name
-                ][
-                    reference_index
-                ] += int(
+                passed = bool(
                     low
                     <= reference_value
                     <= high
                 )
 
-    return counts
+                counts[
+                    model_name
+                ][
+                    reference_index
+                ] += int(
+                    passed
+                )
+
+                diagnostics[
+                    model_name
+                ][
+                    reference_name
+                ].append(
+                    {
+                        "month": month + 1,
+                        "reference_value": reference_value,
+                        "bootstrap_low": float(
+                            low
+                        ),
+                        "bootstrap_high": float(
+                            high
+                        ),
+                        "passed": passed,
+                    }
+                )
+
+    return (
+        counts,
+        diagnostics,
+    )
+
+
+def print_model_results(
+    statistic_name,
+    diagnostics,
+    reference_name,
+):
+    """
+    Print month-by-month fidelity results for every model-data version.
+    """
+
+    for model_name in CORRECTION_NAMES:
+
+        monthly_results = diagnostics[
+            model_name
+        ][
+            reference_name
+        ]
+
+        print()
+        print(
+            f"{model_name} monthly results for {statistic_name}"
+        )
+        print(
+            f"Reference: {reference_name}"
+        )
+        print(
+            "-" * 84
+        )
+
+        print(
+            f"{'Month':<12}"
+            f"{'Reference':>14}"
+            f"{'Bootstrap low':>16}"
+            f"{'Bootstrap high':>17}"
+            f"{'Result':>12}"
+        )
+
+        print(
+            "-" * 84
+        )
+
+        for result in monthly_results:
+
+            month_number = int(
+                result[
+                    "month"
+                ]
+            )
+
+            status = (
+                "PASS"
+                if result[
+                    "passed"
+                ]
+                else "FAIL"
+            )
+
+            print(
+                f"{MONTH_LABELS[month_number - 1]:<12}"
+                f"{result['reference_value']:>14.4f}"
+                f"{result['bootstrap_low']:>16.4f}"
+                f"{result['bootstrap_high']:>17.4f}"
+                f"{status:>12}"
+            )
+
+        number_passed = sum(
+            int(
+                result[
+                    "passed"
+                ]
+            )
+            for result in monthly_results
+        )
+
+        print(
+            "-" * 84
+        )
+
+        print(
+            f"Passed {number_passed} of 12 months; "
+            f"failed {12 - number_passed} of 12 months."
+        )
 
 
 def calculate_fidelity(
@@ -1504,7 +1634,10 @@ def calculate_fidelity(
             flush=True,
         )
 
-        counts = count_months_within(
+        (
+            counts,
+            diagnostics,
+        ) = count_months_within(
             reference_lists=references,
             model_lists=corrected_samples,
             statistic=statistic,
@@ -1521,6 +1654,18 @@ def calculate_fidelity(
             ]
             for label in CORRECTION_NAMES
         ]
+
+        selected_reference_name = list(
+            references.keys()
+        )[
+            selected_reference_index
+        ]
+
+        print_model_results(
+            statistic_name=statistic_name,
+            diagnostics=diagnostics,
+            reference_name=selected_reference_name,
+        )
 
     return pd.DataFrame(
         table,
