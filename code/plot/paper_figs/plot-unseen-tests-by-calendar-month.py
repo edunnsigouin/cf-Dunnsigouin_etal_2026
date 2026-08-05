@@ -129,7 +129,7 @@ from Dunnsigouin_etal_2026 import config
 # =============================================================================
 
 # Calendar month to plot: 1=January, ..., 12=December.
-selected_month = 8
+selected_month = 3
 
 # Accumulation period.
 x_days = 2
@@ -139,7 +139,7 @@ catchment = "regine_drammen"
 
 forecast_date_range = ("2020-01-02","2022-12-29")
 
-reference_years = ("1957","2023")
+reference_years = ("1957","2022")
 
 era5_grid = "0.5x0.5"
 

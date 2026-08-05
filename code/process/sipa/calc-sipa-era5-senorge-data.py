@@ -33,7 +33,7 @@ from Dunnsigouin_etal_2026 import config, misc
 
 dataset    = "era5"
 variable   = "tp24"
-date_range = ["2000-01-01","2023-08-10"]
+date_range = ["1957-01-01","2022-12-31"]
 x_days     = 1
 catchment  = "regine_drammen"
 write2file = True

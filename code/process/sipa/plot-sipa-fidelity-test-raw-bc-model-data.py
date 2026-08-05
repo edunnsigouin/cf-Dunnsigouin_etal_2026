@@ -57,18 +57,18 @@ from Dunnsigouin_etal_2026 import config
 #     "era5"
 #     "senorge"
 #     "senorge_regrid"
-reference_dataset = "era5"
+reference_dataset = "senorge"
 
 # Calendar-date range used to create the reference file.
 reference_date_range = [
-    "2000-01-01",
-    "2023-08-10",
+    "1957-01-01",
+    "2022-12-31",
 ]
 
 # Forecast initialization dates used to create the S2S model file.
 model_forecast_date_range = [
     "2020-01-02",
-    "2023-06-26",
+    "2022-12-29",
 ]
 
 # Catchment used by both preprocessing scripts.
@@ -106,7 +106,7 @@ quantile_doy_rolling_window = 15
 # Remove the final August reference maximum before selecting the plotted row.
 #
 # This reproduces the exact "without Hans" behavior used by Out[62].
-REMOVE_HANS = True
+REMOVE_HANS = False
 
 # Input/Output Directory Containing The Sipa_Preprocessed Files.
 path_in = Path(

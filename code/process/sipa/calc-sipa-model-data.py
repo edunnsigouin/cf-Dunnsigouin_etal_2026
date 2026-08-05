@@ -53,7 +53,7 @@ catchment = "regine_drammen"
 # Inclusive forecast initialization-date range.
 forecast_date_range = [
     "2020-01-02",
-    "2023-06-26",
+    "2022-12-29",
 ]
 
 # Input files must start with this text.

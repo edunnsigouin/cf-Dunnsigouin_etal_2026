@@ -28,10 +28,10 @@ from Dunnsigouin_etal_2026 import config, misc
 # User settings
 # =============================================================================
 
-dataset    = "era5_land"      # "senorge", "senorge_regrid", "era5", or "era5_land"
-variable   = "ro"                  # "rr", "gwb_q", "tp24", "ro", "sro"
-years      = np.arange(1950, 2024)
-x_days     = 2
+dataset    = "senorge"      # "senorge", "senorge_regrid", "era5", or "era5_land"
+variable   = "rr"                  # "rr", "gwb_q", "tp24", "ro", "sro"
+years      = np.arange(1957, 2023)
+x_days     = 1
 catchment  = "regine_drammen"
 write2file = True
 
