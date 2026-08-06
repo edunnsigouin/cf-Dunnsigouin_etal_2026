@@ -109,7 +109,7 @@ from Dunnsigouin_etal_2026 import config
 # Options:
 #     "era5"
 #     "senorge"
-reference_dataset = "senorge"
+reference_dataset = "era5"
 
 reference_years = [
     "1957",

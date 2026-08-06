@@ -131,8 +131,8 @@ input_data_type = "bias_corrected"
 #
 # bias_correction_reference options:
 #     "senorge", "era5"
-bias_correction_method = "q_doy"
-bias_correction_reference = "senorge"
+bias_correction_method = "ld"
+bias_correction_reference = "era5"
 
 # Original accumulation already contained in the bias-corrected input file.
 # This must equal accumulation_days because no further accumulation is applied.

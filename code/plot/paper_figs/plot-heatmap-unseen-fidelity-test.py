@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Create a raw-versus-bias-corrected fidelity-test heatmap for all 12 months.
+Create a raw-versus-multiple-bias-corrections fidelity heatmap for all 12 months.
 
 This script combines:
 
@@ -24,12 +24,14 @@ The raw compact model sample file is expected to contain:
     tp24_max(number, i_date)
     month(i_date)
 
-The bias-corrected compact model sample file is expected to contain:
+The bias-corrected compact model sample file is expected to contain the same
+sample variable names as the raw file:
 
-    tp24_max_bc_<reference>(number, i_date)
+    tp24_max(number, i_date)
+    tp24_max_lead<start>_<end>(number, i_date)
     month(i_date)
 
-where <reference> is either "era5" or "senorge".
+The filename identifies the monthly-mean bias correction and reference dataset.
 
 Calendar-month samples
 ----------------------
@@ -51,7 +53,11 @@ The output heatmap has:
 
     rows:
         raw
-        bias corrected
+        mm
+        q
+        doy
+        ld
+        q_doy
 
     columns:
         mean
@@ -65,10 +71,9 @@ corresponding fidelity test.
 Optional selective bias correction
 ----------------------------------
 When BIAS_CORRECT_ONLY_FAILED_MONTHS is True, the raw fidelity tests are first
-evaluated for each month. A month that fails at least one of the four raw tests
-uses the bias-corrected sample for all four tests in the "bias corrected" row.
-A month that passes all four raw tests keeps the original raw sample in that
-row. The row remains labelled "bias corrected".
+evaluated for each month. For every correction method, a month that fails at
+least one raw test uses that method's corrected sample. A month that passes all
+four raw tests keeps the original raw sample in every corrected row.
 
 The plot layout and colour logic follow the original raw-only heatmap:
 darker shading indicates fewer failed months, and the cell text gives the
@@ -124,6 +129,21 @@ number_of_lead_bins = 2
 #     "senorge"
 REFERENCE_DATASET = "era5"
 
+# Bias-correction methods to compare.
+#
+# "mm" uses the monthly-mean corrected compact sample file:
+#     ..._bc_mm_<reference>.nc
+#
+# The other methods use:
+#     ..._bc_<method>_<reference>.nc
+BIAS_CORRECTION_METHODS = [
+    "mm",
+    "q",
+    "doy",
+    "ld",
+    "q_doy",
+]
+
 # Bias-correction application mode.
 #
 # False:
@@ -137,7 +157,7 @@ REFERENCE_DATASET = "era5"
 #     sample for that month.
 #
 # The resulting heatmap row is still labelled "bias corrected".
-BIAS_CORRECT_ONLY_FAILED_MONTHS = True
+BIAS_CORRECT_ONLY_FAILED_MONTHS = False
 
 number_of_bootstrap_samples = 10_000
 confidence_level_percent = 95.0
@@ -147,7 +167,17 @@ random_seed = 42
 #
 # Leave as None to construct filenames automatically.
 raw_model_filename_override = None
-bias_corrected_model_filename_override = None
+
+# Optional per-method filename overrides. Leave values as None to construct
+# filenames automatically.
+bias_corrected_model_filename_overrides = {
+    "mm": None,
+    "q": None,
+    "doy": None,
+    "ld": None,
+    "q_doy": None,
+}
+
 reference_filename_override = None
 
 write2file = False
@@ -162,7 +192,7 @@ path_out = Path(
 filename_heatmap = (
     path_out
     / (
-        f"fidelity_heatmap_raw_bc_"
+        f"fidelity_heatmap_raw_all_bc_"
         f"{REFERENCE_DATASET}_"
         f"{x_days}dayacc_"
         f"{catchment}_"
@@ -388,22 +418,35 @@ def build_raw_model_filename() -> Path:
     )
 
 
-def build_bias_corrected_model_filename() -> Path:
-    """Build the bias-corrected compact model sample filename."""
+def build_bias_corrected_model_filename(
+    method: str,
+) -> Path:
+    """Build one bias-corrected compact model sample filename."""
 
-    if bias_corrected_model_filename_override is not None:
+    override = bias_corrected_model_filename_overrides.get(
+        method
+    )
+
+    if override is not None:
         return Path(
-            bias_corrected_model_filename_override
+            override
         )
 
-    raw_filename = (
-        build_raw_model_filename()
-    )
+    raw_filename = build_raw_model_filename()
+
+    if method == "mm":
+        suffix = (
+            f"bc_mm_{REFERENCE_DATASET}"
+        )
+    else:
+        suffix = (
+            f"bc_{method}_{REFERENCE_DATASET}"
+        )
 
     return raw_filename.with_name(
         (
             f"{raw_filename.stem}_"
-            f"bc_{REFERENCE_DATASET}"
+            f"{suffix}"
             f"{raw_filename.suffix}"
         )
     )
@@ -476,20 +519,10 @@ def get_reference_configuration() -> tuple[Path, str, str]:
     )
 
 
-def get_model_variable_names() -> tuple[str, str]:
-    """Return raw and bias-corrected complete-window variable names."""
+def get_model_variable_name() -> str:
+    """Return the complete-window variable used by every model file."""
 
-    raw_variable = "tp24_max"
-
-    bias_corrected_variable = (
-        f"{raw_variable}_"
-        f"bc_{REFERENCE_DATASET}"
-    )
-
-    return (
-        raw_variable,
-        bias_corrected_variable,
-    )
+    return "tp24_max"
 
 
 # =============================================================================
@@ -563,6 +596,38 @@ def validate_user_settings() -> None:
         "senorge",
     }
 
+    valid_methods = {
+        "mm",
+        "q",
+        "doy",
+        "ld",
+        "q_doy",
+    }
+
+    invalid_methods = (
+        set(
+            BIAS_CORRECTION_METHODS
+        )
+        - valid_methods
+    )
+
+    if invalid_methods:
+        raise ValueError(
+            f"Unsupported bias-correction methods: "
+            f"{sorted(invalid_methods)}."
+        )
+
+    if len(
+        set(
+            BIAS_CORRECTION_METHODS
+        )
+    ) != len(
+        BIAS_CORRECTION_METHODS
+    ):
+        raise ValueError(
+            "BIAS_CORRECTION_METHODS contains duplicate entries."
+        )
+
     if REFERENCE_DATASET not in valid_references:
         raise ValueError(
             f"REFERENCE_DATASET must be one of "
@@ -577,11 +642,16 @@ def validate_user_settings() -> None:
 
     files = {
         "Raw model": build_raw_model_filename(),
-        "Bias-corrected model": (
-            build_bias_corrected_model_filename()
-        ),
         reference_label: reference_filename,
     }
+
+    for method in BIAS_CORRECTION_METHODS:
+
+        files[
+            f"Bias-corrected model ({method})"
+        ] = build_bias_corrected_model_filename(
+            method
+        )
 
     for label, filename in files.items():
 
@@ -1004,129 +1074,29 @@ def perform_month_fidelity_tests(
 
 def calculate_all_months_fidelity(
     raw_model_ds: xr.Dataset,
-    bias_corrected_model_ds: xr.Dataset,
+    corrected_model_datasets: dict[str, xr.Dataset],
     reference_ds: xr.Dataset,
-    raw_variable: str,
-    bias_corrected_variable: str,
+    model_variable: str,
     reference_variable: str,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """
-    Run the four fidelity tests over all months.
+    Run the four fidelity tests for raw data and every correction method.
 
-    The calculation is performed in two passes.
-
-    Pass 1:
-        Run all four raw fidelity tests and determine whether each month fails
-        at least one test.
-
-    Pass 2:
-        Build the sample used for the "bias corrected" row.
-
-        If BIAS_CORRECT_ONLY_FAILED_MONTHS is False:
-            use bias-corrected values for every month.
-
-        If BIAS_CORRECT_ONLY_FAILED_MONTHS is True:
-            use bias-corrected values only for months that failed at least one
-            raw fidelity test; retain raw values for months that passed all
-            four raw tests.
+    When selective correction is enabled, corrected values are used only for
+    months that fail at least one raw fidelity test.
     """
 
-    monthly_samples = {}
-
-    # -------------------------------------------------------------------------
-    # Pass 1: collect samples and determine raw pass/fail status.
-    # -------------------------------------------------------------------------
-
-    for month_number in range(
-        1,
-        13,
-    ):
-
-        raw_values = get_model_values_for_month(
-            ds=raw_model_ds,
-            variable_name=raw_variable,
-            month_number=month_number,
-        )
-
-        fully_bias_corrected_values = (
-            get_model_values_for_month(
-                ds=bias_corrected_model_ds,
-                variable_name=bias_corrected_variable,
-                month_number=month_number,
-            )
-        )
-
-        reference_values = (
-            get_reference_values_for_month(
-                ds=reference_ds,
-                variable_name=reference_variable,
-                month_number=month_number,
-            )
-        )
-
-        validate_month_samples(
-            raw_values=raw_values,
-            bias_corrected_values=fully_bias_corrected_values,
-            reference_values=reference_values,
-            month_number=month_number,
-        )
-
-        raw_rng = np.random.default_rng(
-            random_seed
-            + month_number
-        )
-
-        raw_only_results = (
-            perform_month_fidelity_tests(
-                raw_values=raw_values,
-                comparison_values=raw_values,
-                reference_values=reference_values,
-                rng=raw_rng,
-            )
-        )
-
-        raw_failed_any_test = any(
-            not raw_only_results[
-                statistic_name
-            ][
-                "raw_passes"
-            ]
-            for statistic_name in STATISTICS
-        )
-
-        if (
-            BIAS_CORRECT_ONLY_FAILED_MONTHS
-            and not raw_failed_any_test
-        ):
-            comparison_values = raw_values
-            correction_applied = False
-        else:
-            comparison_values = fully_bias_corrected_values
-            correction_applied = True
-
-        monthly_samples[
-            month_number
-        ] = {
-            "raw_values": raw_values,
-            "comparison_values": comparison_values,
-            "reference_values": reference_values,
-            "raw_failed_any_test": raw_failed_any_test,
-            "correction_applied": correction_applied,
-        }
-
-    # -------------------------------------------------------------------------
-    # Pass 2: run paired raw versus selected comparison calculations.
-    # -------------------------------------------------------------------------
+    row_names = [
+        "raw",
+        *BIAS_CORRECTION_METHODS,
+    ]
 
     counts = {
-        "raw": {
+        row_name: {
             statistic_name: 0
             for statistic_name in STATISTICS
-        },
-        "bias corrected": {
-            statistic_name: 0
-            for statistic_name in STATISTICS
-        },
+        }
+        for row_name in row_names
     }
 
     monthly_rows = []
@@ -1136,33 +1106,64 @@ def calculate_all_months_fidelity(
         13,
     ):
 
-        samples = monthly_samples[
-            month_number
-        ]
+        raw_values = get_model_values_for_month(
+            ds=raw_model_ds,
+            variable_name=model_variable,
+            month_number=month_number,
+        )
 
-        rng = np.random.default_rng(
+        corrected_values_by_method = {
+            method: get_model_values_for_month(
+                ds=corrected_model_datasets[
+                    method
+                ],
+                variable_name=model_variable,
+                month_number=month_number,
+            )
+            for method in BIAS_CORRECTION_METHODS
+        }
+
+        reference_values = get_reference_values_for_month(
+            ds=reference_ds,
+            variable_name=reference_variable,
+            month_number=month_number,
+        )
+
+        for method, corrected_values in (
+            corrected_values_by_method.items()
+        ):
+
+            validate_month_samples(
+                raw_values=raw_values,
+                bias_corrected_values=corrected_values,
+                reference_values=reference_values,
+                month_number=month_number,
+            )
+
+        raw_rng = np.random.default_rng(
             random_seed
             + month_number
         )
 
-        month_results = (
-            perform_month_fidelity_tests(
-                raw_values=samples[
-                    "raw_values"
-                ],
-                comparison_values=samples[
-                    "comparison_values"
-                ],
-                reference_values=samples[
-                    "reference_values"
-                ],
-                rng=rng,
-            )
+        raw_results = perform_month_fidelity_tests(
+            raw_values=raw_values,
+            comparison_values=raw_values,
+            reference_values=reference_values,
+            rng=raw_rng,
+        )
+
+        raw_failed_any_test = any(
+            not raw_results[
+                statistic_name
+            ][
+                "raw_passes"
+            ]
+            for statistic_name in STATISTICS
         )
 
         for statistic_name in STATISTICS:
 
-            result = month_results[
+            result = raw_results[
                 statistic_name
             ]
 
@@ -1176,102 +1177,124 @@ def calculate_all_months_fidelity(
                 ]
             )
 
-            counts[
-                "bias corrected"
-            ][
-                statistic_name
-            ] += int(
-                result[
-                    "bc_passes"
-                ]
-            )
-
             monthly_rows.append(
                 {
-                    "month": (
+                    "dataset": "raw",
+                    "month": month_number,
+                    "month_name": MONTH_LABELS[
                         month_number
-                    ),
-                    "month_name": (
-                        MONTH_LABELS[
-                            month_number
-                        ]
-                    ),
-                    "statistic": (
-                        statistic_name
-                    ),
-                    "reference_value": (
-                        result[
-                            "reference_value"
-                        ]
-                    ),
-                    "raw_low": (
-                        result[
-                            "raw_low"
-                        ]
-                    ),
-                    "raw_high": (
-                        result[
-                            "raw_high"
-                        ]
-                    ),
-                    "raw_passes": (
-                        result[
-                            "raw_passes"
-                        ]
-                    ),
-                    "bc_low": (
-                        result[
-                            "bc_low"
-                        ]
-                    ),
-                    "bc_high": (
-                        result[
-                            "bc_high"
-                        ]
-                    ),
-                    "bc_passes": (
-                        result[
-                            "bc_passes"
-                        ]
-                    ),
+                    ],
+                    "statistic": statistic_name,
+                    "reference_value": result[
+                        "reference_value"
+                    ],
+                    "low": result[
+                        "raw_low"
+                    ],
+                    "high": result[
+                        "raw_high"
+                    ],
+                    "passes": result[
+                        "raw_passes"
+                    ],
                     "raw_failed_any_test": (
-                        samples[
-                            "raw_failed_any_test"
-                        ]
+                        raw_failed_any_test
                     ),
-                    "bias_correction_applied": (
-                        samples[
-                            "correction_applied"
-                        ]
-                    ),
-                    "raw_sample_size": (
-                        result[
-                            "raw_sample_size"
-                        ]
-                    ),
-                    "bc_sample_size": (
-                        result[
-                            "bc_sample_size"
-                        ]
-                    ),
-                    "reference_sample_size": (
-                        result[
-                            "reference_sample_size"
-                        ]
-                    ),
+                    "bias_correction_applied": False,
+                    "model_sample_size": result[
+                        "raw_sample_size"
+                    ],
+                    "reference_sample_size": result[
+                        "reference_sample_size"
+                    ],
                 }
             )
+
+        for method in BIAS_CORRECTION_METHODS:
+
+            if (
+                BIAS_CORRECT_ONLY_FAILED_MONTHS
+                and not raw_failed_any_test
+            ):
+                comparison_values = raw_values
+                correction_applied = False
+            else:
+                comparison_values = (
+                    corrected_values_by_method[
+                        method
+                    ]
+                )
+                correction_applied = True
+
+            # Reuse identical bootstrap indices across raw and all methods.
+            method_rng = np.random.default_rng(
+                random_seed
+                + month_number
+            )
+
+            method_results = perform_month_fidelity_tests(
+                raw_values=raw_values,
+                comparison_values=comparison_values,
+                reference_values=reference_values,
+                rng=method_rng,
+            )
+
+            for statistic_name in STATISTICS:
+
+                result = method_results[
+                    statistic_name
+                ]
+
+                counts[
+                    method
+                ][
+                    statistic_name
+                ] += int(
+                    result[
+                        "bc_passes"
+                    ]
+                )
+
+                monthly_rows.append(
+                    {
+                        "dataset": method,
+                        "month": month_number,
+                        "month_name": MONTH_LABELS[
+                            month_number
+                        ],
+                        "statistic": statistic_name,
+                        "reference_value": result[
+                            "reference_value"
+                        ],
+                        "low": result[
+                            "bc_low"
+                        ],
+                        "high": result[
+                            "bc_high"
+                        ],
+                        "passes": result[
+                            "bc_passes"
+                        ],
+                        "raw_failed_any_test": (
+                            raw_failed_any_test
+                        ),
+                        "bias_correction_applied": (
+                            correction_applied
+                        ),
+                        "model_sample_size": result[
+                            "bc_sample_size"
+                        ],
+                        "reference_sample_size": result[
+                            "reference_sample_size"
+                        ],
+                    }
+                )
 
     fidelity_counts = pd.DataFrame.from_dict(
         counts,
         orient="index",
-    )
-
-    fidelity_counts = fidelity_counts.loc[
-        [
-            "raw",
-            "bias corrected",
-        ],
+    ).loc[
+        row_names,
         list(
             STATISTICS
         ),
@@ -1311,66 +1334,57 @@ def print_fidelity_counts(
 def print_monthly_results(
     monthly_results: pd.DataFrame,
 ) -> None:
-    """Print detailed pass/fail results for raw and bias-corrected data."""
+    """Print detailed monthly results for every dataset row."""
 
-    for statistic_name in STATISTICS:
+    for dataset_name in [
+        "raw",
+        *BIAS_CORRECTION_METHODS,
+    ]:
 
-        selected = monthly_results.loc[
+        selected_dataset = monthly_results.loc[
             monthly_results[
-                "statistic"
+                "dataset"
             ]
-            == statistic_name
+            == dataset_name
         ]
 
         print()
         print(
-            f"Monthly fidelity results: {statistic_name}"
+            f"Monthly fidelity results: {dataset_name}"
         )
         print(
-            "-" * 116
+            "-" * 92
         )
         print(
             f"{'Month':<12}"
+            f"{'Statistic':<12}"
             f"{'Reference':>12}"
-            f"{'Raw low':>12}"
-            f"{'Raw high':>12}"
-            f"{'Raw':>8}"
-            f"{'BC low':>12}"
-            f"{'BC high':>12}"
-            f"{'BC':>8}"
+            f"{'Low':>12}"
+            f"{'High':>12}"
+            f"{'Result':>10}"
             f"{'Applied':>10}"
         )
         print(
-            "-" * 116
+            "-" * 92
         )
 
-        for _, row in selected.iterrows():
+        for _, row in selected_dataset.iterrows():
 
-            raw_status = (
+            status = (
                 "PASS"
                 if row[
-                    "raw_passes"
-                ]
-                else "FAIL"
-            )
-
-            bc_status = (
-                "PASS"
-                if row[
-                    "bc_passes"
+                    "passes"
                 ]
                 else "FAIL"
             )
 
             print(
                 f"{row['month_name']:<12}"
+                f"{row['statistic']:<12}"
                 f"{row['reference_value']:>12.4f}"
-                f"{row['raw_low']:>12.4f}"
-                f"{row['raw_high']:>12.4f}"
-                f"{raw_status:>8}"
-                f"{row['bc_low']:>12.4f}"
-                f"{row['bc_high']:>12.4f}"
-                f"{bc_status:>8}"
+                f"{row['low']:>12.4f}"
+                f"{row['high']:>12.4f}"
+                f"{status:>10}"
                 f"{str(bool(row['bias_correction_applied'])):>10}"
             )
 
@@ -1392,7 +1406,11 @@ def make_fidelity_heatmap(
     figure, axis = plt.subplots(
         figsize=(
             8,
-            3.0,
+            1.0
+            + 0.65
+            * len(
+                fidelity_counts.index
+            ),
         )
     )
 
@@ -1488,13 +1506,14 @@ if __name__ == "__main__":
 
     validate_user_settings()
 
-    raw_model_filename = (
-        build_raw_model_filename()
-    )
+    raw_model_filename = build_raw_model_filename()
 
-    bias_corrected_model_filename = (
-        build_bias_corrected_model_filename()
-    )
+    corrected_model_filenames = {
+        method: build_bias_corrected_model_filename(
+            method
+        )
+        for method in BIAS_CORRECTION_METHODS
+    }
 
     (
         reference_filename,
@@ -1502,10 +1521,7 @@ if __name__ == "__main__":
         reference_label,
     ) = get_reference_configuration()
 
-    (
-        raw_variable,
-        bias_corrected_variable,
-    ) = get_model_variable_names()
+    model_variable = get_model_variable_name()
 
     print(
         "Input files"
@@ -1514,34 +1530,28 @@ if __name__ == "__main__":
         "-----------"
     )
     print(
-        "Raw model:          ",
+        "Raw model:",
         raw_model_filename,
     )
+
+    for method in BIAS_CORRECTION_METHODS:
+
+        print(
+            f"{method:>5}:",
+            corrected_model_filenames[
+                method
+            ],
+        )
+
     print(
-        "Bias-corrected model:",
-        bias_corrected_model_filename,
-    )
-    print(
-        f"{reference_label}:".ljust(
-            22
-        ),
+        f"{reference_label}:",
         reference_filename,
     )
 
     print()
     print(
-        "Model variables"
-    )
-    print(
-        "---------------"
-    )
-    print(
-        "Raw:           ",
-        raw_variable,
-    )
-    print(
-        "Bias corrected:",
-        bias_corrected_variable,
+        "Model variable:",
+        model_variable,
     )
 
     print()
@@ -1554,6 +1564,10 @@ if __name__ == "__main__":
     print(
         "Reference dataset:",
         REFERENCE_DATASET,
+    )
+    print(
+        "Bias-correction methods:",
+        BIAS_CORRECTION_METHODS,
     )
     print(
         "Accumulation days:",
@@ -1572,47 +1586,69 @@ if __name__ == "__main__":
         BIAS_CORRECT_ONLY_FAILED_MONTHS,
     )
 
-    with (
-        xr.open_dataset(
-            raw_model_filename,
+    raw_model_ds = xr.open_dataset(
+        raw_model_filename,
+        decode_timedelta=False,
+    )
+
+    corrected_model_datasets = {
+        method: xr.open_dataset(
+            filename,
             decode_timedelta=False,
-        ) as raw_model_ds,
-        xr.open_dataset(
-            bias_corrected_model_filename,
-            decode_timedelta=False,
-        ) as bias_corrected_model_ds,
-        xr.open_dataset(
-            reference_filename
-        ) as reference_ds,
-    ):
+        )
+        for method, filename in (
+            corrected_model_filenames.items()
+        )
+    }
+
+    reference_ds = xr.open_dataset(
+        reference_filename
+    )
+
+    try:
 
         check_model_dataset(
             ds=raw_model_ds,
-            variable_name=raw_variable,
+            variable_name=model_variable,
             dataset_label="Raw model dataset",
         )
 
-        check_model_dataset(
-            ds=bias_corrected_model_ds,
-            variable_name=bias_corrected_variable,
-            dataset_label="Bias-corrected model dataset",
-        )
+        for method, dataset in (
+            corrected_model_datasets.items()
+        ):
+
+            check_model_dataset(
+                ds=dataset,
+                variable_name=model_variable,
+                dataset_label=(
+                    f"Bias-corrected model dataset "
+                    f"({method})"
+                ),
+            )
 
         (
             fidelity_counts,
             monthly_results,
         ) = calculate_all_months_fidelity(
             raw_model_ds=raw_model_ds,
-            bias_corrected_model_ds=(
-                bias_corrected_model_ds
+            corrected_model_datasets=(
+                corrected_model_datasets
             ),
             reference_ds=reference_ds,
-            raw_variable=raw_variable,
-            bias_corrected_variable=(
-                bias_corrected_variable
-            ),
+            model_variable=model_variable,
             reference_variable=reference_variable,
         )
+
+    finally:
+
+        raw_model_ds.close()
+
+        for dataset in (
+            corrected_model_datasets.values()
+        ):
+            dataset.close()
+
+        reference_ds.close()
 
     print_fidelity_counts(
         fidelity_counts
