@@ -31,7 +31,7 @@ Bias-correction method
 The correction follows the same two-stage procedure as the old script.
 
 Stage 1: lead-time correction
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
 For every lead-location split and calendar month:
 
     lead_time_ratio
@@ -46,7 +46,7 @@ full sample. Every finite full-sample value must correspond to exactly one
 finite split value at the same (number, i_date).
 
 Stage 2: reference correction
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
 For every calendar month:
 
     reference_ratio
@@ -59,14 +59,15 @@ lead-time-corrected split samples.
 Output structure
 ----------------
 The output keeps the same compact organization and provenance variables as the
-input. The original uncorrected tp24_max variables are omitted and replaced by:
+input. The original uncorrected tp24_max variables are replaced in place by
+their bias-corrected versions, using the same variable names:
 
-    tp24_max_bc_<reference>(number, i_date)
-    tp24_max_lead<start>_<end>_bc_<reference>(number, i_date)
+    tp24_max(number, i_date)
+    tp24_max_lead<start>_<end>(number, i_date)
 
 The output also stores:
 
-    bias_correction_ratio_<reference>(month_of_year)
+    bias_correction_ratio(month_of_year)
     lead_time_bias_correction_ratio_lead<start>_<end>(month_of_year)
 
 The input variable month(i_date) is retained unchanged. The separate
@@ -98,7 +99,7 @@ forecast_date_range = [
 
 observation_years = [
     "1957",
-    "2023",
+    "2022",
 ]
 
 era5_grid = "0.5x0.5"
@@ -112,14 +113,7 @@ number_of_lead_bins = 2
 #
 #     "era5"
 #     "senorge"
-REFERENCE_DATASET = "senorge"
-
-# True:
-#     calculate reference monthly means from 1957-2022
-#
-# False:
-#     calculate reference monthly means from 1957-2023
-EXCLUDE_2023_FROM_REFERENCE = True
+REFERENCE_DATASET = "era5"
 
 # Optional explicit paths.
 #
@@ -372,7 +366,7 @@ def make_output_filename(
     return model_filename.with_name(
         (
             f"{model_filename.stem}_"
-            f"bc_{REFERENCE_DATASET}"
+            f"bc_mm_{REFERENCE_DATASET}"
             f"{model_filename.suffix}"
         )
     )
@@ -670,14 +664,6 @@ def get_reference_monthly_mean(
             "dimensions 'year' and 'month'."
         )
 
-    if EXCLUDE_2023_FROM_REFERENCE:
-
-        values = values.sel(
-            year=values[
-                "year"
-            ] < 2023
-        )
-
     monthly_mean = values.mean(
         dim="year",
         skipna=True,
@@ -705,12 +691,6 @@ def get_reference_monthly_mean(
         values[
             "year"
         ].max().values
-    )
-
-    monthly_mean.attrs[
-        "exclude_2023"
-    ] = str(
-        EXCLUDE_2023_FROM_REFERENCE
     )
 
     return monthly_mean
@@ -1193,8 +1173,7 @@ def calculate_reference_bias_correction_ratio(
     )
 
     ratio.name = (
-        f"bias_correction_ratio_"
-        f"{REFERENCE_DATASET}"
+        "bias_correction_ratio"
     )
 
     ratio.attrs = {
@@ -1217,9 +1196,6 @@ def calculate_reference_bias_correction_ratio(
             reference_monthly_mean.attrs[
                 "reference_year_end"
             ]
-        ),
-        "exclude_2023_from_reference": str(
-            EXCLUDE_2023_FROM_REFERENCE
         ),
         "units": "1",
     }
@@ -1279,11 +1255,6 @@ def build_final_bias_corrected_dataset(
         )
     )
 
-    suffix = (
-        f"_bc_"
-        f"{REFERENCE_DATASET}"
-    )
-
     reference_ratio_by_i_date = (
         expand_monthly_ratio_to_i_date(
             ratio=reference_ratio,
@@ -1327,7 +1298,7 @@ def build_final_bias_corrected_dataset(
     )
 
     output_ds[
-        f"{full_model_variable}{suffix}"
+        full_model_variable
     ] = final_full.astype(
         "float32"
     )
@@ -1375,7 +1346,7 @@ def build_final_bias_corrected_dataset(
         )
 
         output_ds[
-            f"{variable_name}{suffix}"
+            variable_name
         ] = final_split.astype(
             "float32"
         )
@@ -1437,6 +1408,12 @@ def build_final_bias_corrected_dataset(
             "bias_correction_reference_dataset": (
                 REFERENCE_DATASET
             ),
+            "bias_correction_scope": (
+                "monthly-mean correction"
+            ),
+            "bias_corrected_variable_naming": (
+                "Original tp24_max variable names retained"
+            ),
             "bias_correction_reference_year_start": (
                 reference_ratio.attrs[
                     "reference_year_start"
@@ -1446,9 +1423,6 @@ def build_final_bias_corrected_dataset(
                 reference_ratio.attrs[
                     "reference_year_end"
                 ]
-            ),
-            "bias_correction_exclude_2023": str(
-                EXCLUDE_2023_FROM_REFERENCE
             ),
             "sample_alignment": (
                 "Preserved exactly in (number, i_date). The original month, "
@@ -1590,8 +1564,7 @@ def print_output_summary(
     """Print the final dataset and finite monthly sample counts."""
 
     corrected_full_variable = (
-        f"{full_model_variable_name()}_"
-        f"bc_{REFERENCE_DATASET}"
+        full_model_variable_name()
     )
 
     print()
@@ -1650,16 +1623,19 @@ def write_output(
     corrected_variables = [
         variable_name
         for variable_name in output_ds.data_vars
-        if "_bc_" in variable_name
+        if (
+            variable_name == "tp24_max"
+            or variable_name.startswith(
+                "tp24_max_lead"
+            )
+        )
     ]
 
     ratio_variables = [
         variable_name
         for variable_name in output_ds.data_vars
         if (
-            variable_name.startswith(
-                "bias_correction_ratio_"
-            )
+            variable_name == "bias_correction_ratio"
             or variable_name.startswith(
                 "lead_time_bias_correction_ratio_"
             )
@@ -1681,7 +1657,7 @@ def write_output(
                 np.float32(
                     np.nan
                 )
-                if "_bc_" in variable_name
+                if variable_name in corrected_variables
                 else None
             ),
             "zlib": True,

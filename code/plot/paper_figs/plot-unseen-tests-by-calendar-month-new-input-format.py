@@ -137,7 +137,7 @@ from Dunnsigouin_etal_2026 import config
 # =============================================================================
 
 # Calendar month to plot: 1=January, ..., 12=December.
-selected_month = 5
+selected_month = 8
 
 # Accumulation period.
 x_days = 2
@@ -163,7 +163,7 @@ number_of_lead_bins = 2
 # Options:
 #     "era5"
 #     "senorge"
-REFERENCE_DATASET = "senorge"
+REFERENCE_DATASET = "era5"
 
 # Independence-test settings.
 # Minimum number of paired initialization values required for one

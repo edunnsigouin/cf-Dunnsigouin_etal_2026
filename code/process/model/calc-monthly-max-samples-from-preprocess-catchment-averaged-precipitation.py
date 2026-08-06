@@ -2,16 +2,24 @@
 """
 Create monthly precipitation-maximum samples from one preprocessed S2S file.
 
-The input is the combined forecast/hindcast NetCDF file produced by the
-preprocessing script. It is expected to contain:
+The input can be either:
+
+1. raw daily forecast/hindcast data produced by the preprocessing script; or
+2. an already X-day-accumulated bias-corrected file produced by the
+   bias-correction script.
+
+Both input types are expected to contain:
 
     tp24(lead_day, number, i_date)
     f_date(i_date, lead_day)
     model_type(i_date)
     hdate(i_date)
 
-This script does NOT repeat the spatial averaging. That work has already been
-done in the preprocessed input file.
+This script does not repeat the spatial averaging or bias correction.
+
+For raw input, the script calculates the requested trailing X-day
+accumulation. For bias-corrected input, the accumulation has already been
+performed, so the script does not accumulate the data again.
 
 Calendar-month assignment
 -------------------------
@@ -43,10 +51,12 @@ calculated only over accumulated ending leads 17-46.
 
 Workflow
 --------
-1. Read the preprocessed daily catchment-mean precipitation.
-2. Assign each i_date to a calendar month using the 31 daily valid dates for
-   lead days 16-46.
-3. Calculate trailing N-day precipitation accumulations along lead_day.
+1. Read either raw daily or already accumulated bias-corrected
+   catchment-mean precipitation.
+2. Assign each i_date to a calendar month using the 31 valid dates stored in
+   f_date for lead days 16-46.
+3. For raw input, calculate trailing N-day precipitation accumulations along
+   lead_day. For bias-corrected input, use the existing N-day accumulation.
 4. For every (number, i_date), find the maximum accumulated precipitation over
    the complete usable accumulated lead range.
 5. Record the valid calendar date and ending lead day of that maximum.
@@ -103,6 +113,30 @@ accumulation_days = 2
 # Number of consecutive lead-location bins used to partition the full-window
 # maxima according to where each maximum occurs.
 number_of_lead_bins = 2
+
+# Input type.
+#
+# "raw":
+#     Read daily preprocessed model data and calculate accumulation_days here.
+#
+# "bias_corrected":
+#     Read an already accumulated and bias-corrected model file. No additional
+#     rolling accumulation is performed.
+input_data_type = "bias_corrected"
+
+# Settings used only when input_data_type == "bias_corrected".
+#
+# bias_correction_method options:
+#     "q", "doy", "ld", "q_doy"
+#
+# bias_correction_reference options:
+#     "senorge", "era5"
+bias_correction_method = "q_doy"
+bias_correction_reference = "senorge"
+
+# Original accumulation already contained in the bias-corrected input file.
+# This must equal accumulation_days because no further accumulation is applied.
+bias_corrected_input_x_days = 2
 
 # Optional explicit input filename.
 #
@@ -161,21 +195,41 @@ def get_file_id(
 
 
 def make_input_filename():
-    """Return the preprocessed forecast/hindcast input filename."""
+    """Return the selected raw or bias-corrected input filename."""
 
     if input_filename_override is not None:
         return Path(
             input_filename_override
         )
 
-    return (
-        path_in
-        / (
-            f"preprocessed_model_{variable}_"
-            f"{get_file_id(catchment)}_"
-            f"{forecast_date_range[0]}_"
-            f"{forecast_date_range[1]}.nc"
+    stem = (
+        f"preprocessed_model_{variable}_"
+        f"{get_file_id(catchment)}_"
+        f"{forecast_date_range[0]}_"
+        f"{forecast_date_range[1]}"
+    )
+
+    if input_data_type == "raw":
+
+        return (
+            path_in
+            / f"{stem}.nc"
         )
+
+    if input_data_type == "bias_corrected":
+
+        return (
+            path_in
+            / (
+                f"{stem}_"
+                f"{bias_corrected_input_x_days}dayacc_"
+                f"bc_{bias_correction_method}_"
+                f"{bias_correction_reference}.nc"
+            )
+        )
+
+    raise ValueError(
+        "input_data_type must be 'raw' or 'bias_corrected'."
     )
 
 
@@ -200,6 +254,15 @@ def make_output_filename(
         for lead_start, lead_end in lead_bins
     )
 
+    source_label = ""
+
+    if input_data_type == "bias_corrected":
+
+        source_label = (
+            f"_bc_{bias_correction_method}_"
+            f"{bias_correction_reference}"
+        )
+
     return (
         path_out
         / (
@@ -209,7 +272,8 @@ def make_output_filename(
             f"lead{first_usable_lead}-{last_input_lead}_"
             f"split{number_of_lead_bins}_{bin_label}_"
             f"{forecast_date_range[0]}_"
-            f"{forecast_date_range[1]}.nc"
+            f"{forecast_date_range[1]}"
+            f"{source_label}.nc"
         )
     )
 
@@ -220,6 +284,54 @@ def make_output_filename(
 
 def validate_user_settings():
     """Check the user settings before reading the input file."""
+
+    valid_input_types = {
+        "raw",
+        "bias_corrected",
+    }
+
+    if input_data_type not in valid_input_types:
+        raise ValueError(
+            f"input_data_type must be one of {sorted(valid_input_types)}."
+        )
+
+    if input_data_type == "bias_corrected":
+
+        valid_methods = {
+            "q",
+            "doy",
+            "ld",
+            "q_doy",
+        }
+
+        valid_references = {
+            "senorge",
+            "era5",
+        }
+
+        if bias_correction_method not in valid_methods:
+            raise ValueError(
+                f"bias_correction_method must be one of "
+                f"{sorted(valid_methods)}."
+            )
+
+        if bias_correction_reference not in valid_references:
+            raise ValueError(
+                f"bias_correction_reference must be one of "
+                f"{sorted(valid_references)}."
+            )
+
+        if bias_corrected_input_x_days < 1:
+            raise ValueError(
+                "bias_corrected_input_x_days must be at least 1."
+            )
+
+        if bias_corrected_input_x_days != accumulation_days:
+            raise ValueError(
+                "For bias-corrected input, bias_corrected_input_x_days must "
+                "equal accumulation_days because the script does not perform "
+                "another accumulation."
+            )
 
     if accumulation_days < 1:
         raise ValueError(
@@ -476,21 +588,15 @@ def calculate_accumulation(
     ds,
 ):
     """
-    Calculate trailing N-day precipitation accumulation.
+    Return precipitation over the usable accumulated ending leads.
 
-    The input tp24 dimension order may vary between NetCDF files. It is
-    explicitly transposed here to:
+    Raw input:
+        Calculate a trailing accumulation_days sum.
 
-        lead_day, number, i_date
-
-    before any calculation is performed.
-
-    The accumulated value keeps the ending lead-day label.
-
-    For example, with two-day accumulation:
-
-        ending lead 17 = daily lead 16 + daily lead 17
-        ending lead 18 = daily lead 17 + daily lead 18
+    Bias-corrected input:
+        Use tp24 directly because it is already accumulated. The first
+        accumulation_days - 1 lead positions are excluded from the usable
+        range.
     """
 
     tp24 = ds[
@@ -499,15 +605,6 @@ def calculate_accumulation(
         "lead_day",
         "number",
         "i_date",
-    )
-
-    accumulated_tp24 = (
-        tp24
-        .rolling(
-            lead_day=accumulation_days,
-            min_periods=accumulation_days,
-        )
-        .sum()
     )
 
     first_usable_lead = (
@@ -522,9 +619,33 @@ def calculate_accumulation(
         dtype="int64",
     )
 
-    accumulated_tp24 = accumulated_tp24.sel(
-        lead_day=usable_leads
-    )
+    if input_data_type == "raw":
+
+        accumulated_tp24 = (
+            tp24
+            .rolling(
+                lead_day=accumulation_days,
+                min_periods=accumulation_days,
+            )
+            .sum()
+            .sel(
+                lead_day=usable_leads
+            )
+        )
+
+    elif input_data_type == "bias_corrected":
+
+        # Bias correction was calculated after the X-day accumulation.
+        # Do not sum these values again.
+        accumulated_tp24 = tp24.sel(
+            lead_day=usable_leads
+        )
+
+    else:
+
+        raise ValueError(
+            "input_data_type must be 'raw' or 'bias_corrected'."
+        )
 
     usable_f_dates = (
         ds[
@@ -1000,6 +1121,27 @@ def build_output_dataset(
             "source_file": str(
                 make_input_filename()
             ),
+            "input_data_type": input_data_type,
+            "bias_correction_method": (
+                bias_correction_method
+                if input_data_type == "bias_corrected"
+                else "none"
+            ),
+            "bias_correction_reference": (
+                bias_correction_reference
+                if input_data_type == "bias_corrected"
+                else "none"
+            ),
+            "input_accumulation_days": (
+                bias_corrected_input_x_days
+                if input_data_type == "bias_corrected"
+                else 1
+            ),
+            "accumulation_performed_in_this_script": (
+                "false"
+                if input_data_type == "bias_corrected"
+                else "true"
+            ),
             "variable": variable,
             "catchment": catchment,
             "forecast_initialization_start": forecast_date_range[0],
@@ -1188,6 +1330,45 @@ if __name__ == "__main__":
         "--------------------"
     )
     print(
+        "Input data type:",
+        input_data_type,
+    )
+
+    if input_data_type == "bias_corrected":
+
+        print(
+            "Bias-correction method:",
+            bias_correction_method,
+        )
+
+        print(
+            "Bias-correction reference:",
+            bias_correction_reference,
+        )
+
+        print(
+            "Input accumulation days:",
+            bias_corrected_input_x_days,
+        )
+
+        print(
+            "Additional accumulation:",
+            "none",
+        )
+
+    else:
+
+        print(
+            "Input accumulation days:",
+            1,
+        )
+
+        print(
+            "Additional accumulation:",
+            f"{accumulation_days}-day trailing sum",
+        )
+
+    print(
         "Accumulation days:",
         accumulation_days,
     )
@@ -1223,7 +1404,8 @@ if __name__ == "__main__":
     )
 
     with xr.open_dataset(
-        filename_input
+        filename_input,
+        decode_timedelta=False,
     ) as opened:
 
         input_ds = opened.load()
