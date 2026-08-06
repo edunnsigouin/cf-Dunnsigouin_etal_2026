@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """
 Build a monthly distribution of S2S precipitation extremes from forecasts and
 hindcasts, and additionally split the full extreme sample according to the lead

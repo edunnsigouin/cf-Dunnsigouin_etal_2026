@@ -1,3 +1,4 @@
+#!/usr/bin/env python3  
 """
 Preprocess ECMWF S2S daily precipitation for one catchment.
 
@@ -481,8 +482,9 @@ def calculate_lead_days(
     """
     Map the input time positions directly to lead days 16 through 46.
 
-    The actual values stored in the input time coordinate are not used.
-    Only the number and order of the time positions matter.
+    The actual date values stored in the input time coordinate are not used
+    to create the lead_day labels. Only the number and order of positions are
+    used here. The original dates are retained separately as f_date.
 
     Position mapping:
         first time position  -> lead day 16
@@ -538,8 +540,8 @@ def preprocess_one_dataset(
             The original hindcast initialization date. It is NaT for forecasts.
 
     The 31 ordered time positions are relabelled as lead days 16 to 46.
-    The stored time-coordinate values are ignored. f_date is calculated as
-    the parent file initialization date plus lead_day.
+    The decoded raw time values are retained as f_date. This preserves the
+    original valid dates exactly and avoids a one-day shift.
     """
 
     if "time" not in ds.coords:
@@ -558,11 +560,19 @@ def preprocess_one_dataset(
         ]
     )
 
-    forecast_dates = (
-        initialization_date
-        + lead_days.values.astype(
-            "timedelta64[D]"
-        )
+    # Preserve the actual valid dates decoded from the raw NetCDF file.
+    #
+    # Example:
+    #     raw time index 0 -> 2020-01-17
+    #     lead-day label   -> 16
+    #
+    # The valid date must come from ds["time"], not from
+    # initialization_date + lead_day, because those differ by one day in
+    # these daily S2S input files.
+    forecast_dates = ds[
+        "time"
+    ].values.astype(
+        "datetime64[ns]"
     )
 
     working = ds.assign_coords(
