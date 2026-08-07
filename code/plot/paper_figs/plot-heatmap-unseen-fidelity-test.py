@@ -1,86 +1,75 @@
 #!/usr/bin/env python3
 """
-Create a raw-versus-multiple-bias-corrections fidelity heatmap for all 12 months.
+Create an all-month UNSEEN summary heatmap for raw and bias-corrected S2S data.
 
-This script combines:
+Rows are raw, mm, q, doy, ld, and q_doy. Columns are independence, four
+fidelity tests, and stability. Each cell is the number of calendar months
+(out of 12) that pass the corresponding test.
 
-1. the heatmap summary used by the raw-only fidelity script; and
-2. the four fidelity calculations used by the monthly six-panel UNSEEN
-   diagnostic script.
+Test reasoning
+--------------
+Independence:
+For each month, pairwise Spearman rank correlations are calculated between
+ensemble members across initialization dates. Forecast and hindcast
+correlations are calculated separately and then pooled. The monthly summary is
+the median pairwise correlation. Independence passes when
 
-Only the four fidelity tests are performed:
+    abs(median Spearman correlation) < INDEPENDENCE_CORRELATION_THRESHOLD
 
-    mean
-    standard deviation
-    skewness
-    kurtosis
+The default threshold is 0.10 and is a user setting. This is intentionally a
+simple effect-size criterion: a median correlation sufficiently close to zero
+is treated as weak ensemble-member dependence.
 
-The independence and stability tests are not calculated here.
+Fidelity:
+For each month, the complete all-lead model sample is bootstrapped using the
+same sample size as the selected reference dataset. Mean, sample standard
+deviation, skewness, and excess kurtosis are calculated. A fidelity test passes
+when the reference statistic falls inside the selected central model bootstrap
+confidence interval.
 
-Input model structure
----------------------
-The raw compact model sample file is expected to contain:
+Stability:
+For each month, the Early and Late lead-location samples are compared with a
+two-sample Kolmogorov-Smirnov (KS) test. These are the same full-window maxima
+classified by the lead at which the maximum occurred; maxima are not
+recalculated over shorter windows. The null hypothesis is that Early and Late
+come from the same continuous distribution. Stability passes when this null is
+not rejected. At the default 95% level, a month therefore fails when p < 0.05.
+The confidence level is controlled by STABILITY_CONFIDENCE_LEVEL_PERCENT.
 
-    tp24_max(number, i_date)
-    month(i_date)
+Bias-correction handling
+------------------------
+When BIAS_CORRECT_ONLY_FAILED_MONTHS is False, every corrected row uses its
+bias-corrected sample for all 12 months and for all six tests.
 
-The bias-corrected compact model sample file is expected to contain the same
-sample variable names as the raw file:
+When BIAS_CORRECT_ONLY_FAILED_MONTHS is True, the script first evaluates ALL
+six tests on the raw sample for each month:
 
+    independence
+    fidelity: mean
+    fidelity: std
+    fidelity: skewness
+    fidelity: kurtosis
+    stability
+
+If the raw month passes all six tests, that month stays raw in every corrected
+row. If the raw month fails at least one test, the selected bias-corrected
+sample is used for that entire month and all six tests in that corrected row.
+
+This keeps the selective-correction decision month-based and consistent across
+independence, fidelity, and stability.
+
+Expected compact model variables
+--------------------------------
     tp24_max(number, i_date)
     tp24_max_lead<start>_<end>(number, i_date)
     month(i_date)
-
-The filename identifies the monthly-mean bias correction and reference dataset.
-
-Calendar-month samples
-----------------------
-For each month:
-
-1. Select every i_date for which month(i_date) equals that month.
-2. Pool all finite ensemble-member values across number and i_date.
-3. Extract the corresponding reference monthly-extreme sample.
-4. Draw bootstrap samples from the raw and bias-corrected model samples using
-   the same bootstrap indices.
-5. Calculate bootstrap distributions of mean, sample standard deviation,
-   skewness, and excess kurtosis.
-6. A fidelity test passes when the reference statistic falls inside the
-   selected central bootstrap confidence interval.
-
-Heatmap
--------
-The output heatmap has:
-
-    rows:
-        raw
-        mm
-        q
-        doy
-        ld
-        q_doy
-
-    columns:
-        mean
-        std
-        skewness
-        kurtosis
-
-Each cell contains the number of calendar months, out of 12, that pass the
-corresponding fidelity test.
-
-Optional selective bias correction
-----------------------------------
-When BIAS_CORRECT_ONLY_FAILED_MONTHS is True, the raw fidelity tests are first
-evaluated for each month. For every correction method, a month that fails at
-least one raw test uses that method's corrected sample. A month that passes all
-four raw tests keeps the original raw sample in every corrected row.
-
-The plot layout and colour logic follow the original raw-only heatmap:
-darker shading indicates fewer failed months, and the cell text gives the
-number of passed months.
+    model_type(i_date)
+    number(number)
+    i_date(i_date)
 """
 
 import os
+from itertools import combinations
 from pathlib import Path
 from typing import Callable
 
@@ -89,7 +78,7 @@ from matplotlib import colormaps
 import numpy as np
 import pandas as pd
 import xarray as xr
-from scipy.stats import kurtosis, skew
+from scipy.stats import ks_2samp, kurtosis, rankdata, skew
 
 from Dunnsigouin_etal_2026 import config
 
@@ -151,17 +140,31 @@ BIAS_CORRECTION_METHODS = [
 #     every calendar month.
 #
 # True:
-#     First run all four fidelity tests on the raw sample for each month.
+#     First run ALL SIX tests on the raw sample for each month:
+#       independence, four fidelity tests, and stability.
 #     If a month fails at least one raw test, use the bias-corrected sample
-#     for that entire month. If it passes all four raw tests, retain the raw
-#     sample for that month.
+#     for that entire month and all six tests. If it passes all six raw tests,
+#     retain the raw sample for that month in every corrected row.
 #
-# The resulting heatmap row is still labelled "bias corrected".
-BIAS_CORRECT_ONLY_FAILED_MONTHS = False
+# The resulting heatmap rows are still labelled by bias-correction method.
+BIAS_CORRECT_ONLY_FAILED_MONTHS = True
 
+# Independence settings.
+# A month passes when abs(median Spearman correlation) is below this threshold.
+INDEPENDENCE_CORRELATION_THRESHOLD = 0.10
+
+# Minimum paired initialization values required for one Spearman correlation.
+minimum_independence_samples = 10
+
+# Fidelity bootstrap settings.
 number_of_bootstrap_samples = 10_000
 confidence_level_percent = 95.0
 random_seed = 42
+
+# Stability KS-test settings.
+STABILITY_CONFIDENCE_LEVEL_PERCENT = 95.0
+ks_alternative = "two-sided"
+ks_method = "auto"
 
 # Optional explicit input filenames.
 #
@@ -180,7 +183,7 @@ bias_corrected_model_filename_overrides = {
 
 reference_filename_override = None
 
-write2file = False
+write2file = True
 show_figure = True
 
 path_out = Path(
@@ -189,11 +192,20 @@ path_out = Path(
     ]
 )
 
+correction_mode = (
+    "failedmonths"
+    if BIAS_CORRECT_ONLY_FAILED_MONTHS
+    else "allmonths"
+)
+
+HEATMAP_NUMBER_COLOR = "tab:red"
+
 filename_heatmap = (
     path_out
     / (
-        f"fidelity_heatmap_raw_all_bc_"
+        f"Heatmap_UNSEEN_test_summary_"
         f"{REFERENCE_DATASET}_"
+        f"{correction_mode}_"
         f"{x_days}dayacc_"
         f"{catchment}_"
         f"{forecast_date_range[0]}_"
@@ -237,10 +249,12 @@ STATISTICS = (
 )
 
 HEATMAP_COLUMN_LABELS = {
-    "mean": "mean",
-    "std": "std",
-    "skewness": "skewness",
-    "kurtosis": "kurtosis",
+    "independence": "independence",
+    "mean": "fidelity: mean",
+    "std": "fidelity: std",
+    "skewness": "fidelity: skewness",
+    "kurtosis": "fidelity: kurtosis",
+    "stability": "stability",
 }
 
 
@@ -582,6 +596,36 @@ def validate_user_settings() -> None:
             "number_of_bootstrap_samples must be at least 1."
         )
 
+    if not 0.0 < INDEPENDENCE_CORRELATION_THRESHOLD <= 1.0:
+        raise ValueError(
+            "INDEPENDENCE_CORRELATION_THRESHOLD must be in (0, 1]."
+        )
+
+    if minimum_independence_samples < 3:
+        raise ValueError(
+            "minimum_independence_samples must be at least 3."
+        )
+
+    if not 0.0 < STABILITY_CONFIDENCE_LEVEL_PERCENT < 100.0:
+        raise ValueError(
+            "STABILITY_CONFIDENCE_LEVEL_PERCENT must be between 0 and 100."
+        )
+
+    if ks_alternative not in {"two-sided", "less", "greater"}:
+        raise ValueError(
+            "ks_alternative must be 'two-sided', 'less', or 'greater'."
+        )
+
+    if ks_method not in {"auto", "exact", "asymp"}:
+        raise ValueError(
+            "ks_method must be 'auto', 'exact', or 'asymp'."
+        )
+
+    if number_of_lead_bins != 2:
+        raise ValueError(
+            "The stability test requires exactly two lead bins."
+        )
+
     if not (
         0.0
         < confidence_level_percent
@@ -713,6 +757,33 @@ def check_model_dataset(
         )
 
 
+def check_independence_stability_structure(
+    ds: xr.Dataset,
+    dataset_label: str,
+) -> None:
+    """Check variables needed by independence and stability."""
+
+    early_variable, late_variable = get_stability_variable_names()
+
+    required = {
+        "tp24_max",
+        early_variable,
+        late_variable,
+        MODEL_MONTH_VARIABLE,
+        "model_type",
+        "number",
+        "i_date",
+    }
+
+    missing = required - set(ds.variables)
+
+    if missing:
+        raise KeyError(
+            f"{dataset_label} is missing independence/stability variables: "
+            f"{sorted(missing)}"
+        )
+
+
 # =============================================================================
 # Monthly sample extraction
 # =============================================================================
@@ -776,6 +847,462 @@ def get_reference_values_for_month(
             month=month_number
         ).values
     )
+
+
+# =============================================================================
+# Independence and stability
+# =============================================================================
+
+def normalize_model_type(values: np.ndarray) -> np.ndarray:
+    """Return model-type labels as stripped lowercase strings."""
+    return np.array(
+        [
+            (value.decode("utf-8") if isinstance(value, bytes) else str(value))
+            .strip()
+            .lower()
+            for value in np.asarray(values).ravel()
+        ],
+        dtype=object,
+    )
+
+
+def spearman_correlation(x: np.ndarray, y: np.ndarray) -> float:
+    """Calculate one pairwise Spearman rank correlation."""
+    valid = np.isfinite(x) & np.isfinite(y)
+
+    if int(valid.sum()) < minimum_independence_samples:
+        return np.nan
+
+    x_valid = x[valid]
+    y_valid = y[valid]
+
+    if np.all(x_valid == x_valid[0]) or np.all(y_valid == y_valid[0]):
+        return np.nan
+
+    x_rank = rankdata(x_valid, method="average")
+    y_rank = rankdata(y_valid, method="average")
+
+    return float(np.corrcoef(x_rank, y_rank)[0, 1])
+
+
+def get_month_member_matrix(
+    ds: xr.Dataset,
+    variable_name: str,
+    month_number: int,
+    model_type: str,
+) -> np.ndarray:
+    """Return an initialization-by-member matrix for one month/model type."""
+
+    if model_type not in {"forecast", "hindcast"}:
+        raise ValueError("model_type must be 'forecast' or 'hindcast'.")
+
+    required = {
+        variable_name,
+        MODEL_MONTH_VARIABLE,
+        "model_type",
+        "number",
+        "i_date",
+    }
+    missing = required - set(ds.variables)
+
+    if missing:
+        raise KeyError(
+            "Model dataset is missing independence variables: "
+            f"{sorted(missing)}"
+        )
+
+    types = normalize_model_type(ds["model_type"].values)
+
+    selected_rows = (
+        (ds[MODEL_MONTH_VARIABLE].values == month_number)
+        & (types == model_type)
+    )
+
+    return (
+        ds[variable_name]
+        .isel(i_date=selected_rows)
+        .transpose("i_date", "number")
+        .values
+        .astype("float64")
+    )
+
+
+def calculate_pairwise_correlations_from_matrix(
+    matrix: np.ndarray,
+) -> np.ndarray:
+    """Return all finite member-pair Spearman correlations."""
+
+    if matrix.ndim != 2 or matrix.shape[0] == 0 or matrix.shape[1] < 2:
+        return np.array([], dtype="float64")
+
+    correlations = np.array(
+        [
+            spearman_correlation(
+                matrix[:, member_1],
+                matrix[:, member_2],
+            )
+            for member_1, member_2 in combinations(
+                range(matrix.shape[1]),
+                2,
+            )
+        ],
+        dtype="float64",
+    )
+
+    return remove_missing_values(correlations)
+
+
+def calculate_month_independence(
+    ds: xr.Dataset,
+    variable_name: str,
+    month_number: int,
+) -> dict[str, object]:
+    """
+    Calculate panel-(a)-style independence for one month.
+
+    Forecast and hindcast correlations are calculated separately, then pooled.
+    """
+
+    forecast = calculate_pairwise_correlations_from_matrix(
+        get_month_member_matrix(
+            ds,
+            variable_name,
+            month_number,
+            "forecast",
+        )
+    )
+
+    hindcast = calculate_pairwise_correlations_from_matrix(
+        get_month_member_matrix(
+            ds,
+            variable_name,
+            month_number,
+            "hindcast",
+        )
+    )
+
+    correlations = np.concatenate([forecast, hindcast])
+
+    if correlations.size == 0:
+        raise ValueError(
+            "No finite pairwise Spearman correlations for "
+            f"{MONTH_LABELS[month_number]}."
+        )
+
+    median_correlation = float(np.median(correlations))
+
+    return {
+        "median_correlation": median_correlation,
+        "passes": bool(
+            abs(median_correlation)
+            < INDEPENDENCE_CORRELATION_THRESHOLD
+        ),
+        "number_of_pairwise_correlations": int(correlations.size),
+    }
+
+
+def get_stability_variable_names() -> tuple[str, str]:
+    """Return Early and Late compact-sample variable names."""
+    _, split_ranges = get_lead_ranges()
+
+    if len(split_ranges) != 2:
+        raise ValueError(
+            "The stability test requires exactly two lead bins."
+        )
+
+    early_range, late_range = split_ranges
+
+    return (
+        f"tp24_max_lead{early_range[0]}_{early_range[1]}",
+        f"tp24_max_lead{late_range[0]}_{late_range[1]}",
+    )
+
+
+def get_stability_p_value_threshold() -> float:
+    """Convert stability confidence level to the KS p-value threshold."""
+    return 1.0 - STABILITY_CONFIDENCE_LEVEL_PERCENT / 100.0
+
+
+def calculate_month_stability(
+    ds: xr.Dataset,
+    month_number: int,
+) -> dict[str, object]:
+    """Perform the panel-(f)-style Early/Late two-sample KS test."""
+
+    early_variable, late_variable = get_stability_variable_names()
+
+    for variable_name in (early_variable, late_variable):
+        if variable_name not in ds:
+            raise KeyError(
+                f"Stability variable '{variable_name}' was not found."
+            )
+
+    early_values = get_model_values_for_month(
+        ds,
+        early_variable,
+        month_number,
+    )
+    late_values = get_model_values_for_month(
+        ds,
+        late_variable,
+        month_number,
+    )
+
+    if early_values.size == 0 or late_values.size == 0:
+        raise ValueError(
+            "Early or Late stability sample is empty for "
+            f"{MONTH_LABELS[month_number]}."
+        )
+
+    result = ks_2samp(
+        early_values,
+        late_values,
+        alternative=ks_alternative,
+        method=ks_method,
+    )
+
+    p_value = float(result.pvalue)
+    passes = bool(p_value >= get_stability_p_value_threshold())
+
+    return {
+        "statistic": float(result.statistic),
+        "p_value": p_value,
+        "passes": passes,
+        "early_sample_size": int(early_values.size),
+        "late_sample_size": int(late_values.size),
+    }
+
+
+def calculate_all_months_independence_and_stability(
+    raw_model_ds: xr.Dataset,
+    corrected_model_datasets: dict[str, xr.Dataset],
+    model_variable: str,
+    month_correction_lookup: dict[int, bool],
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    Count monthly independence and stability passes for all rows.
+
+    When selective correction is enabled, corrected rows use raw data for a
+    month that passed all six raw tests, and corrected data otherwise.
+    """
+
+    dataset_names = [
+        "raw",
+        *BIAS_CORRECTION_METHODS,
+    ]
+
+    counts = {
+        dataset_name: {
+            "independence": 0,
+            "stability": 0,
+        }
+        for dataset_name in dataset_names
+    }
+
+    monthly_rows = []
+
+    for dataset_name in dataset_names:
+        for month_number in range(1, 13):
+
+            correction_applied = (
+                dataset_name != "raw"
+                and (
+                    not BIAS_CORRECT_ONLY_FAILED_MONTHS
+                    or month_correction_lookup[
+                        month_number
+                    ]
+                )
+            )
+
+            if dataset_name == "raw" or not correction_applied:
+                dataset = raw_model_ds
+            else:
+                dataset = corrected_model_datasets[dataset_name]
+
+            independence = calculate_month_independence(
+                dataset,
+                model_variable,
+                month_number,
+            )
+            stability = calculate_month_stability(
+                dataset,
+                month_number,
+            )
+
+            counts[dataset_name]["independence"] += int(
+                independence["passes"]
+            )
+            counts[dataset_name]["stability"] += int(
+                stability["passes"]
+            )
+
+            monthly_rows.append(
+                {
+                    "dataset": dataset_name,
+                    "month": month_number,
+                    "month_name": MONTH_LABELS[month_number],
+                    "median_correlation": independence[
+                        "median_correlation"
+                    ],
+                    "independence_passes": independence["passes"],
+                    "number_of_pairwise_correlations": independence[
+                        "number_of_pairwise_correlations"
+                    ],
+                    "ks_statistic": stability["statistic"],
+                    "ks_p_value": stability["p_value"],
+                    "stability_passes": stability["passes"],
+                    "early_sample_size": stability["early_sample_size"],
+                    "late_sample_size": stability["late_sample_size"],
+                    "bias_correction_applied": correction_applied,
+                    "raw_failed_any_test": month_correction_lookup[
+                        month_number
+                    ],
+                }
+            )
+
+    row_names = ["raw", *BIAS_CORRECTION_METHODS]
+
+    count_frame = pd.DataFrame.from_dict(
+        counts,
+        orient="index",
+    ).loc[row_names, ["independence", "stability"]]
+
+    return count_frame, pd.DataFrame(monthly_rows)
+
+
+def combine_test_counts(
+    independence_stability_counts: pd.DataFrame,
+    fidelity_counts: pd.DataFrame,
+) -> pd.DataFrame:
+    """Combine all six requested heatmap columns."""
+
+    return pd.concat(
+        [
+            independence_stability_counts[["independence"]],
+            fidelity_counts[list(STATISTICS)],
+            independence_stability_counts[["stability"]],
+        ],
+        axis=1,
+    )
+
+
+
+def calculate_raw_month_gate(
+    raw_model_ds: xr.Dataset,
+    reference_ds: xr.Dataset,
+    model_variable: str,
+    reference_variable: str,
+) -> pd.DataFrame:
+    """
+    Evaluate all six tests on raw data and decide which months need correction.
+
+    A month requires bias correction when ANY raw test fails:
+        independence,
+        mean fidelity,
+        standard-deviation fidelity,
+        skewness fidelity,
+        kurtosis fidelity,
+        or stability.
+    """
+
+    rows = []
+
+    for month_number in range(
+        1,
+        13,
+    ):
+        raw_values = get_model_values_for_month(
+            ds=raw_model_ds,
+            variable_name=model_variable,
+            month_number=month_number,
+        )
+
+        reference_values = get_reference_values_for_month(
+            ds=reference_ds,
+            variable_name=reference_variable,
+            month_number=month_number,
+        )
+
+        validate_month_samples(
+            raw_values=raw_values,
+            bias_corrected_values=raw_values,
+            reference_values=reference_values,
+            month_number=month_number,
+        )
+
+        raw_rng = np.random.default_rng(
+            random_seed
+            + month_number
+        )
+
+        raw_fidelity = perform_month_fidelity_tests(
+            raw_values=raw_values,
+            comparison_values=raw_values,
+            reference_values=reference_values,
+            rng=raw_rng,
+        )
+
+        independence = calculate_month_independence(
+            ds=raw_model_ds,
+            variable_name=model_variable,
+            month_number=month_number,
+        )
+
+        stability = calculate_month_stability(
+            ds=raw_model_ds,
+            month_number=month_number,
+        )
+
+        raw_test_passes = {
+            "independence": bool(
+                independence["passes"]
+            ),
+            **{
+                statistic_name: bool(
+                    raw_fidelity[
+                        statistic_name
+                    ][
+                        "raw_passes"
+                    ]
+                )
+                for statistic_name in STATISTICS
+            },
+            "stability": bool(
+                stability["passes"]
+            ),
+        }
+
+        failed_tests = [
+            test_name
+            for test_name, passes in raw_test_passes.items()
+            if not passes
+        ]
+
+        rows.append(
+            {
+                "month": month_number,
+                "month_name": MONTH_LABELS[month_number],
+                **{
+                    f"raw_{test_name}_passes": passes
+                    for test_name, passes in raw_test_passes.items()
+                },
+                "raw_failed_any_test": bool(failed_tests),
+                "raw_failed_tests": ",".join(failed_tests),
+            }
+        )
+
+    return pd.DataFrame(rows)
+
+
+def build_month_correction_lookup(
+    raw_month_gate: pd.DataFrame,
+) -> dict[int, bool]:
+    """Return month -> whether the corrected sample should be used."""
+
+    return {
+        int(row["month"]): bool(row["raw_failed_any_test"])
+        for _, row in raw_month_gate.iterrows()
+    }
 
 
 # =============================================================================
@@ -1078,12 +1605,13 @@ def calculate_all_months_fidelity(
     reference_ds: xr.Dataset,
     model_variable: str,
     reference_variable: str,
+    month_correction_lookup: dict[int, bool],
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """
     Run the four fidelity tests for raw data and every correction method.
 
     When selective correction is enabled, corrected values are used only for
-    months that fail at least one raw fidelity test.
+    months that fail at least one of the six raw tests.
     """
 
     row_names = [
@@ -1152,15 +1680,6 @@ def calculate_all_months_fidelity(
             rng=raw_rng,
         )
 
-        raw_failed_any_test = any(
-            not raw_results[
-                statistic_name
-            ][
-                "raw_passes"
-            ]
-            for statistic_name in STATISTICS
-        )
-
         for statistic_name in STATISTICS:
 
             result = raw_results[
@@ -1198,7 +1717,7 @@ def calculate_all_months_fidelity(
                         "raw_passes"
                     ],
                     "raw_failed_any_test": (
-                        raw_failed_any_test
+                        month_correction_lookup[month_number]
                     ),
                     "bias_correction_applied": False,
                     "model_sample_size": result[
@@ -1214,7 +1733,7 @@ def calculate_all_months_fidelity(
 
             if (
                 BIAS_CORRECT_ONLY_FAILED_MONTHS
-                and not raw_failed_any_test
+                and not month_correction_lookup[month_number]
             ):
                 comparison_values = raw_values
                 correction_applied = False
@@ -1276,7 +1795,7 @@ def calculate_all_months_fidelity(
                             "bc_passes"
                         ],
                         "raw_failed_any_test": (
-                            raw_failed_any_test
+                            month_correction_lookup[month_number]
                         ),
                         "bias_correction_applied": (
                             correction_applied
@@ -1308,6 +1827,36 @@ def calculate_all_months_fidelity(
         fidelity_counts,
         monthly_results,
     )
+
+
+
+def print_raw_month_gate(
+    raw_month_gate: pd.DataFrame,
+) -> None:
+    """Print which raw months trigger selective bias correction."""
+
+    print()
+    print("Raw all-test screening")
+    print("----------------------")
+    print(
+        f"{'Month':<12}"
+        f"{'Needs BC':>10}"
+        f"{'Failed tests':>42}"
+    )
+    print("-" * 64)
+
+    for _, row in raw_month_gate.iterrows():
+        failed_tests = (
+            row["raw_failed_tests"]
+            if row["raw_failed_tests"]
+            else "-"
+        )
+
+        print(
+            f"{row['month_name']:<12}"
+            f"{str(bool(row['raw_failed_any_test'])):>10}"
+            f"{failed_tests:>42}"
+        )
 
 
 # =============================================================================
@@ -1389,34 +1938,81 @@ def print_monthly_results(
             )
 
 
+def print_independence_stability_results(
+    counts: pd.DataFrame,
+    monthly_results: pd.DataFrame,
+) -> None:
+    """Print counts and detailed monthly independence/stability results."""
+
+    print()
+    print("Independence and stability counts (months passed out of 12)")
+    print("------------------------------------------------------------")
+    print(counts)
+
+    for dataset_name in ["raw", *BIAS_CORRECTION_METHODS]:
+        selected = monthly_results.loc[
+            monthly_results["dataset"] == dataset_name
+        ]
+
+        print()
+        print(
+            f"Monthly independence/stability results: {dataset_name}"
+        )
+        print("-" * 92)
+        print(
+            f"{'Month':<12}"
+            f"{'Median rho':>12}"
+            f"{'Indep.':>10}"
+            f"{'KS D':>12}"
+            f"{'KS p':>12}"
+            f"{'Stability':>12}"
+        )
+        print("-" * 92)
+
+        for _, row in selected.iterrows():
+            independence_status = (
+                "PASS" if row["independence_passes"] else "FAIL"
+            )
+            stability_status = (
+                "PASS" if row["stability_passes"] else "FAIL"
+            )
+
+            print(
+                f"{row['month_name']:<12}"
+                f"{row['median_correlation']:>12.4f}"
+                f"{independence_status:>10}"
+                f"{row['ks_statistic']:>12.4f}"
+                f"{row['ks_p_value']:>12.4g}"
+                f"{stability_status:>12}"
+            )
+
+
 # =============================================================================
 # Heatmap
 # =============================================================================
 
-def make_fidelity_heatmap(
-    fidelity_counts: pd.DataFrame,
+def make_summary_heatmap(
+    summary_counts: pd.DataFrame,
     filename: Path | None = None,
 ) -> None:
     """
-    Plot the raw and bias-corrected fidelity counts.
-
-    The visual design follows the original raw-only heatmap.
+    Plot monthly pass counts for independence, fidelity, and stability.
     """
 
     figure, axis = plt.subplots(
         figsize=(
-            8,
+            10,
             1.0
             + 0.65
             * len(
-                fidelity_counts.index
+                summary_counts.index
             ),
         )
     )
 
     axis.imshow(
         12
-        - fidelity_counts.values,
+        - summary_counts.values,
         cmap=colormaps[
             "Blues"
         ],
@@ -1429,7 +2025,7 @@ def make_fidelity_heatmap(
         row,
         column,
     ), value in np.ndenumerate(
-        fidelity_counts.values
+        summary_counts.values
     ):
 
         axis.text(
@@ -1440,33 +2036,41 @@ def make_fidelity_heatmap(
             ),
             ha="center",
             va="center",
+            color=HEATMAP_NUMBER_COLOR,
         )
 
     axis.set_xticks(
         range(
             len(
-                fidelity_counts.columns
+                summary_counts.columns
             )
         ),
         [
             HEATMAP_COLUMN_LABELS[
                 column
             ]
-            for column in fidelity_counts.columns
+            for column in summary_counts.columns
         ],
+    )
+    
+    plt.setp(
+        axis.get_xticklabels(),
+        rotation=30,
+        ha="right",
+        rotation_mode="anchor",
     )
 
     axis.set_yticks(
         range(
             len(
-                fidelity_counts.index
+                summary_counts.index
             )
         ),
-        fidelity_counts.index,
+        summary_counts.index,
     )
 
     axis.set_title(
-        "Fidelity counts (months out of 12)"
+        "UNSEEN tests"
     )
 
     figure.tight_layout()
@@ -1585,6 +2189,14 @@ if __name__ == "__main__":
         "Bias correct only failed months:",
         BIAS_CORRECT_ONLY_FAILED_MONTHS,
     )
+    print(
+        "Independence |median rho| threshold:",
+        INDEPENDENCE_CORRELATION_THRESHOLD,
+    )
+    print(
+        "Stability confidence level:",
+        f"{STABILITY_CONFIDENCE_LEVEL_PERCENT:.1f}%",
+    )
 
     raw_model_ds = xr.open_dataset(
         raw_model_filename,
@@ -1626,6 +2238,30 @@ if __name__ == "__main__":
                 ),
             )
 
+        check_independence_stability_structure(
+            ds=raw_model_ds,
+            dataset_label="Raw model dataset",
+        )
+
+        for method, dataset in corrected_model_datasets.items():
+            check_independence_stability_structure(
+                ds=dataset,
+                dataset_label=(
+                    f"Bias-corrected model dataset ({method})"
+                ),
+            )
+
+        raw_month_gate = calculate_raw_month_gate(
+            raw_model_ds=raw_model_ds,
+            reference_ds=reference_ds,
+            model_variable=model_variable,
+            reference_variable=reference_variable,
+        )
+
+        month_correction_lookup = build_month_correction_lookup(
+            raw_month_gate
+        )
+
         (
             fidelity_counts,
             monthly_results,
@@ -1637,6 +2273,22 @@ if __name__ == "__main__":
             reference_ds=reference_ds,
             model_variable=model_variable,
             reference_variable=reference_variable,
+            month_correction_lookup=month_correction_lookup,
+        )
+
+        (
+            independence_stability_counts,
+            independence_stability_monthly_results,
+        ) = calculate_all_months_independence_and_stability(
+            raw_model_ds=raw_model_ds,
+            corrected_model_datasets=corrected_model_datasets,
+            model_variable=model_variable,
+            month_correction_lookup=month_correction_lookup,
+        )
+
+        summary_counts = combine_test_counts(
+            independence_stability_counts,
+            fidelity_counts,
         )
 
     finally:
@@ -1650,6 +2302,10 @@ if __name__ == "__main__":
 
         reference_ds.close()
 
+    print_raw_month_gate(
+        raw_month_gate
+    )
+
     print_fidelity_counts(
         fidelity_counts
     )
@@ -1658,8 +2314,18 @@ if __name__ == "__main__":
         monthly_results
     )
 
-    make_fidelity_heatmap(
-        fidelity_counts=fidelity_counts,
+    print_independence_stability_results(
+        independence_stability_counts,
+        independence_stability_monthly_results,
+    )
+
+    print()
+    print("Combined heatmap counts")
+    print("-----------------------")
+    print(summary_counts)
+
+    make_summary_heatmap(
+        summary_counts=summary_counts,
         filename=(
             filename_heatmap
             if write2file
