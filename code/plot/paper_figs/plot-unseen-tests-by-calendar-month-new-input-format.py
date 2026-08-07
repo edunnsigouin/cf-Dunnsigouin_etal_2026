@@ -1,132 +1,83 @@
+#!/usr/bin/env python3
 """
-Create a six-panel UNSEEN diagnostic figure for one selected calendar month.
+Create an all-month UNSEEN summary heatmap for raw and bias-corrected S2S data.
 
-The figure combines three checks:
-    1. ensemble-member independence;
-    2. fidelity of raw and bias-corrected S2S distributions relative to one
-       selected reference dataset;
-    3. stability of raw and bias-corrected S2S distributions across lead-time
-       subgroups.
+Rows are raw, mm, q, doy, ld, and q_doy. Columns are independence, four
+fidelity tests, and stability. Each cell is the number of calendar months
+(out of 12) that pass the corresponding test.
 
-Inputs
-------
-The script reads three NetCDF files:
-    - the raw compact S2S monthly extreme-sample file;
-    - the bias-corrected compact S2S monthly extreme-sample file;
-    - ONE selected reference dataset: ERA5 or SeNorge.
+Test reasoning
+--------------
+Independence:
+For each month, pairwise Spearman rank correlations are calculated between
+ensemble members across initialization dates. Forecast and hindcast
+correlations are calculated separately and then pooled. The monthly summary is
+the median pairwise correlation. Independence passes when
 
-The compact S2S files organize samples as (number, i_date). Calendar-month
-membership is stored in month(i_date), model source is stored in
-model_type(i_date), and the unique i_date coordinate identifies each forecast
-or hindcast initialization row.
+    abs(median Spearman correlation) < INDEPENDENCE_CORRELATION_THRESHOLD
 
-Panel (a) calculates independence from the raw all-lead sample.
-Panels (b)-(e) overlay raw and bias-corrected bootstrap distributions and their
-95% intervals, with one vertical line for the selected reference dataset.
-Panel (f) plots the bias-corrected Early/Late distributions and reports both
-raw and bias-corrected KS statistics.
+The default threshold is 0.10 and is a user setting. This is intentionally a
+simple effect-size criterion: a median correlation sufficiently close to zero
+is treated as weak ensemble-member dependence.
 
-For the default settings
-    first_input_lead = 16
-    last_input_lead = 46
-    x_days = 2
-    number_of_lead_bins = 2
+Fidelity:
+For each month, the complete all-lead model sample is bootstrapped using the
+same sample size as the selected reference dataset. Mean, sample standard
+deviation, skewness, and excess kurtosis are calculated. A fidelity test passes
+when the reference statistic falls inside the selected central model bootstrap
+confidence interval.
 
-the usable accumulated ending leads are 17-46 and the raw S2S variables are:
-    all leads : tp24_max
-    early     : tp24_max_lead17_31
-    late      : tp24_max_lead32_46
+Stability:
+For each month, the Early and Late lead-location samples are compared with a
+two-sample Kolmogorov-Smirnov (KS) test. These are the same full-window maxima
+classified by the lead at which the maximum occurred; maxima are not
+recalculated over shorter windows. The null hypothesis is that Early and Late
+come from the same continuous distribution. Stability passes when this null is
+not rejected. At the default 95% level, a month therefore fails when p < 0.05.
+The confidence level is controlled by STABILITY_CONFIDENCE_LEVEL_PERCENT.
 
-The bias-corrected variables add _bc_<reference> to those names.
+Bias-correction handling
+------------------------
+When BIAS_CORRECT_ONLY_FAILED_MONTHS is False, every corrected row uses its
+bias-corrected sample for all 12 months and for all six tests.
 
+When BIAS_CORRECT_ONLY_FAILED_MONTHS is True, the script first evaluates ALL
+six tests on the raw sample for each month:
 
-Panel (a): Independence
------------------------
-Shows one boxplot of pairwise Spearman rank correlations between ensemble
-members for the selected month. Forecast and hindcast correlations are pooled.
+    independence
+    fidelity: mean
+    fidelity: std
+    fidelity: skewness
+    fidelity: kurtosis
+    stability
 
-Correlations near zero indicate weak dependence between ensemble members.
-Larger positive or negative correlations indicate stronger dependence.
+If the raw month passes all six tests, that month stays raw in every corrected
+row. If the raw month fails at least one test, the selected bias-corrected
+sample is used for that entire month and all six tests in that corrected row.
 
+This keeps the selective-correction decision month-based and consistent across
+independence, fidelity, and stability.
 
-Panel (b): Fidelity of the mean
--------------------------------
-Uses the complete all-lead S2S sample.
-
-The model sample is repeatedly resampled with replacement using the same sample
-size as the observational datasets. The resulting bootstrap distribution of
-the mean is shown together with the central model confidence interval and the
-ERA5 and SeNorge means.
-
-
-Panel (c): Fidelity of the standard deviation
----------------------------------------------
-Uses the same bootstrap procedure, but for sample standard deviation.
-
-This tests whether the observed spread of monthly extremes is consistent with
-the spread expected from the S2S distribution.
-
-
-Panel (d): Fidelity of the skewness
------------------------------------
-Uses the same bootstrap procedure for skewness.
-
-This tests whether the asymmetry of the observed extreme-precipitation
-distribution is consistent with the S2S distribution.
-
-
-Panel (e): Fidelity of the kurtosis
------------------------------------
-Uses the same bootstrap procedure for excess kurtosis.
-
-This tests whether the tail-heaviness / peakedness of the observed extreme
-distribution is consistent with the S2S distribution.
-
-
-Panel (f): Lead-time stability
-------------------------------
-Compares the complete all-lead S2S distribution with the lead-location
-subgroups.
-
-The subgroup values are not maxima recalculated over shorter lead windows.
-They are the SAME full-window maxima, classified by the lead time at which each
-maximum occurred.
-
-For the default two-bin setup:
-    early = maxima occurring at ending leads 17-31
-    late  = maxima occurring at ending leads 32-46
-
-The panel shows probability-density distributions for all leads, early leads,
-and late leads. A two-sample Kolmogorov-Smirnov test compares the early and
-late subgroups and reports sample counts, KS statistic, p-value, and whether
-the equal-distribution null hypothesis is rejected.
-
-
-Data used by each panel
------------------------
-Panel (a):
-    complete all-lead S2S sample + i_date + number + model_type from the
-    shared compact S2S extreme-sample file. hdate is retained as provenance
-    but is not required because every hindcast row already has a unique i_date.
-
-Panels (b)-(e):
-    complete all-lead S2S sample + ERA5 + SeNorge.
-
-Panel (f):
-    complete, early, and late samples from the same S2S extreme-sample file.
+Expected compact model variables
+--------------------------------
+    tp24_max(number, i_date)
+    tp24_max_lead<start>_<end>(number, i_date)
+    month(i_date)
+    model_type(i_date)
+    number(number)
+    i_date(i_date)
 """
-
 
 import os
 from itertools import combinations
+from pathlib import Path
 from typing import Callable
 
 import matplotlib.pyplot as plt
+from matplotlib import colormaps
 import numpy as np
 import pandas as pd
 import xarray as xr
-from matplotlib.lines import Line2D
-from matplotlib.patches import Patch
 from scipy.stats import ks_2samp, kurtosis, rankdata, skew
 
 from Dunnsigouin_etal_2026 import config
@@ -136,85 +87,142 @@ from Dunnsigouin_etal_2026 import config
 # User settings
 # =============================================================================
 
-# Calendar month to plot: 1=January, ..., 12=December.
-selected_month = 8
-
-# Accumulation period.
+# Accumulation period used in the compact model and reference sample files.
 x_days = 2
 
-# Catchment used consistently for all input datasets and figure labels.
 catchment = "regine_drammen"
 
-forecast_date_range = ("2020-01-02","2022-12-29")
+forecast_date_range = (
+    "2020-01-02",
+    "2022-12-29",
+)
 
-reference_years = ("1957","2022")
+reference_years = (
+    "1957",
+    "2022",
+)
 
 era5_grid = "0.5x0.5"
 
-# Lead-location sampling used by panels (b)-(f).
+# Must match the compact sample file.
 first_input_lead = 16
 last_input_lead = 46
 number_of_lead_bins = 2
 
-# Reference dataset used for BOTH:
-#   1. the vertical reference line in panels (b)-(e); and
+# Reference used for both:
+#   1. the observed monthly statistic; and
 #   2. selecting the corresponding bias-corrected model file.
 #
 # Options:
 #     "era5"
 #     "senorge"
-REFERENCE_DATASET = "era5"
+REFERENCE_DATASET = "senorge"
 
-# Independence-test settings.
-# Minimum number of paired initialization values required for one
-# ensemble-member Spearman correlation.
-minimum_samples = 10
+# Bias-correction methods to compare.
+#
+# "mm" uses the monthly-mean corrected compact sample file:
+#     ..._bc_mm_<reference>.nc
+#
+# The other methods use:
+#     ..._bc_<method>_<reference>.nc
+BIAS_CORRECTION_METHODS = [
+    "mm",
+    "q",
+    "doy",
+    "ld",
+    "q_doy",
+]
 
-# Expected ensemble sizes.
-n_forecast_members = 51
-n_hindcast_members = 11
+# Bias-correction application mode.
+#
+# False:
+#     The "bias corrected" heatmap row uses the bias-corrected sample for
+#     every calendar month.
+#
+# True:
+#     First run ALL SIX tests on the raw sample for each month:
+#       independence, four fidelity tests, and stability.
+#     If a month fails at least one raw test, use the bias-corrected sample
+#     for that entire month and all six tests. If it passes all six raw tests,
+#     retain the raw sample for that month in every corrected row.
+#
+# The resulting heatmap rows are still labelled by bias-correction method.
+BIAS_CORRECT_ONLY_FAILED_MONTHS = False
 
-# Bootstrap settings.
-number_of_bootstrap_samples = 10000
+# Independence settings.
+# A month passes when abs(median Spearman correlation) is below this threshold.
+INDEPENDENCE_CORRELATION_THRESHOLD = 0.10
+
+# Minimum paired initialization values required for one Spearman correlation.
+minimum_independence_samples = 10
+
+# Fidelity bootstrap settings.
+number_of_bootstrap_samples = 10_000
 confidence_level_percent = 95.0
 random_seed = 42
 
-# Kolmogorov-Smirnov distribution-test settings.
+# Stability KS-test settings.
+STABILITY_CONFIDENCE_LEVEL_PERCENT = 95.0
 ks_alternative = "two-sided"
 ks_method = "auto"
-ks_significance_level_percent = 95.0
 
-# Histogram settings.
-number_of_bins = 30
-plot_probability_density = True
-y_axis_margin_fraction = 0.08
+# Optional explicit input filenames.
+#
+# Leave as None to construct filenames automatically.
+raw_model_filename_override = None
 
-# Figure output.
-figure_width = 13.0
-figure_height = 8.0
-figure_dpi = 300
+# Optional per-method filename overrides. Leave values as None to construct
+# filenames automatically.
+bias_corrected_model_filename_overrides = {
+    "mm": None,
+    "q": None,
+    "doy": None,
+    "ld": None,
+    "q_doy": None,
+}
 
-write2file = False
+reference_filename_override = None
+
+write2file = True
 show_figure = True
+
+path_out = Path(
+    config.dirs[
+        "fig"
+    ]
+)
+
+correction_mode = (
+    "failedmonths"
+    if BIAS_CORRECT_ONLY_FAILED_MONTHS
+    else "allmonths"
+)
+
+filename_heatmap = (
+    path_out
+    / (
+        f"Heatmap_UNSEEN_test_summary_"
+        f"{REFERENCE_DATASET}_"
+        f"{correction_mode}_"
+        f"{x_days}dayacc_"
+        f"{catchment}_"
+        f"{forecast_date_range[0]}_"
+        f"{forecast_date_range[1]}.png"
+    )
+)
 
 
 # =============================================================================
-# Dataset configuration
+# Dataset settings
 # =============================================================================
 
 MODEL_VARIABLE = "tp24"
-# S2S maximum-variable names are built automatically from lead ranges.
-MODEL_MONTH_COORDINATE = "month"
+MODEL_MONTH_VARIABLE = "month"
 
 ERA5_VARIABLE = "tp24"
 
 SENORGE_VARIABLE = "rr"
 SENORGE_LABEL = "SeNorge"
-
-
-# =============================================================================
-# Labels and plotting constants
-# =============================================================================
 
 MONTH_LABELS = {
     1: "January",
@@ -238,177 +246,55 @@ STATISTICS = (
     "kurtosis",
 )
 
-STATISTIC_LABELS = {
-    "mean": "Mean",
-    "std": "Standard deviation",
-    "skewness": "Skewness",
-    "kurtosis": "Kurtosis",
+HEATMAP_COLUMN_LABELS = {
+    "independence": "independence",
+    "mean": "fidelity: mean",
+    "std": "fidelity: std",
+    "skewness": "fidelity: skewness",
+    "kurtosis": "fidelity: kurtosis",
+    "stability": "stability",
 }
-
-#STATISTIC_AXIS_LABELS = {
-#    "mean": "Mean precipitation [mm]",
-#    "std": "Precipitation standard deviation [mm]",
-#    "skewness": "Precipitation skewness",
-#    "kurtosis": "Precipitation excess kurtosis",
-#}
-
-STATISTIC_AXIS_LABELS = {
-    "mean": f"Maximum monthly {x_days}-day precipitation [mm]",
-    "std": f"Maximum monthly {x_days}-day precipitation [mm]",
-    "skewness": "unitless",
-    "kurtosis": "unitless",
-}
-
-
-
-# Raw and bias-corrected bootstrap distributions in panels (b)-(e).
-# Semi-transparent filled histograms make their overlap visually apparent,
-# similar in spirit to Kelder et al. (2020), Fig. 4.
-RAW_MODEL_COLOR = "0.45"
-BIAS_CORRECTED_COLOR = "goldenrod"
-BOOTSTRAP_ALPHA = 0.45
-
-MODEL_COLOR = "black"
-ERA5_COLOR = "tab:blue"
-SENORGE_COLOR = "tab:red"
-EARLY_COLOR = "tab:green"
-LATE_COLOR = "tab:purple"
-
-HISTOGRAM_LINEWIDTH = 2
-REFERENCE_LINEWIDTH = 2
-CONFIDENCE_LINEWIDTH = 2
-
-TITLE_FONTSIZE = 10
-SUPTITLE_FONTSIZE = 12
-AXIS_LABELSIZE = 10
-TICK_LABELSIZE = 10
-LEGEND_FONTSIZE = 10
 
 
 # =============================================================================
 # General helpers
 # =============================================================================
 
-def readable_catchment_name(catchment_name: str) -> str:
-    """Convert a technical catchment identifier into a readable name."""
+def get_file_id(
+    catchment_name: str,
+) -> str:
+    """Return the short catchment label used in compact sample filenames."""
 
-    name = catchment_name
-
-    for prefix in (
-        "nve_catchment_regine_",
-        "nve_catchment_",
-        "regine_",
+    if catchment_name.startswith(
+        "regine_"
     ):
-        if name.startswith(prefix):
-            name = name[len(prefix):]
-            break
-
-    return name.replace("_", " ").title()
-
-
-def get_file_id(catchment_name: str) -> str:
-    """Return the short catchment name used in compact sample filenames."""
-
-    if catchment_name.startswith("regine_"):
-        return catchment_name.replace("regine_", "", 1)
+        return catchment_name.replace(
+            "regine_",
+            "",
+            1,
+        )
 
     return catchment_name
 
 
-def remove_missing_values(values: np.ndarray) -> np.ndarray:
+def remove_missing_values(
+    values: np.ndarray,
+) -> np.ndarray:
     """Flatten an array and retain only finite values."""
 
-    values = np.asarray(values).ravel()
-    return values[np.isfinite(values)]
+    values = np.asarray(
+        values
+    ).ravel()
 
-
-def validate_user_settings() -> None:
-    """Validate settings that affect both analyses."""
-
-    if selected_month not in MONTH_LABELS:
-        raise ValueError("selected_month must be an integer from 1 to 12.")
-
-    if x_days < 1:
-        raise ValueError("x_days must be at least 1.")
-
-    if number_of_bootstrap_samples < 1:
-        raise ValueError("number_of_bootstrap_samples must be at least 1.")
-
-    if number_of_bins < 1:
-        raise ValueError("number_of_bins must be at least 1.")
-
-    if not 0.0 < confidence_level_percent < 100.0:
-        raise ValueError(
-            "confidence_level_percent must be between 0 and 100."
+    return values[
+        np.isfinite(
+            values
         )
-
-    valid_ks_alternatives = {"two-sided", "less", "greater"}
-    if ks_alternative not in valid_ks_alternatives:
-        raise ValueError(
-            f"ks_alternative must be one of {sorted(valid_ks_alternatives)}."
-        )
-
-    valid_ks_methods = {"auto", "exact", "asymp"}
-    if ks_method not in valid_ks_methods:
-        raise ValueError(
-            f"ks_method must be one of {sorted(valid_ks_methods)}."
-        )
-
-    if not 0.0 < ks_significance_level_percent < 100.0:
-        raise ValueError(
-            "ks_significance_level_percent must be between 0 and 100."
-        )
-
-    if y_axis_margin_fraction < 0:
-        raise ValueError(
-            "y_axis_margin_fraction must be non-negative."
-        )
-
-    if first_input_lead > last_input_lead:
-        raise ValueError(
-            "first_input_lead must not exceed last_input_lead."
-        )
-
-    first_usable_lead = first_input_lead + x_days - 1
-    number_of_usable_leads = last_input_lead - first_usable_lead + 1
-
-    if first_usable_lead > last_input_lead:
-        raise ValueError(
-            "x_days is too large for the available input lead window."
-        )
-
-    if number_of_lead_bins != 2:
-        raise ValueError(
-            "This combined stability figure is configured for exactly two "
-            "lead bins: Early and Late."
-        )
-
-    if number_of_lead_bins > number_of_usable_leads:
-        raise ValueError(
-            "number_of_lead_bins exceeds the number of usable leads."
-        )
-
-    if minimum_samples < 3:
-        raise ValueError(
-            "minimum_samples must be at least 3."
-        )
-
-
-    valid_references = {
-        "era5",
-        "senorge",
-    }
-
-    if REFERENCE_DATASET not in valid_references:
-        raise ValueError(
-            f"REFERENCE_DATASET must be one of "
-            f"{sorted(valid_references)}. "
-            f"Got '{REFERENCE_DATASET}'."
-        )
+    ]
 
 
 # =============================================================================
-# Filename helpers
+# Lead-time and filename helpers
 # =============================================================================
 
 def split_usable_accumulated_leads(
@@ -416,145 +302,222 @@ def split_usable_accumulated_leads(
     last_lead: int,
     number_of_bins: int,
 ) -> list[tuple[int, int]]:
-    """Split usable accumulated ending leads into approximately equal bins."""
+    """Split usable ending leads into approximately equal consecutive bins."""
 
-    number_of_leads = last_lead - first_lead + 1
-    base_size = number_of_leads // number_of_bins
-    remainder = number_of_leads % number_of_bins
+    number_of_leads = (
+        last_lead
+        - first_lead
+        + 1
+    )
+
+    base_size = (
+        number_of_leads
+        // number_of_bins
+    )
+
+    remainder = (
+        number_of_leads
+        % number_of_bins
+    )
 
     bin_sizes = [
-        base_size + int(index >= number_of_bins - remainder)
-        for index in range(number_of_bins)
+        base_size
+        + int(
+            index
+            >= number_of_bins - remainder
+        )
+        for index in range(
+            number_of_bins
+        )
     ]
 
-    bins = []
+    lead_bins = []
     current_start = first_lead
 
     for bin_size in bin_sizes:
-        current_end = current_start + bin_size - 1
-        bins.append((current_start, current_end))
-        current_start = current_end + 1
 
-    return bins
+        current_end = (
+            current_start
+            + bin_size
+            - 1
+        )
+
+        lead_bins.append(
+            (
+                current_start,
+                current_end,
+            )
+        )
+
+        current_start = (
+            current_end
+            + 1
+        )
+
+    return lead_bins
 
 
-def get_stability_lead_ranges() -> tuple[
-    tuple[int, int],
-    tuple[int, int],
-    tuple[int, int],
-]:
-    """Return complete, early, and late accumulated lead ranges."""
+def get_lead_ranges():
+    """Return the full accumulated lead range and all lead-location bins."""
 
-    first_usable_lead = first_input_lead + x_days - 1
-
-    full_range = (first_usable_lead, last_input_lead)
-
-    split_ranges = split_usable_accumulated_leads(
-        first_lead=first_usable_lead,
-        last_lead=last_input_lead,
-        number_of_bins=number_of_lead_bins,
+    first_usable_lead = (
+        first_input_lead
+        + x_days
+        - 1
     )
 
-    return full_range, split_ranges[0], split_ranges[1]
-
-
-def get_stability_variable_names(
-    bias_corrected: bool,
-) -> tuple[str, str, str]:
-    """Return compact complete, early, and late model-variable names."""
-
-    _, early_range, late_range = get_stability_lead_ranges()
-
-    all_variable = "tp24_max"
-    early_variable = (
-        f"tp24_max_lead{early_range[0]}_{early_range[1]}"
-    )
-    late_variable = (
-        f"tp24_max_lead{late_range[0]}_{late_range[1]}"
+    full_range = (
+        first_usable_lead,
+        last_input_lead,
     )
 
-    if bias_corrected:
-        suffix = f"_bc_{REFERENCE_DATASET}"
-        all_variable += suffix
-        early_variable += suffix
-        late_variable += suffix
+    split_ranges = (
+        split_usable_accumulated_leads(
+            first_lead=first_usable_lead,
+            last_lead=last_input_lead,
+            number_of_bins=number_of_lead_bins,
+        )
+    )
 
-    return all_variable, early_variable, late_variable
+    return (
+        full_range,
+        split_ranges,
+    )
 
 
-def build_model_filename(
-    bias_corrected: bool,
-) -> str:
-    """Build the raw or bias-corrected compact S2S sample filename."""
+def lead_filename_label() -> str:
+    """Return the lead-window label used in compact sample filenames."""
 
-    full_range, early_range, late_range = get_stability_lead_ranges()
+    full_range, split_ranges = (
+        get_lead_ranges()
+    )
 
-    lead_label = (
+    split_text = "_".join(
+        f"{lead_start}-{lead_end}"
+        for lead_start, lead_end in split_ranges
+    )
+
+    return (
         f"lead{full_range[0]}-{full_range[1]}_"
         f"split{number_of_lead_bins}_"
-        f"{early_range[0]}-{early_range[1]}_"
-        f"{late_range[0]}-{late_range[1]}"
+        f"{split_text}"
     )
 
-    filename = os.path.join(
-        config.dirs["s2s_processed"],
-        (
+
+def build_raw_model_filename() -> Path:
+    """Build the raw compact model sample filename."""
+
+    if raw_model_filename_override is not None:
+        return Path(
+            raw_model_filename_override
+        )
+
+    return (
+        Path(
+            config.dirs[
+                "s2s_processed"
+            ]
+        )
+        / (
             f"monthly_max_samples_"
-            f"{MODEL_VARIABLE}_{x_days}dayacc_"
+            f"{MODEL_VARIABLE}_"
+            f"{x_days}dayacc_"
             f"{get_file_id(catchment)}_"
-            f"{lead_label}_"
+            f"{lead_filename_label()}_"
             f"{forecast_date_range[0]}_"
             f"{forecast_date_range[1]}.nc"
-        ),
-    )
-
-    if bias_corrected:
-        stem, extension = os.path.splitext(filename)
-        filename = f"{stem}_bc_{REFERENCE_DATASET}{extension}"
-
-    return filename
-
-
-def resolve_model_input_filenames() -> tuple[str, str]:
-    """Construct raw and bias-corrected S2S sample filenames."""
-
-    raw_filename = build_model_filename(
-        bias_corrected=False,
-    )
-
-    bias_corrected_filename = build_model_filename(
-        bias_corrected=True,
-    )
-
-    return raw_filename, bias_corrected_filename
-
-
-def build_era5_filename() -> str:
-    """Build the ERA5 filename exactly as in script 2."""
-
-    return (
-        f"{config.dirs['era5_processed']}"
-        f"distribution_monthly_extremes_{ERA5_VARIABLE}_{x_days}dayacc_"
-        f"{catchment}_era5_{era5_grid}_"
-        f"{reference_years[0]}-{reference_years[1]}.nc"
+        )
     )
 
 
-def build_senorge_filename() -> str:
-    """Build the SeNorge monthly-extremes filename."""
+def build_bias_corrected_model_filename(
+    method: str,
+) -> Path:
+    """Build one bias-corrected compact model sample filename."""
 
-    return (
-        f"{config.dirs['senorge_processed']}"
-        f"distribution_monthly_extremes_{SENORGE_VARIABLE}_{x_days}dayacc_"
-        f"{catchment}_senorge_"
-        f"{reference_years[0]}-{reference_years[1]}.nc"
+    override = bias_corrected_model_filename_overrides.get(
+        method
+    )
+
+    if override is not None:
+        return Path(
+            override
+        )
+
+    raw_filename = build_raw_model_filename()
+
+    if method == "mm":
+        suffix = (
+            f"bc_mm_{REFERENCE_DATASET}"
+        )
+    else:
+        suffix = (
+            f"bc_{method}_{REFERENCE_DATASET}"
+        )
+
+    return raw_filename.with_name(
+        (
+            f"{raw_filename.stem}_"
+            f"{suffix}"
+            f"{raw_filename.suffix}"
+        )
     )
 
 
-def get_reference_configuration() -> tuple[str, str, str]:
-    """Return selected reference filename, variable, and display label."""
+def build_era5_filename() -> Path:
+    """Build the ERA5 monthly-extreme reference filename."""
+
+    return Path(
+        (
+            f"{config.dirs['era5_processed']}"
+            f"distribution_monthly_extremes_"
+            f"{ERA5_VARIABLE}_{x_days}dayacc_"
+            f"{catchment}_era5_{era5_grid}_"
+            f"{reference_years[0]}-"
+            f"{reference_years[1]}.nc"
+        )
+    )
+
+
+def build_senorge_filename() -> Path:
+    """Build the SeNorge monthly-extreme reference filename."""
+
+    return Path(
+        (
+            f"{config.dirs['senorge_processed']}"
+            f"distribution_monthly_extremes_"
+            f"{SENORGE_VARIABLE}_{x_days}dayacc_"
+            f"{catchment}_senorge_"
+            f"{reference_years[0]}-"
+            f"{reference_years[1]}.nc"
+        )
+    )
+
+
+def get_reference_configuration() -> tuple[Path, str, str]:
+    """Return reference filename, variable name, and display label."""
+
+    if reference_filename_override is not None:
+
+        filename = Path(
+            reference_filename_override
+        )
+
+        if REFERENCE_DATASET == "era5":
+            return (
+                filename,
+                ERA5_VARIABLE,
+                "ERA5",
+            )
+
+        return (
+            filename,
+            SENORGE_VARIABLE,
+            SENORGE_LABEL,
+        )
 
     if REFERENCE_DATASET == "era5":
+
         return (
             build_era5_filename(),
             ERA5_VARIABLE,
@@ -568,738 +531,807 @@ def get_reference_configuration() -> tuple[str, str, str]:
     )
 
 
-def build_output_filename() -> str:
-    """Create a descriptive filename for the six-panel figure."""
+def get_model_variable_name() -> str:
+    """Return the complete-window variable used by every model file."""
 
-    month_name = MONTH_LABELS[selected_month].lower()
+    return "tp24_max"
 
-    return os.path.join(
-        config.dirs["fig"],
-        (
-            f"UNSEEN_independence_fidelity_stability_tests_"
-            f"{month_name}_{x_days}dayacc_{catchment}_"
-            f"{forecast_date_range[0]}_{forecast_date_range[1]}_"
-            f"raw_bc_{REFERENCE_DATASET}.png"
-        ),
-    )
 
 # =============================================================================
-# Independence calculation from the shared S2S sample
+# Validation
 # =============================================================================
 
-def normalize_model_type(values: np.ndarray) -> np.ndarray:
-    """Return model-type values as stripped lowercase strings."""
+def validate_user_settings() -> None:
+    """Validate settings and input files."""
 
-    flat_values = np.asarray(values).ravel()
+    if x_days < 1:
+        raise ValueError(
+            "x_days must be at least 1."
+        )
 
-    return np.array(
-        [
-            (
-                value.decode("utf-8")
-                if isinstance(value, bytes)
-                else str(value)
-            ).strip().lower()
-            for value in flat_values
-        ],
-        dtype=object,
+    if first_input_lead > last_input_lead:
+        raise ValueError(
+            "first_input_lead must not exceed last_input_lead."
+        )
+
+    first_usable_lead = (
+        first_input_lead
+        + x_days
+        - 1
     )
 
+    if first_usable_lead > last_input_lead:
+        raise ValueError(
+            "x_days is too large for the available lead range."
+        )
 
-def datetime_values_to_key(values: np.ndarray) -> np.ndarray:
-    """Convert forecast_date values to datetime64[ns] keys."""
-
-    return pd.to_datetime(
-        np.asarray(values).ravel(),
-        errors="coerce",
-    ).to_numpy(
-        dtype="datetime64[ns]"
+    number_of_usable_leads = (
+        last_input_lead
+        - first_usable_lead
+        + 1
     )
 
-
-def hdate_values_to_key(values: np.ndarray) -> np.ndarray:
-    """Convert hdate values to integer YYYYMMDD keys."""
-
-    values = np.asarray(values).ravel()
-
-    if np.issubdtype(
-        values.dtype,
-        np.datetime64,
+    if not isinstance(
+        number_of_lead_bins,
+        int,
     ):
-        dates = pd.to_datetime(
-            values,
-            errors="coerce",
+        raise TypeError(
+            "number_of_lead_bins must be an integer."
         )
 
-        out = np.full(
-            values.size,
-            -99999999,
-            dtype="int64",
+    if not (
+        1
+        <= number_of_lead_bins
+        <= number_of_usable_leads
+    ):
+        raise ValueError(
+            "number_of_lead_bins must be between 1 and the number "
+            "of usable accumulated leads."
         )
 
-        valid = ~pd.isna(dates)
-
-        out[valid] = (
-            dates[valid]
-            .strftime("%Y%m%d")
-            .astype("int64")
+    if number_of_bootstrap_samples < 1:
+        raise ValueError(
+            "number_of_bootstrap_samples must be at least 1."
         )
 
-        return out
+    if not 0.0 < INDEPENDENCE_CORRELATION_THRESHOLD <= 1.0:
+        raise ValueError(
+            "INDEPENDENCE_CORRELATION_THRESHOLD must be in (0, 1]."
+        )
 
-    numeric_values = pd.to_numeric(
-        values,
-        errors="coerce",
+    if minimum_independence_samples < 3:
+        raise ValueError(
+            "minimum_independence_samples must be at least 3."
+        )
+
+    if not 0.0 < STABILITY_CONFIDENCE_LEVEL_PERCENT < 100.0:
+        raise ValueError(
+            "STABILITY_CONFIDENCE_LEVEL_PERCENT must be between 0 and 100."
+        )
+
+    if ks_alternative not in {"two-sided", "less", "greater"}:
+        raise ValueError(
+            "ks_alternative must be 'two-sided', 'less', or 'greater'."
+        )
+
+    if ks_method not in {"auto", "exact", "asymp"}:
+        raise ValueError(
+            "ks_method must be 'auto', 'exact', or 'asymp'."
+        )
+
+    if number_of_lead_bins != 2:
+        raise ValueError(
+            "The stability test requires exactly two lead bins."
+        )
+
+    if not (
+        0.0
+        < confidence_level_percent
+        < 100.0
+    ):
+        raise ValueError(
+            "confidence_level_percent must be between 0 and 100."
+        )
+
+    valid_references = {
+        "era5",
+        "senorge",
+    }
+
+    valid_methods = {
+        "mm",
+        "q",
+        "doy",
+        "ld",
+        "q_doy",
+    }
+
+    invalid_methods = (
+        set(
+            BIAS_CORRECTION_METHODS
+        )
+        - valid_methods
     )
 
-    out = np.full(
-        values.size,
-        -99999999,
-        dtype="int64",
-    )
+    if invalid_methods:
+        raise ValueError(
+            f"Unsupported bias-correction methods: "
+            f"{sorted(invalid_methods)}."
+        )
 
-    valid = np.isfinite(
-        numeric_values
-    )
+    if len(
+        set(
+            BIAS_CORRECTION_METHODS
+        )
+    ) != len(
+        BIAS_CORRECTION_METHODS
+    ):
+        raise ValueError(
+            "BIAS_CORRECTION_METHODS contains duplicate entries."
+        )
 
-    out[valid] = (
-        numeric_values[valid]
-        .astype("int64")
-    )
+    if REFERENCE_DATASET not in valid_references:
+        raise ValueError(
+            f"REFERENCE_DATASET must be one of "
+            f"{sorted(valid_references)}."
+        )
 
-    return out
+    (
+        reference_filename,
+        _,
+        reference_label,
+    ) = get_reference_configuration()
+
+    files = {
+        "Raw model": build_raw_model_filename(),
+        reference_label: reference_filename,
+    }
+
+    for method in BIAS_CORRECTION_METHODS:
+
+        files[
+            f"Bias-corrected model ({method})"
+        ] = build_bias_corrected_model_filename(
+            method
+        )
+
+    for label, filename in files.items():
+
+        if not filename.is_file():
+            raise FileNotFoundError(
+                f"{label} file not found: {filename}"
+            )
 
 
-def get_independence_month_samples(
-    model_ds: xr.Dataset,
-    all_variable: str,
-    model_type: str,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """
-    Extract selected-month compact samples needed for independence.
-
-    The compact file already has one unique row per initialization in i_date.
-    For both forecasts and hindcasts, i_date is therefore the initialization
-    key used to reconstruct the initialization-by-member matrix.
-    """
+def check_model_dataset(
+    ds: xr.Dataset,
+    variable_name: str,
+    dataset_label: str,
+) -> None:
+    """Check the compact model dataset structure."""
 
     required_variables = {
-        all_variable,
-        "month",
+        variable_name,
+        MODEL_MONTH_VARIABLE,
+    }
+
+    missing = (
+        required_variables
+        - set(
+            ds.variables
+        )
+    )
+
+    if missing:
+        raise KeyError(
+            f"{dataset_label} is missing variables: "
+            f"{sorted(missing)}"
+        )
+
+    expected_dimensions = {
+        "number",
+        "i_date",
+    }
+
+    if set(
+        ds[
+            variable_name
+        ].dims
+    ) != expected_dimensions:
+        raise ValueError(
+            f"{dataset_label} variable '{variable_name}' must contain "
+            f"dimensions {sorted(expected_dimensions)}, but has "
+            f"{ds[variable_name].dims}."
+        )
+
+    if ds[
+        MODEL_MONTH_VARIABLE
+    ].dims != (
+        "i_date",
+    ):
+        raise ValueError(
+            f"{dataset_label} month variable must have dimensions "
+            "('i_date',)."
+        )
+
+
+def check_independence_stability_structure(
+    ds: xr.Dataset,
+    dataset_label: str,
+) -> None:
+    """Check variables needed by independence and stability."""
+
+    early_variable, late_variable = get_stability_variable_names()
+
+    required = {
+        "tp24_max",
+        early_variable,
+        late_variable,
+        MODEL_MONTH_VARIABLE,
         "model_type",
         "number",
         "i_date",
     }
 
-    missing = required_variables.difference(model_ds.variables)
+    missing = required - set(ds.variables)
 
     if missing:
         raise KeyError(
-            "Model dataset is missing variables needed for the "
-            f"independence calculation: {sorted(missing)}"
+            f"{dataset_label} is missing independence/stability variables: "
+            f"{sorted(missing)}"
         )
 
-    if model_type not in {"forecast", "hindcast"}:
-        raise ValueError(
-            "model_type must be 'forecast' or 'hindcast'."
+
+# =============================================================================
+# Monthly sample extraction
+# =============================================================================
+
+def get_model_values_for_month(
+    ds: xr.Dataset,
+    variable_name: str,
+    month_number: int,
+) -> np.ndarray:
+    """Pool finite model values across number and selected i_date rows."""
+
+    selected = ds[
+        variable_name
+    ].where(
+        ds[
+            MODEL_MONTH_VARIABLE
+        ]
+        == month_number,
+        drop=True,
+    )
+
+    return remove_missing_values(
+        selected.values
+    )
+
+
+def get_reference_values_for_month(
+    ds: xr.Dataset,
+    variable_name: str,
+    month_number: int,
+) -> np.ndarray:
+    """Return finite reference monthly-extreme values for one month."""
+
+    if variable_name not in ds:
+        raise KeyError(
+            f"Reference variable '{variable_name}' was not found. "
+            f"Available variables: {list(ds.data_vars)}"
         )
 
-    normalized_types = normalize_model_type(
-        model_ds["model_type"].values
-    )
-
-    initialization_mask = (
-        (model_ds["month"].values == selected_month)
-        & (normalized_types == model_type)
-    )
-
-    selected_i_dates = model_ds["i_date"].values[
-        initialization_mask
+    data = ds[
+        variable_name
     ]
 
-    selected_values = (
-        model_ds[all_variable]
-        .isel(i_date=initialization_mask)
-        .transpose("i_date", "number")
-        .values
-        .astype("float64")
+    available_names = (
+        set(
+            data.coords
+        )
+        | set(
+            data.dims
+        )
     )
 
-    member_labels = model_ds["number"].values.astype("int64")
-
-    initialization_keys = np.repeat(
-        selected_i_dates,
-        member_labels.size,
-    )
-
-    members = np.tile(
-        member_labels,
-        selected_i_dates.size,
-    )
-
-    values = selected_values.reshape(-1)
-
-    valid = (
-        np.isfinite(values)
-        & (~np.isnat(initialization_keys))
-        & (members >= 0)
-    )
-
-    return (
-        values[valid],
-        initialization_keys[valid],
-        members[valid],
-    )
-
-
-def reconstruct_member_matrix(
-    values: np.ndarray,
-    initialization_keys: np.ndarray,
-    member_labels: np.ndarray,
-    model_type: str,
-) -> tuple[np.ndarray, list, np.ndarray]:
-    """Reconstruct an initialization-by-member matrix."""
-
-    if values.size == 0:
-        return (
-            np.empty(
-                (0, 0),
-                dtype="float64",
-            ),
-            [],
-            np.array([]),
+    if "month" not in available_names:
+        raise KeyError(
+            "Reference variable must contain a 'month' coordinate "
+            "or dimension."
         )
 
-    unique_initializations = []
-    initialization_lookup = {}
-
-    for initialization in initialization_keys:
-
-        if initialization not in initialization_lookup:
-
-            initialization_lookup[
-                initialization
-            ] = len(
-                unique_initializations
-            )
-
-            unique_initializations.append(
-                initialization
-            )
-
-    unique_members = np.unique(
-        member_labels
-    )
-
-    expected_members = (
-        n_forecast_members
-        if model_type == "forecast"
-        else n_hindcast_members
-    )
-
-    if unique_members.size != expected_members:
-        raise ValueError(
-            f"{model_type.capitalize()} data contain "
-            f"{unique_members.size} unique ensemble-member labels, "
-            f"but {expected_members} were expected. "
-            f"Found labels: {unique_members.tolist()}"
-        )
-
-    member_lookup = {
-        member: index
-        for index, member
-        in enumerate(
-            unique_members
-        )
-    }
-
-    matrix = np.full(
-        (
-            len(
-                unique_initializations
-            ),
-            unique_members.size,
-        ),
-        np.nan,
-        dtype="float64",
-    )
-
-    for value, initialization, member in zip(
-        values,
-        initialization_keys,
-        member_labels,
-    ):
-
-        row = initialization_lookup[
-            initialization
-        ]
-
-        column = member_lookup[
-            member
-        ]
-
-        if np.isfinite(
-            matrix[
-                row,
-                column,
-            ]
-        ):
-            raise ValueError(
-                "Duplicate sample found for "
-                f"{model_type} initialization "
-                f"{initialization!r}, member {member!r}."
-            )
-
-        matrix[
-            row,
-            column,
-        ] = value
-
-    return (
-        matrix,
-        unique_initializations,
-        unique_members,
+    return remove_missing_values(
+        data.sel(
+            month=month_number
+        ).values
     )
 
 
-def spearman_correlation(
-    x: np.ndarray,
-    y: np.ndarray,
-    minimum_valid_samples: int,
-) -> float:
+# =============================================================================
+# Independence and stability
+# =============================================================================
+
+def normalize_model_type(values: np.ndarray) -> np.ndarray:
+    """Return model-type labels as stripped lowercase strings."""
+    return np.array(
+        [
+            (value.decode("utf-8") if isinstance(value, bytes) else str(value))
+            .strip()
+            .lower()
+            for value in np.asarray(values).ravel()
+        ],
+        dtype=object,
+    )
+
+
+def spearman_correlation(x: np.ndarray, y: np.ndarray) -> float:
     """Calculate one pairwise Spearman rank correlation."""
+    valid = np.isfinite(x) & np.isfinite(y)
 
-    valid = (
-        np.isfinite(
-            x
-        )
-        & np.isfinite(
-            y
-        )
-    )
-
-    number_of_valid_samples = int(
-        valid.sum()
-    )
-
-    if (
-        number_of_valid_samples
-        < minimum_valid_samples
-    ):
+    if int(valid.sum()) < minimum_independence_samples:
         return np.nan
 
     x_valid = x[valid]
     y_valid = y[valid]
 
-    if (
-        np.all(
-            x_valid
-            == x_valid[0]
-        )
-        or np.all(
-            y_valid
-            == y_valid[0]
-        )
-    ):
+    if np.all(x_valid == x_valid[0]) or np.all(y_valid == y_valid[0]):
         return np.nan
 
-    x_ranks = rankdata(
-        x_valid,
-        method="average",
-    )
+    x_rank = rankdata(x_valid, method="average")
+    y_rank = rankdata(y_valid, method="average")
 
-    y_ranks = rankdata(
-        y_valid,
-        method="average",
-    )
-
-    return float(
-        np.corrcoef(
-            x_ranks,
-            y_ranks,
-        )[0, 1]
-    )
+    return float(np.corrcoef(x_rank, y_rank)[0, 1])
 
 
-def calculate_selected_month_correlations(
-    model_ds: xr.Dataset,
-    all_variable: str,
+def get_month_member_matrix(
+    ds: xr.Dataset,
+    variable_name: str,
+    month_number: int,
     model_type: str,
 ) -> np.ndarray:
-    """
-    Calculate all member-pair correlations for the selected month.
-    """
+    """Return an initialization-by-member matrix for one month/model type."""
 
-    (
-        values,
-        initialization_keys,
-        member_labels,
-    ) = get_independence_month_samples(
-        model_ds=model_ds,
-        all_variable=all_variable,
-        model_type=model_type,
-    )
+    if model_type not in {"forecast", "hindcast"}:
+        raise ValueError("model_type must be 'forecast' or 'hindcast'.")
 
-    (
-        matrix,
-        _,
-        unique_members,
-    ) = reconstruct_member_matrix(
-        values=values,
-        initialization_keys=initialization_keys,
-        member_labels=member_labels,
-        model_type=model_type,
-    )
+    required = {
+        variable_name,
+        MODEL_MONTH_VARIABLE,
+        "model_type",
+        "number",
+        "i_date",
+    }
+    missing = required - set(ds.variables)
 
-    if matrix.size == 0:
-        return np.array(
-            [],
-            dtype="float64",
+    if missing:
+        raise KeyError(
+            "Model dataset is missing independence variables: "
+            f"{sorted(missing)}"
         )
 
-    pair_indices = list(
-        combinations(
-            range(
-                unique_members.size
-            ),
-            2,
-        )
+    types = normalize_model_type(ds["model_type"].values)
+
+    selected_rows = (
+        (ds[MODEL_MONTH_VARIABLE].values == month_number)
+        & (types == model_type)
     )
+
+    return (
+        ds[variable_name]
+        .isel(i_date=selected_rows)
+        .transpose("i_date", "number")
+        .values
+        .astype("float64")
+    )
+
+
+def calculate_pairwise_correlations_from_matrix(
+    matrix: np.ndarray,
+) -> np.ndarray:
+    """Return all finite member-pair Spearman correlations."""
+
+    if matrix.ndim != 2 or matrix.shape[0] == 0 or matrix.shape[1] < 2:
+        return np.array([], dtype="float64")
 
     correlations = np.array(
         [
             spearman_correlation(
-                x=matrix[
-                    :,
-                    index_1,
-                ],
-                y=matrix[
-                    :,
-                    index_2,
-                ],
-                minimum_valid_samples=minimum_samples,
+                matrix[:, member_1],
+                matrix[:, member_2],
             )
-            for index_1, index_2
-            in pair_indices
+            for member_1, member_2 in combinations(
+                range(matrix.shape[1]),
+                2,
+            )
         ],
         dtype="float64",
     )
 
-    return remove_missing_values(
-        correlations
-    )
+    return remove_missing_values(correlations)
 
 
-def calculate_independence_values(
-    model_ds: xr.Dataset,
-    all_variable: str,
-) -> np.ndarray:
-    """
-    Calculate and pool forecast/hindcast correlations for panel (a).
-    """
-
-    forecast = calculate_selected_month_correlations(
-        model_ds=model_ds,
-        all_variable=all_variable,
-        model_type="forecast",
-    )
-
-    hindcast = calculate_selected_month_correlations(
-        model_ds=model_ds,
-        all_variable=all_variable,
-        model_type="hindcast",
-    )
-
-    combined = np.concatenate(
-        [
-            forecast,
-            hindcast,
-        ]
-    )
-
-    if combined.size == 0:
-        raise ValueError(
-            f"No finite independence correlations could be calculated "
-            f"for {MONTH_LABELS[selected_month]}."
-        )
-
-    return combined
-
-
-# =============================================================================
-# Moments data: script 2 logic for one month
-# =============================================================================
-
-def check_variable_exists(
+def calculate_month_independence(
     ds: xr.Dataset,
-    variable: str,
-    dataset_name: str,
-) -> None:
-    """Raise a clear error when a required variable is missing."""
-
-    if variable not in ds:
-        raise KeyError(
-            f"Variable '{variable}' was not found in {dataset_name}. "
-            f"Available variables: {list(ds.data_vars)}"
-        )
-
-
-def check_coordinate_exists(
-    data: xr.DataArray,
-    coordinate: str,
-    dataset_name: str,
-) -> None:
-    """Raise a clear error when a required coordinate is missing."""
-
-    available_names = set(data.coords) | set(data.dims)
-
-    if coordinate not in available_names:
-        raise KeyError(
-            f"Coordinate/dimension '{coordinate}' was not found in "
-            f"{dataset_name}. Dimensions: {data.dims}; "
-            f"coordinates: {list(data.coords)}."
-        )
-
-
-def get_model_values_for_selected_month(
-    model_ds: xr.Dataset,
     variable_name: str,
-) -> np.ndarray:
-    """Extract one compact model sample for the selected month."""
+    month_number: int,
+) -> dict[str, object]:
+    """
+    Calculate panel-(a)-style independence for one month.
 
-    check_variable_exists(
-        model_ds,
-        variable_name,
-        "model dataset",
+    Forecast and hindcast correlations are calculated separately, then pooled.
+    """
+
+    forecast = calculate_pairwise_correlations_from_matrix(
+        get_month_member_matrix(
+            ds,
+            variable_name,
+            month_number,
+            "forecast",
+        )
     )
 
-    check_variable_exists(
-        model_ds,
-        MODEL_MONTH_COORDINATE,
-        "model dataset",
+    hindcast = calculate_pairwise_correlations_from_matrix(
+        get_month_member_matrix(
+            ds,
+            variable_name,
+            month_number,
+            "hindcast",
+        )
     )
 
-    data = model_ds[variable_name]
+    correlations = np.concatenate([forecast, hindcast])
 
-    required_dimensions = {"number", "i_date"}
-
-    if set(data.dims) != required_dimensions:
+    if correlations.size == 0:
         raise ValueError(
-            f"Variable '{variable_name}' must contain dimensions "
-            f"{sorted(required_dimensions)}, but has {data.dims}."
+            "No finite pairwise Spearman correlations for "
+            f"{MONTH_LABELS[month_number]}."
         )
 
-    selected = data.where(
-        model_ds[MODEL_MONTH_COORDINATE] == selected_month,
-        drop=True,
-    )
+    median_correlation = float(np.median(correlations))
 
-    return remove_missing_values(selected.values)
-
-
-def get_reference_values_for_selected_month(
-    ds: xr.Dataset,
-    variable: str,
-    dataset_name: str,
-) -> np.ndarray:
-    """Extract ERA5 or SeNorge monthly maxima for the selected month."""
-
-    check_variable_exists(ds, variable, dataset_name)
-
-    data = ds[variable]
-
-    check_coordinate_exists(
-        data,
-        "month",
-        dataset_name,
-    )
-
-    values = data.sel(month=selected_month).values
-    return remove_missing_values(values)
+    return {
+        "median_correlation": median_correlation,
+        "passes": bool(
+            abs(median_correlation)
+            < INDEPENDENCE_CORRELATION_THRESHOLD
+        ),
+        "number_of_pairwise_correlations": int(correlations.size),
+    }
 
 
-def load_model_and_reference_values(
-    raw_model_filename: str,
-    bias_corrected_model_filename: str,
-    reference_filename: str,
-    reference_variable: str,
-    reference_label: str,
-) -> tuple[
-    np.ndarray,
-    np.ndarray,
-    np.ndarray,
-    np.ndarray,
-    np.ndarray,
-    np.ndarray,
-    np.ndarray,
-    np.ndarray,
-]:
-    """
-    Load all samples needed by the six panels.
+def get_stability_variable_names() -> tuple[str, str]:
+    """Return Early and Late compact-sample variable names."""
+    _, split_ranges = get_lead_ranges()
 
-    Panel (a):
-        independence is calculated from the RAW all-lead model sample.
-
-    Panels (b)-(e):
-        raw all-lead, bias-corrected all-lead, and one reference sample.
-
-    Panel (f):
-        raw Early/Late are used for the raw KS test;
-        bias-corrected Early/Late are used for the BC KS test and plotted.
-    """
-
-    for dataset_name, filename in (
-        ("raw model", raw_model_filename),
-        ("bias-corrected model", bias_corrected_model_filename),
-        (reference_label, reference_filename),
-    ):
-        if not os.path.exists(filename):
-            raise FileNotFoundError(
-                f"{dataset_name} input file does not exist:\\n{filename}"
-            )
-
-    (
-        raw_all_variable,
-        raw_early_variable,
-        raw_late_variable,
-    ) = get_stability_variable_names(
-        bias_corrected=False,
-    )
-
-    (
-        bc_all_variable,
-        bc_early_variable,
-        bc_late_variable,
-    ) = get_stability_variable_names(
-        bias_corrected=True,
-    )
-
-    with (
-        xr.open_dataset(
-            raw_model_filename,
-            decode_timedelta=False,
-        ) as raw_model_ds,
-        xr.open_dataset(
-            bias_corrected_model_filename,
-            decode_timedelta=False,
-        ) as bc_model_ds,
-        xr.open_dataset(reference_filename) as reference_ds,
-    ):
-        independence_values = calculate_independence_values(
-            model_ds=raw_model_ds,
-            all_variable=raw_all_variable,
+    if len(split_ranges) != 2:
+        raise ValueError(
+            "The stability test requires exactly two lead bins."
         )
 
-        raw_all_values = get_model_values_for_selected_month(
-            raw_model_ds,
-            raw_all_variable,
-        )
-
-        raw_early_values = get_model_values_for_selected_month(
-            raw_model_ds,
-            raw_early_variable,
-        )
-
-        raw_late_values = get_model_values_for_selected_month(
-            raw_model_ds,
-            raw_late_variable,
-        )
-
-        bc_all_values = get_model_values_for_selected_month(
-            bc_model_ds,
-            bc_all_variable,
-        )
-
-        bc_early_values = get_model_values_for_selected_month(
-            bc_model_ds,
-            bc_early_variable,
-        )
-
-        bc_late_values = get_model_values_for_selected_month(
-            bc_model_ds,
-            bc_late_variable,
-        )
-
-        reference_values = get_reference_values_for_selected_month(
-            reference_ds,
-            reference_variable,
-            reference_label,
-        )
+    early_range, late_range = split_ranges
 
     return (
-        independence_values,
-        raw_all_values,
-        raw_early_values,
-        raw_late_values,
-        bc_all_values,
-        bc_early_values,
-        bc_late_values,
-        reference_values,
+        f"tp24_max_lead{early_range[0]}_{early_range[1]}",
+        f"tp24_max_lead{late_range[0]}_{late_range[1]}",
     )
 
 
-def validate_model_partition(
-    model_all_values: np.ndarray,
-    model_early_values: np.ndarray,
-    model_late_values: np.ndarray,
-) -> None:
-    """Check that Early + Late partition the complete selected-month sample."""
-
-    if model_all_values.size != (
-        model_early_values.size + model_late_values.size
-    ):
-        raise ValueError(
-            "Early + Late sample counts do not equal the all-lead sample "
-            "for the selected month."
-        )
+def get_stability_p_value_threshold() -> float:
+    """Convert stability confidence level to the KS p-value threshold."""
+    return 1.0 - STABILITY_CONFIDENCE_LEVEL_PERCENT / 100.0
 
 
-def validate_moments_samples(
-    raw_model_values: np.ndarray,
-    bias_corrected_model_values: np.ndarray,
-    reference_values: np.ndarray,
-    reference_label: str,
-) -> None:
-    """Check the samples required by the four fidelity tests."""
+def calculate_month_stability(
+    ds: xr.Dataset,
+    month_number: int,
+) -> dict[str, object]:
+    """Perform the panel-(f)-style Early/Late two-sample KS test."""
 
-    minimum_sample_size = 4
+    early_variable, late_variable = get_stability_variable_names()
 
-    for dataset_name, values in (
-        ("raw model", raw_model_values),
-        ("bias-corrected model", bias_corrected_model_values),
-        (reference_label, reference_values),
-    ):
-        if values.size < minimum_sample_size:
-            raise ValueError(
-                f"Only {values.size} finite {dataset_name} values were found "
-                f"for {MONTH_LABELS[selected_month]}. At least "
-                f"{minimum_sample_size} are required."
+    for variable_name in (early_variable, late_variable):
+        if variable_name not in ds:
+            raise KeyError(
+                f"Stability variable '{variable_name}' was not found."
             )
 
-    if raw_model_values.size != bias_corrected_model_values.size:
+    early_values = get_model_values_for_month(
+        ds,
+        early_variable,
+        month_number,
+    )
+    late_values = get_model_values_for_month(
+        ds,
+        late_variable,
+        month_number,
+    )
+
+    if early_values.size == 0 or late_values.size == 0:
         raise ValueError(
-            "Raw and bias-corrected all-lead samples have different finite "
-            f"sample sizes: raw={raw_model_values.size}, "
-            f"bias-corrected={bias_corrected_model_values.size}."
+            "Early or Late stability sample is empty for "
+            f"{MONTH_LABELS[month_number]}."
         )
+
+    result = ks_2samp(
+        early_values,
+        late_values,
+        alternative=ks_alternative,
+        method=ks_method,
+    )
+
+    p_value = float(result.pvalue)
+    passes = bool(p_value >= get_stability_p_value_threshold())
+
+    return {
+        "statistic": float(result.statistic),
+        "p_value": p_value,
+        "passes": passes,
+        "early_sample_size": int(early_values.size),
+        "late_sample_size": int(late_values.size),
+    }
+
+
+def calculate_all_months_independence_and_stability(
+    raw_model_ds: xr.Dataset,
+    corrected_model_datasets: dict[str, xr.Dataset],
+    model_variable: str,
+    month_correction_lookup: dict[int, bool],
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    Count monthly independence and stability passes for all rows.
+
+    When selective correction is enabled, corrected rows use raw data for a
+    month that passed all six raw tests, and corrected data otherwise.
+    """
+
+    dataset_names = [
+        "raw",
+        *BIAS_CORRECTION_METHODS,
+    ]
+
+    counts = {
+        dataset_name: {
+            "independence": 0,
+            "stability": 0,
+        }
+        for dataset_name in dataset_names
+    }
+
+    monthly_rows = []
+
+    for dataset_name in dataset_names:
+        for month_number in range(1, 13):
+
+            correction_applied = (
+                dataset_name != "raw"
+                and (
+                    not BIAS_CORRECT_ONLY_FAILED_MONTHS
+                    or month_correction_lookup[
+                        month_number
+                    ]
+                )
+            )
+
+            if dataset_name == "raw" or not correction_applied:
+                dataset = raw_model_ds
+            else:
+                dataset = corrected_model_datasets[dataset_name]
+
+            independence = calculate_month_independence(
+                dataset,
+                model_variable,
+                month_number,
+            )
+            stability = calculate_month_stability(
+                dataset,
+                month_number,
+            )
+
+            counts[dataset_name]["independence"] += int(
+                independence["passes"]
+            )
+            counts[dataset_name]["stability"] += int(
+                stability["passes"]
+            )
+
+            monthly_rows.append(
+                {
+                    "dataset": dataset_name,
+                    "month": month_number,
+                    "month_name": MONTH_LABELS[month_number],
+                    "median_correlation": independence[
+                        "median_correlation"
+                    ],
+                    "independence_passes": independence["passes"],
+                    "number_of_pairwise_correlations": independence[
+                        "number_of_pairwise_correlations"
+                    ],
+                    "ks_statistic": stability["statistic"],
+                    "ks_p_value": stability["p_value"],
+                    "stability_passes": stability["passes"],
+                    "early_sample_size": stability["early_sample_size"],
+                    "late_sample_size": stability["late_sample_size"],
+                    "bias_correction_applied": correction_applied,
+                    "raw_failed_any_test": month_correction_lookup[
+                        month_number
+                    ],
+                }
+            )
+
+    row_names = ["raw", *BIAS_CORRECTION_METHODS]
+
+    count_frame = pd.DataFrame.from_dict(
+        counts,
+        orient="index",
+    ).loc[row_names, ["independence", "stability"]]
+
+    return count_frame, pd.DataFrame(monthly_rows)
+
+
+def combine_test_counts(
+    independence_stability_counts: pd.DataFrame,
+    fidelity_counts: pd.DataFrame,
+) -> pd.DataFrame:
+    """Combine all six requested heatmap columns."""
+
+    return pd.concat(
+        [
+            independence_stability_counts[["independence"]],
+            fidelity_counts[list(STATISTICS)],
+            independence_stability_counts[["stability"]],
+        ],
+        axis=1,
+    )
+
+
+
+def calculate_raw_month_gate(
+    raw_model_ds: xr.Dataset,
+    reference_ds: xr.Dataset,
+    model_variable: str,
+    reference_variable: str,
+) -> pd.DataFrame:
+    """
+    Evaluate all six tests on raw data and decide which months need correction.
+
+    A month requires bias correction when ANY raw test fails:
+        independence,
+        mean fidelity,
+        standard-deviation fidelity,
+        skewness fidelity,
+        kurtosis fidelity,
+        or stability.
+    """
+
+    rows = []
+
+    for month_number in range(
+        1,
+        13,
+    ):
+        raw_values = get_model_values_for_month(
+            ds=raw_model_ds,
+            variable_name=model_variable,
+            month_number=month_number,
+        )
+
+        reference_values = get_reference_values_for_month(
+            ds=reference_ds,
+            variable_name=reference_variable,
+            month_number=month_number,
+        )
+
+        validate_month_samples(
+            raw_values=raw_values,
+            bias_corrected_values=raw_values,
+            reference_values=reference_values,
+            month_number=month_number,
+        )
+
+        raw_rng = np.random.default_rng(
+            random_seed
+            + month_number
+        )
+
+        raw_fidelity = perform_month_fidelity_tests(
+            raw_values=raw_values,
+            comparison_values=raw_values,
+            reference_values=reference_values,
+            rng=raw_rng,
+        )
+
+        independence = calculate_month_independence(
+            ds=raw_model_ds,
+            variable_name=model_variable,
+            month_number=month_number,
+        )
+
+        stability = calculate_month_stability(
+            ds=raw_model_ds,
+            month_number=month_number,
+        )
+
+        raw_test_passes = {
+            "independence": bool(
+                independence["passes"]
+            ),
+            **{
+                statistic_name: bool(
+                    raw_fidelity[
+                        statistic_name
+                    ][
+                        "raw_passes"
+                    ]
+                )
+                for statistic_name in STATISTICS
+            },
+            "stability": bool(
+                stability["passes"]
+            ),
+        }
+
+        failed_tests = [
+            test_name
+            for test_name, passes in raw_test_passes.items()
+            if not passes
+        ]
+
+        rows.append(
+            {
+                "month": month_number,
+                "month_name": MONTH_LABELS[month_number],
+                **{
+                    f"raw_{test_name}_passes": passes
+                    for test_name, passes in raw_test_passes.items()
+                },
+                "raw_failed_any_test": bool(failed_tests),
+                "raw_failed_tests": ",".join(failed_tests),
+            }
+        )
+
+    return pd.DataFrame(rows)
+
+
+def build_month_correction_lookup(
+    raw_month_gate: pd.DataFrame,
+) -> dict[int, bool]:
+    """Return month -> whether the corrected sample should be used."""
+
+    return {
+        int(row["month"]): bool(row["raw_failed_any_test"])
+        for _, row in raw_month_gate.iterrows()
+    }
 
 
 # =============================================================================
-# Statistics and bootstrap
+# Fidelity statistics and bootstrap
 # =============================================================================
 
 def calculate_statistic(
     values: np.ndarray,
     statistic_name: str,
 ) -> float:
-    """Calculate one requested sample statistic."""
+    """Calculate one statistic exactly as in the monthly diagnostic script."""
 
     if statistic_name == "mean":
-        return float(np.mean(values))
+
+        return float(
+            np.mean(
+                values
+            )
+        )
 
     if statistic_name == "std":
-        return float(np.std(values, ddof=1))
+
+        return float(
+            np.std(
+                values,
+                ddof=1,
+            )
+        )
 
     if statistic_name == "skewness":
+
         return float(
             skew(
                 values,
@@ -1308,6 +1340,7 @@ def calculate_statistic(
         )
 
     if statistic_name == "kurtosis":
+
         return float(
             kurtosis(
                 values,
@@ -1316,18 +1349,25 @@ def calculate_statistic(
             )
         )
 
-    raise ValueError(f"Unsupported statistic: {statistic_name}")
+    raise ValueError(
+        f"Unsupported statistic: {statistic_name}"
+    )
 
 
 def get_vectorized_statistic_function(
     statistic_name: str,
 ) -> Callable[[np.ndarray], np.ndarray]:
-    """Return a statistic function that operates along bootstrap axis 1."""
+    """Return a statistic function operating along bootstrap axis 1."""
 
     if statistic_name == "mean":
-        return lambda samples: np.mean(samples, axis=1)
+
+        return lambda samples: np.mean(
+            samples,
+            axis=1,
+        )
 
     if statistic_name == "std":
+
         return lambda samples: np.std(
             samples,
             axis=1,
@@ -1335,6 +1375,7 @@ def get_vectorized_statistic_function(
         )
 
     if statistic_name == "skewness":
+
         return lambda samples: skew(
             samples,
             axis=1,
@@ -1342,6 +1383,7 @@ def get_vectorized_statistic_function(
         )
 
     if statistic_name == "kurtosis":
+
         return lambda samples: kurtosis(
             samples,
             axis=1,
@@ -1349,7 +1391,9 @@ def get_vectorized_statistic_function(
             bias=True,
         )
 
-    raise ValueError(f"Unsupported statistic: {statistic_name}")
+    raise ValueError(
+        f"Unsupported statistic: {statistic_name}"
+    )
 
 
 def calculate_confidence_interval(
@@ -1357,7 +1401,10 @@ def calculate_confidence_interval(
 ) -> tuple[float, float]:
     """Return the central bootstrap confidence interval."""
 
-    alpha_percent = 100.0 - confidence_level_percent
+    alpha_percent = (
+        100.0
+        - confidence_level_percent
+    )
 
     lower = np.percentile(
         bootstrap_values,
@@ -1369,45 +1416,96 @@ def calculate_confidence_interval(
         100.0 - alpha_percent / 2.0,
     )
 
-    return float(lower), float(upper)
+    return (
+        float(
+            lower
+        ),
+        float(
+            upper
+        ),
+    )
 
 
-def perform_all_moments_tests(
-    raw_model_values: np.ndarray,
-    bias_corrected_model_values: np.ndarray,
+def validate_month_samples(
+    raw_values: np.ndarray,
+    bias_corrected_values: np.ndarray,
+    reference_values: np.ndarray,
+    month_number: int,
+) -> None:
+    """Validate samples needed by the four monthly fidelity tests."""
+
+    minimum_sample_size = 4
+
+    for label, values in (
+        (
+            "raw model",
+            raw_values,
+        ),
+        (
+            "bias-corrected model",
+            bias_corrected_values,
+        ),
+        (
+            "reference",
+            reference_values,
+        ),
+    ):
+
+        if values.size < minimum_sample_size:
+            raise ValueError(
+                f"Only {values.size} finite {label} values were found "
+                f"for {MONTH_LABELS[month_number]}. At least "
+                f"{minimum_sample_size} are required."
+            )
+
+    if (
+        raw_values.size
+        != bias_corrected_values.size
+    ):
+        raise ValueError(
+            "Raw and bias-corrected samples have different finite "
+            f"sizes for {MONTH_LABELS[month_number]}: "
+            f"raw={raw_values.size}, "
+            f"bias corrected={bias_corrected_values.size}."
+        )
+
+
+def perform_month_fidelity_tests(
+    raw_values: np.ndarray,
+    comparison_values: np.ndarray,
     reference_values: np.ndarray,
     rng: np.random.Generator,
 ) -> dict[str, dict[str, object]]:
     """
-    Run the four fidelity diagnostics for raw and bias-corrected model samples.
+    Perform all four fidelity tests for one calendar month.
 
-    The SAME bootstrap indices are used for raw and bias-corrected samples.
-    This makes their distributions directly comparable because the two model
-    arrays represent the same index-aligned events.
+    comparison_values contains either:
+        - the fully bias-corrected monthly sample; or
+        - the raw monthly sample when selective correction keeps that month raw.
+
+    The same bootstrap indices are used for raw and comparison samples.
     """
 
-    sample_size = reference_values.size
+    sample_size = (
+        reference_values.size
+    )
 
     sample_indices = rng.integers(
         low=0,
-        high=raw_model_values.size,
+        high=raw_values.size,
         size=(
             number_of_bootstrap_samples,
             sample_size,
         ),
     )
 
-    raw_resampled = (
-        raw_model_values[
-            sample_indices
-        ]
-    )
+    raw_resampled = raw_values[
+        sample_indices
+    ]
 
-    bc_resampled = (
-        bias_corrected_model_values[
-            sample_indices
-        ]
-    )
+    comparison_resampled = comparison_values[
+        sample_indices
+    ]
 
     results = {}
 
@@ -1419,35 +1517,36 @@ def perform_all_moments_tests(
             )
         )
 
-        raw_bootstrap_values = remove_missing_values(
+        raw_bootstrap = remove_missing_values(
             statistic_function(
                 raw_resampled
             )
         )
 
-        bc_bootstrap_values = remove_missing_values(
+        comparison_bootstrap = remove_missing_values(
             statistic_function(
-                bc_resampled
+                comparison_resampled
             )
         )
 
         if (
-            raw_bootstrap_values.size == 0
-            or bc_bootstrap_values.size == 0
+            raw_bootstrap.size == 0
+            or comparison_bootstrap.size == 0
         ):
             raise ValueError(
-                f"No finite bootstrap {statistic_name} values were produced."
+                f"No finite bootstrap {statistic_name} values "
+                "were produced."
             )
 
-        raw_confidence_interval = (
+        raw_low, raw_high = (
             calculate_confidence_interval(
-                raw_bootstrap_values
+                raw_bootstrap
             )
         )
 
-        bc_confidence_interval = (
+        comparison_low, comparison_high = (
             calculate_confidence_interval(
-                bc_bootstrap_values
+                comparison_bootstrap
             )
         )
 
@@ -1456,943 +1555,547 @@ def perform_all_moments_tests(
             statistic_name,
         )
 
-        raw_lower, raw_upper = (
-            raw_confidence_interval
-        )
-
-        bc_lower, bc_upper = (
-            bc_confidence_interval
-        )
-
         results[
             statistic_name
         ] = {
-            "raw_bootstrap_values": raw_bootstrap_values,
-            "bc_bootstrap_values": bc_bootstrap_values,
-            "raw_confidence_interval": raw_confidence_interval,
-            "bc_confidence_interval": bc_confidence_interval,
-            "sample_size": sample_size,
-            "reference_value": reference_value,
-            "raw_passes": (
-                raw_lower
-                <= reference_value
-                <= raw_upper
+            "reference_value": (
+                reference_value
             ),
-            "bc_passes": (
-                bc_lower
+            "raw_low": (
+                raw_low
+            ),
+            "raw_high": (
+                raw_high
+            ),
+            "bc_low": (
+                comparison_low
+            ),
+            "bc_high": (
+                comparison_high
+            ),
+            "raw_passes": bool(
+                raw_low
                 <= reference_value
-                <= bc_upper
+                <= raw_high
+            ),
+            "bc_passes": bool(
+                comparison_low
+                <= reference_value
+                <= comparison_high
+            ),
+            "raw_sample_size": int(
+                raw_values.size
+            ),
+            "bc_sample_size": int(
+                comparison_values.size
+            ),
+            "reference_sample_size": int(
+                reference_values.size
             ),
         }
 
     return results
 
 
-
-# =============================================================================
-# Stability KS test
-# =============================================================================
-
-def get_ks_significance_threshold() -> float:
-    """Convert the selected KS confidence level to a p-value threshold."""
-
-    return 1.0 - ks_significance_level_percent / 100.0
-
-
-def perform_stability_ks_test(
-    early_values: np.ndarray,
-    late_values: np.ndarray,
-) -> dict[str, object]:
+def calculate_all_months_fidelity(
+    raw_model_ds: xr.Dataset,
+    corrected_model_datasets: dict[str, xr.Dataset],
+    reference_ds: xr.Dataset,
+    model_variable: str,
+    reference_variable: str,
+    month_correction_lookup: dict[int, bool],
+) -> tuple[pd.DataFrame, pd.DataFrame]:
     """
-    Compare Early and Late model subgroups with a two-sided two-sample KS test.
+    Run the four fidelity tests for raw data and every correction method.
 
-    Null hypothesis:
-        Early and Late samples come from the same continuous distribution.
+    When selective correction is enabled, corrected values are used only for
+    months that fail at least one of the six raw tests.
     """
 
-    result = ks_2samp(
-        early_values,
-        late_values,
-        alternative=ks_alternative,
-        method=ks_method,
-    )
-
-    p_value = float(result.pvalue)
-
-    return {
-        "statistic": float(result.statistic),
-        "p_value": p_value,
-        "reject_null": p_value < get_ks_significance_threshold(),
-    }
-
-
-def format_ks_p_value(p_value: float) -> str:
-    """Format a KS p-value compactly."""
-
-    if p_value < 0.001:
-        return f"{p_value:.1e}"
-
-    return f"{p_value:.3f}"
-
-
-# =============================================================================
-# Plot helpers
-# =============================================================================
-
-def get_histogram_y_label() -> str:
-    """Return the histogram y-axis label."""
-
-    if plot_probability_density:
-        return "Probability density"
-
-    return "Bootstrap samples"
-
-
-def calculate_bin_edges(
-    result: dict[str, object],
-) -> np.ndarray:
-    """Create common bins for raw, bias-corrected, and reference values."""
-
-    combined = np.concatenate(
-        [
-            np.asarray(
-                result[
-                    "raw_bootstrap_values"
-                ]
-            ),
-            np.asarray(
-                result[
-                    "bc_bootstrap_values"
-                ]
-            ),
-            np.asarray(
-                [
-                    result[
-                        "reference_value"
-                    ]
-                ]
-            ),
-        ]
-    )
-
-    x_min = float(
-        np.min(
-            combined
-        )
-    )
-
-    x_max = float(
-        np.max(
-            combined
-        )
-    )
-
-    if np.isclose(
-        x_min,
-        x_max,
-    ):
-        padding = max(
-            abs(
-                x_min
-            )
-            * 0.05,
-            0.5,
-        )
-    else:
-        padding = (
-            0.03
-            * (
-                x_max
-                - x_min
-            )
-        )
-
-    return np.linspace(
-        x_min - padding,
-        x_max + padding,
-        number_of_bins + 1,
-    )
-
-
-def format_axis(ax: plt.Axes) -> None:
-    """Apply consistent, light formatting to one panel."""
-
-    ax.spines["top"].set_visible(False)
-    ax.spines["right"].set_visible(False)
-
-    ax.tick_params(
-        axis="both",
-        which="major",
-        labelsize=TICK_LABELSIZE,
-        direction="out",
-    )
-
-
-def plot_independence_panel(
-    ax: plt.Axes,
-    correlations: np.ndarray,
-) -> None:
-    """Plot the selected-month boxplot from script 1."""
-
-    boxplot = ax.boxplot(
-        [correlations],
-        positions=[1],
-        widths=0.55,
-        patch_artist=False,
-        showfliers=False,
-        whis=1.5,
-        medianprops={
-            "color": "black",
-            "linewidth": 1.4,
-        },
-        flierprops={
-            "marker": "o",
-            "markerfacecolor": "none",
-            "markeredgecolor": "0.6",
-            "markersize": 3.5,
-            "linestyle": "none",
-        },
-    )
-
-    for key in ("boxes", "whiskers", "caps"):
-        for artist in boxplot[key]:
-            artist.set_linewidth(1.0)
-
-    ax.axhline(
-        0.0,
-        color="black",
-        linewidth=0.9,
-        zorder=0,
-    )
-
-    ax.set_xticks([1])
-    ax.set_xticklabels(
-        [MONTH_LABELS[selected_month]],
-        fontsize=TICK_LABELSIZE,
-    )
-
-    ax.set_ylabel(
-        "Spearman rank correlation",
-        fontsize=AXIS_LABELSIZE,
-    )
-
-    ax.set_title(
-        "Independence",
-        fontsize=TITLE_FONTSIZE,
-        fontweight="normal",
-    )
-
-    format_axis(ax)
-
-
-def add_failure_text(
-    ax: plt.Axes,
-    result: dict[str, object],
-) -> None:
-    """
-    Mark failure of the RAW model fidelity test.
-
-    If the selected reference statistic falls outside the raw-model
-    bootstrap confidence interval, show:
-
-        Model
-        raw
-        fail
-
-    in the selected reference-dataset color.
-    """
-
-    if result["raw_passes"]:
-        return
-
-    reference_color = (
-        ERA5_COLOR
-        if REFERENCE_DATASET == "era5"
-        else SENORGE_COLOR
-    )
-
-    ax.text(
-        0.97,
-        0.96,
-        "Model\nraw\nfail",
-        transform=ax.transAxes,
-        ha="center",
-        va="top",
-        fontsize=LEGEND_FONTSIZE,
-        color=reference_color,
-    )
-
-
-def plot_moment_panel(
-    ax: plt.Axes,
-    statistic_name: str,
-    result: dict[str, object],
-    reference_label: str,
-) -> None:
-    """
-    Plot raw and bias-corrected bootstrap distributions.
-
-    Semi-transparent filled histograms use common bins so their overlap forms
-    a visible mixture of the two colors, following the visual idea used in
-    Kelder et al. (2020), Fig. 4.
-    """
-
-    bin_edges = calculate_bin_edges(
-        result
-    )
-
-    raw_counts, _, _ = ax.hist(
-        result[
-            "raw_bootstrap_values"
-        ],
-        bins=bin_edges,
-        density=plot_probability_density,
-        histtype="stepfilled",
-        color=RAW_MODEL_COLOR,
-        edgecolor=RAW_MODEL_COLOR,
-        alpha=BOOTSTRAP_ALPHA,
-        linewidth=HISTOGRAM_LINEWIDTH,
-        zorder=1,
-    )
-
-    bc_counts, _, _ = ax.hist(
-        result[
-            "bc_bootstrap_values"
-        ],
-        bins=bin_edges,
-        density=plot_probability_density,
-        histtype="stepfilled",
-        color=BIAS_CORRECTED_COLOR,
-        edgecolor=BIAS_CORRECTED_COLOR,
-        alpha=BOOTSTRAP_ALPHA,
-        linewidth=HISTOGRAM_LINEWIDTH,
-        zorder=2,
-    )
-
-    for confidence_limit in result[
-        "raw_confidence_interval"
-    ]:
-        ax.axvline(
-            confidence_limit,
-            color=RAW_MODEL_COLOR,
-            linewidth=CONFIDENCE_LINEWIDTH,
-            linestyle="--",
-            zorder=3,
-        )
-
-    for confidence_limit in result[
-        "bc_confidence_interval"
-    ]:
-        ax.axvline(
-            confidence_limit,
-            color=BIAS_CORRECTED_COLOR,
-            linewidth=CONFIDENCE_LINEWIDTH,
-            linestyle="--",
-            zorder=4,
-        )
-
-    reference_color = (
-        ERA5_COLOR
-        if REFERENCE_DATASET
-        == "era5"
-        else SENORGE_COLOR
-    )
-
-    ax.axvline(
-        result[
-            "reference_value"
-        ],
-        color=reference_color,
-        linewidth=REFERENCE_LINEWIDTH,
-        zorder=5,
-    )
-
-    ax.set_xlim(
-        bin_edges[0],
-        bin_edges[-1],
-    )
-
-    maximum_count = max(
-        float(
-            np.max(
-                raw_counts
-            )
-        )
-        if raw_counts.size
-        else 0.0,
-        float(
-            np.max(
-                bc_counts
-            )
-        )
-        if bc_counts.size
-        else 0.0,
-    )
-
-    if maximum_count > 0:
-        ax.set_ylim(
-            0,
-            maximum_count
-            * (
-                1.0
-                + y_axis_margin_fraction
-            ),
-        )
-
-    ax.set_xlabel(
-        STATISTIC_AXIS_LABELS[
-            statistic_name
-        ],
-        fontsize=AXIS_LABELSIZE,
-    )
-
-    ax.set_ylabel(
-        get_histogram_y_label(),
-        fontsize=AXIS_LABELSIZE,
-    )
-
-    panel_title = (
-        "Fidelity: Kurtosis"
-        if statistic_name
-        == "kurtosis"
-        else (
-            f"Fidelity: "
-            f"{STATISTIC_LABELS[statistic_name]}"
-        )
-    )
-
-    ax.set_title(
-        panel_title,
-        fontsize=TITLE_FONTSIZE,
-        fontweight="normal",
-    )
-
-    format_axis(
-        ax
-    )
-
-    add_failure_text(
-        ax,
-        result,
-    )
-
-
-def make_shared_legend_handles(
-    reference_label: str,
-) -> list:
-    """Create the shared legend used by the six-panel figure."""
-
-    reference_color = (
-        ERA5_COLOR
-        if REFERENCE_DATASET
-        == "era5"
-        else SENORGE_COLOR
-    )
-
-    return [
-        Patch(
-            facecolor=RAW_MODEL_COLOR,
-            edgecolor=RAW_MODEL_COLOR,
-            alpha=BOOTSTRAP_ALPHA,
-            label="Model raw",
-        ),
-        Patch(
-            facecolor=BIAS_CORRECTED_COLOR,
-            edgecolor=BIAS_CORRECTED_COLOR,
-            alpha=BOOTSTRAP_ALPHA,
-            label="Model BC",
-        ),
-        Line2D(
-            [0],
-            [0],
-            color=RAW_MODEL_COLOR,
-            linewidth=CONFIDENCE_LINEWIDTH,
-            linestyle="--",
-            label=(
-                f"Model raw "
-                f"{confidence_level_percent:g}% interval"
-            ),
-        ),
-        Line2D(
-            [0],
-            [0],
-            color=BIAS_CORRECTED_COLOR,
-            linewidth=CONFIDENCE_LINEWIDTH,
-            linestyle="--",
-            label=(
-                f"Model BC "
-                f"{confidence_level_percent:g}% interval"
-            ),
-        ),
-        Line2D(
-            [0],
-            [0],
-            color=EARLY_COLOR,
-            linewidth=HISTOGRAM_LINEWIDTH,
-            label="Model BC early lead days (17-31)",
-        ),
-        Line2D(
-            [0],
-            [0],
-            color=LATE_COLOR,
-            linewidth=HISTOGRAM_LINEWIDTH,
-            label="Model BC late lead days (32-46)",
-        ),
-        Line2D(
-            [0],
-            [0],
-            color=reference_color,
-            linewidth=REFERENCE_LINEWIDTH,
-            label=reference_label,
-        ),
-
+    row_names = [
+        "raw",
+        *BIAS_CORRECTION_METHODS,
     ]
 
+    counts = {
+        row_name: {
+            statistic_name: 0
+            for statistic_name in STATISTICS
+        }
+        for row_name in row_names
+    }
 
-def calculate_stability_bin_edges(
-    all_values: np.ndarray,
-    early_values: np.ndarray,
-    late_values: np.ndarray,
-) -> np.ndarray:
-    """Create common precipitation bins for all, Early, and Late samples."""
+    monthly_rows = []
 
-    combined = np.concatenate(
-        [all_values, early_values, late_values]
-    )
-
-    x_min = float(np.min(combined))
-    x_max = float(np.max(combined))
-
-    if np.isclose(x_min, x_max):
-        padding = max(abs(x_min) * 0.05, 0.5)
-        x_min -= padding
-        x_max += padding
-
-    return np.linspace(
-        x_min,
-        x_max,
-        number_of_bins + 1,
-    )
-
-
-def plot_stability_panel(
-    ax: plt.Axes,
-    bc_early_values: np.ndarray,
-    bc_late_values: np.ndarray,
-    raw_stability_ks: dict[str, object],
-    bc_stability_ks: dict[str, object],
-) -> None:
-    """
-    Plot only bias-corrected Early/Late distributions.
-
-    The annotation reports sample sizes and both the raw and bias-corrected
-    KS statistics, avoiding four overlaid probability-density curves.
-    """
-
-    bin_edges = calculate_stability_bin_edges(
-        bc_early_values,
-        bc_early_values,
-        bc_late_values,
-    )
-
-    maximum_density = 0.0
-
-    for values, color, zorder in (
-        (
-            bc_early_values,
-            EARLY_COLOR,
-            2,
-        ),
-        (
-            bc_late_values,
-            LATE_COLOR,
-            1,
-        ),
+    for month_number in range(
+        1,
+        13,
     ):
-        density, _, _ = ax.hist(
-            values,
-            bins=bin_edges,
-            density=plot_probability_density,
-            histtype="step",
-            color=color,
-            linewidth=HISTOGRAM_LINEWIDTH,
-            zorder=zorder,
+
+        raw_values = get_model_values_for_month(
+            ds=raw_model_ds,
+            variable_name=model_variable,
+            month_number=month_number,
         )
 
-        if density.size > 0:
-            maximum_density = max(
-                maximum_density,
-                float(
-                    np.nanmax(
-                        density
-                    )
-                ),
+        corrected_values_by_method = {
+            method: get_model_values_for_month(
+                ds=corrected_model_datasets[
+                    method
+                ],
+                variable_name=model_variable,
+                month_number=month_number,
+            )
+            for method in BIAS_CORRECTION_METHODS
+        }
+
+        reference_values = get_reference_values_for_month(
+            ds=reference_ds,
+            variable_name=reference_variable,
+            month_number=month_number,
+        )
+
+        for method, corrected_values in (
+            corrected_values_by_method.items()
+        ):
+
+            validate_month_samples(
+                raw_values=raw_values,
+                bias_corrected_values=corrected_values,
+                reference_values=reference_values,
+                month_number=month_number,
             )
 
-    ax.set_xlim(
-        bin_edges[0],
-        bin_edges[-1],
-    )
-
-    if maximum_density > 0:
-        ax.set_ylim(
-            0,
-            maximum_density
-            * (
-                1.0
-                + y_axis_margin_fraction
-            ),
+        raw_rng = np.random.default_rng(
+            random_seed
+            + month_number
         )
 
-    ax.set_xlabel(
-        f"Maximum monthly {x_days}-day precipitation [mm]",
-        fontsize=AXIS_LABELSIZE,
-    )
+        raw_results = perform_month_fidelity_tests(
+            raw_values=raw_values,
+            comparison_values=raw_values,
+            reference_values=reference_values,
+            rng=raw_rng,
+        )
 
-    ax.set_ylabel(
-        get_histogram_y_label(),
-        fontsize=AXIS_LABELSIZE,
-    )
+        for statistic_name in STATISTICS:
 
-    ax.set_title(
-        "Stability",
-        fontsize=TITLE_FONTSIZE,
-        fontweight="normal",
-    )
+            result = raw_results[
+                statistic_name
+            ]
 
-    reference_color = (
-        ERA5_COLOR
-        if REFERENCE_DATASET == "era5"
-        else SENORGE_COLOR
-    )
+            counts[
+                "raw"
+            ][
+                statistic_name
+            ] += int(
+                result[
+                    "raw_passes"
+                ]
+            )
 
-    raw_text_color = (
-        reference_color
-        if raw_stability_ks["p_value"] < 0.05
-        else "black"
-    )
+            monthly_rows.append(
+                {
+                    "dataset": "raw",
+                    "month": month_number,
+                    "month_name": MONTH_LABELS[
+                        month_number
+                    ],
+                    "statistic": statistic_name,
+                    "reference_value": result[
+                        "reference_value"
+                    ],
+                    "low": result[
+                        "raw_low"
+                    ],
+                    "high": result[
+                        "raw_high"
+                    ],
+                    "passes": result[
+                        "raw_passes"
+                    ],
+                    "raw_failed_any_test": (
+                        month_correction_lookup[month_number]
+                    ),
+                    "bias_correction_applied": False,
+                    "model_sample_size": result[
+                        "raw_sample_size"
+                    ],
+                    "reference_sample_size": result[
+                        "reference_sample_size"
+                    ],
+                }
+            )
 
-    # Sample sizes remain black.
-    ax.text(
-        0.4,
-        0.95,
-        (
-            f"Early n={bc_early_values.size}\n"
-            f"Late n={bc_late_values.size}"
+        for method in BIAS_CORRECTION_METHODS:
+
+            if (
+                BIAS_CORRECT_ONLY_FAILED_MONTHS
+                and not month_correction_lookup[month_number]
+            ):
+                comparison_values = raw_values
+                correction_applied = False
+            else:
+                comparison_values = (
+                    corrected_values_by_method[
+                        method
+                    ]
+                )
+                correction_applied = True
+
+            # Reuse identical bootstrap indices across raw and all methods.
+            method_rng = np.random.default_rng(
+                random_seed
+                + month_number
+            )
+
+            method_results = perform_month_fidelity_tests(
+                raw_values=raw_values,
+                comparison_values=comparison_values,
+                reference_values=reference_values,
+                rng=method_rng,
+            )
+
+            for statistic_name in STATISTICS:
+
+                result = method_results[
+                    statistic_name
+                ]
+
+                counts[
+                    method
+                ][
+                    statistic_name
+                ] += int(
+                    result[
+                        "bc_passes"
+                    ]
+                )
+
+                monthly_rows.append(
+                    {
+                        "dataset": method,
+                        "month": month_number,
+                        "month_name": MONTH_LABELS[
+                            month_number
+                        ],
+                        "statistic": statistic_name,
+                        "reference_value": result[
+                            "reference_value"
+                        ],
+                        "low": result[
+                            "bc_low"
+                        ],
+                        "high": result[
+                            "bc_high"
+                        ],
+                        "passes": result[
+                            "bc_passes"
+                        ],
+                        "raw_failed_any_test": (
+                            month_correction_lookup[month_number]
+                        ),
+                        "bias_correction_applied": (
+                            correction_applied
+                        ),
+                        "model_sample_size": result[
+                            "bc_sample_size"
+                        ],
+                        "reference_sample_size": result[
+                            "reference_sample_size"
+                        ],
+                    }
+                )
+
+    fidelity_counts = pd.DataFrame.from_dict(
+        counts,
+        orient="index",
+    ).loc[
+        row_names,
+        list(
+            STATISTICS
         ),
-        transform=ax.transAxes,
-        ha="left",
-        va="top",
-        fontsize=9,
-        color="black",
+    ]
+
+    monthly_results = pd.DataFrame(
+        monthly_rows
     )
-
-    # Raw stability result is colored like the reference dataset when p < 0.05.
-    ax.text(
-        0.4,
-        0.82,
-        (
-            f"Model raw: D={raw_stability_ks['statistic']:.3f}, "
-            f"p={format_ks_p_value(raw_stability_ks['p_value'])}"
-        ),
-        transform=ax.transAxes,
-        ha="left",
-        va="top",
-        fontsize=9,
-        color=raw_text_color,
-    )
-
-    # Bias-corrected stability result remains black.
-    ax.text(
-        0.4,
-        0.75,
-        (
-            f"Model BC: D={bc_stability_ks['statistic']:.3f}, "
-            f"p={format_ks_p_value(bc_stability_ks['p_value'])}"
-        ),
-        transform=ax.transAxes,
-        ha="left",
-        va="top",
-        fontsize=9,
-        color="black",
-    )
-
-    format_axis(
-        ax
-    )
-
-
-def add_panel_label(
-    ax: plt.Axes,
-    label: str,
-) -> None:
-    """Place a publication-style panel label in the upper-left corner."""
-
-    ax.text(
-        -0.12,
-        1.06,
-        label,
-        transform=ax.transAxes,
-        ha="left",
-        va="bottom",
-        fontsize=TITLE_FONTSIZE,
-        fontweight="normal",
-        clip_on=False,
-    )
-
-
-def build_figure_title() -> str:
-    """Create the figure title for the selected catchment and month."""
-
-    catchment_name = readable_catchment_name(catchment)
-    month_name = MONTH_LABELS[selected_month]
 
     return (
-        f"{month_name}: {x_days}-day accumulated precipitation maxima\n"
-        f"{catchment_name} catchment"
+        fidelity_counts,
+        monthly_results,
     )
 
 
-def create_combined_figure(
-    independence_values: np.ndarray,
-    moments_results: dict[str, dict[str, object]],
-    bc_early_values: np.ndarray,
-    bc_late_values: np.ndarray,
-    reference_label: str,
-    raw_stability_ks: dict[str, object],
-    bc_stability_ks: dict[str, object],
-) -> plt.Figure:
-    """Create the publication-style 2 x 3 diagnostic figure."""
 
-    fig, axes = plt.subplots(
-        nrows=2,
-        ncols=3,
-        figsize=(
-            figure_width,
-            figure_height,
-        ),
-        squeeze=False,
-    )
-
-    # (a) Ensemble-member independence from raw all-lead data.
-    plot_independence_panel(
-        ax=axes[0, 0],
-        correlations=independence_values,
-    )
-
-    add_panel_label(
-        axes[0, 0],
-        "(a)",
-    )
-
-    panel_locations = {
-        "mean": (
-            0,
-            1,
-        ),
-        "std": (
-            0,
-            2,
-        ),
-        "skewness": (
-            1,
-            0,
-        ),
-        "kurtosis": (
-            1,
-            1,
-        ),
-    }
-
-    panel_labels = {
-        "mean": "(b)",
-        "std": "(c)",
-        "skewness": "(d)",
-        "kurtosis": "(e)",
-    }
-
-    for statistic_name in STATISTICS:
-
-        row, column = panel_locations[
-            statistic_name
-        ]
-
-        plot_moment_panel(
-            ax=axes[
-                row,
-                column,
-            ],
-            statistic_name=statistic_name,
-            result=moments_results[
-                statistic_name
-            ],
-            reference_label=reference_label,
-        )
-
-        add_panel_label(
-            axes[
-                row,
-                column,
-            ],
-            panel_labels[
-                statistic_name
-            ],
-        )
-
-    # (f) Bias-corrected lead-time distributions, with raw and BC KS values.
-    plot_stability_panel(
-        ax=axes[1, 2],
-        bc_early_values=bc_early_values,
-        bc_late_values=bc_late_values,
-        raw_stability_ks=raw_stability_ks,
-        bc_stability_ks=bc_stability_ks,
-    )
-
-    add_panel_label(
-        axes[1, 2],
-        "(f)",
-    )
-
-    fig.legend(
-        handles=make_shared_legend_handles(
-            reference_label
-        ),
-        loc="upper center",
-        bbox_to_anchor=(
-            0.5,
-            0.96,
-        ),
-        ncol=4,
-        frameon=False,
-        fontsize=LEGEND_FONTSIZE,
-        handlelength=2.0,
-        columnspacing=1.2,
-    )
-
-    fig.subplots_adjust(
-        left=0.08,
-        right=0.98,
-        bottom=0.09,
-        top=0.84,
-        wspace=0.32,
-        hspace=0.38,
-    )
-
-    return fig
-
-
-# =============================================================================
-# Terminal output
-# =============================================================================
-
-def format_statistic_value(
-    statistic_name: str,
-    value: float,
-) -> str:
-    """Format values compactly for terminal output."""
-
-    if statistic_name in {"mean", "std"}:
-        return f"{value:.1f}"
-
-    return f"{value:.2f}"
-
-
-def print_moments_results(
-    results: dict[str, dict[str, object]],
-    reference_label: str,
+def print_raw_month_gate(
+    raw_month_gate: pd.DataFrame,
 ) -> None:
-    """Print raw and bias-corrected fidelity results."""
+    """Print which raw months trigger selective bias correction."""
 
     print()
+    print("Raw all-test screening")
+    print("----------------------")
     print(
-        f"{MONTH_LABELS[selected_month]} moments-test results"
+        f"{'Month':<12}"
+        f"{'Needs BC':>10}"
+        f"{'Failed tests':>42}"
     )
-    print(
-        "-" * 70
-    )
+    print("-" * 64)
 
-    for statistic_name in STATISTICS:
-
-        result = results[
-            statistic_name
-        ]
-
-        raw_lower, raw_upper = result[
-            "raw_confidence_interval"
-        ]
-
-        bc_lower, bc_upper = result[
-            "bc_confidence_interval"
-        ]
-
-        raw_marker = (
-            ""
-            if result[
-                "raw_passes"
-            ]
-            else "*"
-        )
-
-        bc_marker = (
-            ""
-            if result[
-                "bc_passes"
-            ]
-            else "*"
+    for _, row in raw_month_gate.iterrows():
+        failed_tests = (
+            row["raw_failed_tests"]
+            if row["raw_failed_tests"]
+            else "-"
         )
 
         print(
-            f"{STATISTIC_LABELS[statistic_name]:>18s} | "
-            f"n={result['sample_size']:>3d} | "
-            f"raw=["
-            f"{format_statistic_value(statistic_name, raw_lower)}, "
-            f"{format_statistic_value(statistic_name, raw_upper)}]"
-            f"{raw_marker} | "
-            f"BC=["
-            f"{format_statistic_value(statistic_name, bc_lower)}, "
-            f"{format_statistic_value(statistic_name, bc_upper)}]"
-            f"{bc_marker} | "
-            f"{reference_label}="
-            f"{format_statistic_value(statistic_name, result['reference_value'])}"
+            f"{row['month_name']:<12}"
+            f"{str(bool(row['raw_failed_any_test'])):>10}"
+            f"{failed_tests:>42}"
         )
 
-    print(
-        "* reference value outside the corresponding central model "
-        "bootstrap interval"
-    )
 
+# =============================================================================
+# Reporting
+# =============================================================================
 
-def print_stability_results(
-    raw_early_values: np.ndarray,
-    raw_late_values: np.ndarray,
-    bc_early_values: np.ndarray,
-    bc_late_values: np.ndarray,
-    raw_stability_ks: dict[str, object],
-    bc_stability_ks: dict[str, object],
+def print_fidelity_counts(
+    fidelity_counts: pd.DataFrame,
 ) -> None:
-    """Print raw and bias-corrected lead-time stability results."""
+    """Print the heatmap values."""
 
     print()
     print(
-        f"{MONTH_LABELS[selected_month]} stability test"
+        "Fidelity counts (months passed out of 12)"
     )
     print(
-        "-" * 45
+        "----------------------------------------"
     )
-
     print(
-        f"Early n={bc_early_values.size}, "
-        f"Late n={bc_late_values.size}"
+        fidelity_counts
     )
 
-    print(
-        f"Raw: D={raw_stability_ks['statistic']:.3f}, "
-        f"p={raw_stability_ks['p_value']:.4g}"
+
+def print_monthly_results(
+    monthly_results: pd.DataFrame,
+) -> None:
+    """Print detailed monthly results for every dataset row."""
+
+    for dataset_name in [
+        "raw",
+        *BIAS_CORRECTION_METHODS,
+    ]:
+
+        selected_dataset = monthly_results.loc[
+            monthly_results[
+                "dataset"
+            ]
+            == dataset_name
+        ]
+
+        print()
+        print(
+            f"Monthly fidelity results: {dataset_name}"
+        )
+        print(
+            "-" * 92
+        )
+        print(
+            f"{'Month':<12}"
+            f"{'Statistic':<12}"
+            f"{'Reference':>12}"
+            f"{'Low':>12}"
+            f"{'High':>12}"
+            f"{'Result':>10}"
+            f"{'Applied':>10}"
+        )
+        print(
+            "-" * 92
+        )
+
+        for _, row in selected_dataset.iterrows():
+
+            status = (
+                "PASS"
+                if row[
+                    "passes"
+                ]
+                else "FAIL"
+            )
+
+            print(
+                f"{row['month_name']:<12}"
+                f"{row['statistic']:<12}"
+                f"{row['reference_value']:>12.4f}"
+                f"{row['low']:>12.4f}"
+                f"{row['high']:>12.4f}"
+                f"{status:>10}"
+                f"{str(bool(row['bias_correction_applied'])):>10}"
+            )
+
+
+def print_independence_stability_results(
+    counts: pd.DataFrame,
+    monthly_results: pd.DataFrame,
+) -> None:
+    """Print counts and detailed monthly independence/stability results."""
+
+    print()
+    print("Independence and stability counts (months passed out of 12)")
+    print("------------------------------------------------------------")
+    print(counts)
+
+    for dataset_name in ["raw", *BIAS_CORRECTION_METHODS]:
+        selected = monthly_results.loc[
+            monthly_results["dataset"] == dataset_name
+        ]
+
+        print()
+        print(
+            f"Monthly independence/stability results: {dataset_name}"
+        )
+        print("-" * 92)
+        print(
+            f"{'Month':<12}"
+            f"{'Median rho':>12}"
+            f"{'Indep.':>10}"
+            f"{'KS D':>12}"
+            f"{'KS p':>12}"
+            f"{'Stability':>12}"
+        )
+        print("-" * 92)
+
+        for _, row in selected.iterrows():
+            independence_status = (
+                "PASS" if row["independence_passes"] else "FAIL"
+            )
+            stability_status = (
+                "PASS" if row["stability_passes"] else "FAIL"
+            )
+
+            print(
+                f"{row['month_name']:<12}"
+                f"{row['median_correlation']:>12.4f}"
+                f"{independence_status:>10}"
+                f"{row['ks_statistic']:>12.4f}"
+                f"{row['ks_p_value']:>12.4g}"
+                f"{stability_status:>12}"
+            )
+
+
+# =============================================================================
+# Heatmap
+# =============================================================================
+
+def make_summary_heatmap(
+    summary_counts: pd.DataFrame,
+    filename: Path | None = None,
+) -> None:
+    """
+    Plot monthly pass counts for independence, fidelity, and stability.
+    """
+
+    figure, axis = plt.subplots(
+        figsize=(
+            10,
+            1.0
+            + 0.65
+            * len(
+                summary_counts.index
+            ),
+        )
     )
 
-    print(
-        f"BC:  D={bc_stability_ks['statistic']:.3f}, "
-        f"p={bc_stability_ks['p_value']:.4g}"
+    axis.imshow(
+        12
+        - summary_counts.values,
+        cmap=colormaps[
+            "Blues"
+        ],
+        vmin=0,
+        vmax=6,
+        aspect="auto",
+    )
+
+    for (
+        row,
+        column,
+    ), value in np.ndenumerate(
+        summary_counts.values
+    ):
+
+        axis.text(
+            column,
+            row,
+            int(
+                value
+            ),
+            ha="center",
+            va="center",
+        )
+
+    axis.set_xticks(
+        range(
+            len(
+                summary_counts.columns
+            )
+        ),
+        [
+            HEATMAP_COLUMN_LABELS[
+                column
+            ]
+            for column in summary_counts.columns
+        ],
+    )
+    
+    plt.setp(
+        axis.get_xticklabels(),
+        rotation=30,
+        ha="right",
+        rotation_mode="anchor",
+    )
+
+    axis.set_yticks(
+        range(
+            len(
+                summary_counts.index
+            )
+        ),
+        summary_counts.index,
+    )
+
+    axis.set_title(
+        "UNSEEN tests"
+    )
+
+    figure.tight_layout()
+
+    if filename is not None:
+
+        filename.parent.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+
+        figure.savefig(
+            filename,
+            bbox_inches="tight",
+            dpi=400,
+        )
+
+        print(
+            "Wrote:",
+            filename,
+        )
+
+    if show_figure:
+
+        plt.show()
+
+    plt.close(
+        figure
     )
 
 
@@ -2404,10 +2107,14 @@ if __name__ == "__main__":
 
     validate_user_settings()
 
-    (
-        raw_model_filename,
-        bc_model_filename,
-    ) = resolve_model_input_filenames()
+    raw_model_filename = build_raw_model_filename()
+
+    corrected_model_filenames = {
+        method: build_bias_corrected_model_filename(
+            method
+        )
+        for method in BIAS_CORRECTION_METHODS
+    }
 
     (
         reference_filename,
@@ -2415,226 +2122,210 @@ if __name__ == "__main__":
         reference_label,
     ) = get_reference_configuration()
 
-    output_filename = (
-        build_output_filename()
-    )
+    model_variable = get_model_variable_name()
 
-    print(
-        "Selected month"
-    )
-    print(
-        "--------------"
-    )
-    print(
-        MONTH_LABELS[
-            selected_month
-        ]
-    )
-
-    print()
     print(
         "Input files"
     )
     print(
         "-----------"
     )
-
     print(
-        f"Raw S2S model:          "
-        f"{raw_model_filename}"
+        "Raw model:",
+        raw_model_filename,
     )
 
-    print(
-        f"Bias-corrected S2S:     "
-        f"{bc_model_filename}"
-    )
+    for method in BIAS_CORRECTION_METHODS:
+
+        print(
+            f"{method:>5}:",
+            corrected_model_filenames[
+                method
+            ],
+        )
 
     print(
-        f"{reference_label}:".ljust(
-            24
-        ),
+        f"{reference_label}:",
         reference_filename,
     )
 
     print()
     print(
-        f"Bias-correction reference: "
-        f"{reference_label}"
-    )
-
-    (
-        raw_all_variable,
-        raw_early_variable,
-        raw_late_variable,
-    ) = get_stability_variable_names(
-        bias_corrected=False,
-    )
-
-    (
-        bc_all_variable,
-        bc_early_variable,
-        bc_late_variable,
-    ) = get_stability_variable_names(
-        bias_corrected=True,
+        "Model variable:",
+        model_variable,
     )
 
     print()
     print(
-        "Raw variables"
+        "Analysis settings"
     )
     print(
-        "-------------"
+        "-----------------"
     )
     print(
-        f"All leads:   "
-        f"{raw_all_variable}"
+        "Reference dataset:",
+        REFERENCE_DATASET,
     )
     print(
-        f"Early leads: "
-        f"{raw_early_variable}"
+        "Bias-correction methods:",
+        BIAS_CORRECTION_METHODS,
     )
     print(
-        f"Late leads:  "
-        f"{raw_late_variable}"
-    )
-
-    print()
-    print(
-        "Bias-corrected variables"
+        "Accumulation days:",
+        x_days,
     )
     print(
-        "------------------------"
+        "Bootstrap samples:",
+        f"{number_of_bootstrap_samples:,}",
     )
     print(
-        f"All leads:   "
-        f"{bc_all_variable}"
+        "Confidence level:",
+        f"{confidence_level_percent:.1f}%",
     )
     print(
-        f"Early leads: "
-        f"{bc_early_variable}"
+        "Bias correct only failed months:",
+        BIAS_CORRECT_ONLY_FAILED_MONTHS,
     )
     print(
-        f"Late leads:  "
-        f"{bc_late_variable}"
+        "Independence |median rho| threshold:",
+        INDEPENDENCE_CORRELATION_THRESHOLD,
     )
-
-    (
-        independence_values,
-        raw_all_values,
-        raw_early_values,
-        raw_late_values,
-        bc_all_values,
-        bc_early_values,
-        bc_late_values,
-        reference_values,
-    ) = load_model_and_reference_values(
-        raw_model_filename=raw_model_filename,
-        bias_corrected_model_filename=bc_model_filename,
-        reference_filename=reference_filename,
-        reference_variable=reference_variable,
-        reference_label=reference_label,
-    )
-
-    validate_model_partition(
-        model_all_values=raw_all_values,
-        model_early_values=raw_early_values,
-        model_late_values=raw_late_values,
-    )
-
-    validate_model_partition(
-        model_all_values=bc_all_values,
-        model_early_values=bc_early_values,
-        model_late_values=bc_late_values,
-    )
-
-    validate_moments_samples(
-        raw_model_values=raw_all_values,
-        bias_corrected_model_values=bc_all_values,
-        reference_values=reference_values,
-        reference_label=reference_label,
-    )
-
-    rng = np.random.default_rng(
-        random_seed
-    )
-
-    moments_results = perform_all_moments_tests(
-        raw_model_values=raw_all_values,
-        bias_corrected_model_values=bc_all_values,
-        reference_values=reference_values,
-        rng=rng,
-    )
-
-    raw_stability_ks = perform_stability_ks_test(
-        early_values=raw_early_values,
-        late_values=raw_late_values,
-    )
-
-    bc_stability_ks = perform_stability_ks_test(
-        early_values=bc_early_values,
-        late_values=bc_late_values,
-    )
-
-    print()
     print(
-        f"Independence pairs: "
-        f"{independence_values.size} "
-        f"finite pooled correlations "
-        f"(raw all-lead sample)"
+        "Stability confidence level:",
+        f"{STABILITY_CONFIDENCE_LEVEL_PERCENT:.1f}%",
     )
 
-    print_moments_results(
-        results=moments_results,
-        reference_label=reference_label,
+    raw_model_ds = xr.open_dataset(
+        raw_model_filename,
+        decode_timedelta=False,
     )
 
-    print_stability_results(
-        raw_early_values=raw_early_values,
-        raw_late_values=raw_late_values,
-        bc_early_values=bc_early_values,
-        bc_late_values=bc_late_values,
-        raw_stability_ks=raw_stability_ks,
-        bc_stability_ks=bc_stability_ks,
+    corrected_model_datasets = {
+        method: xr.open_dataset(
+            filename,
+            decode_timedelta=False,
+        )
+        for method, filename in (
+            corrected_model_filenames.items()
+        )
+    }
+
+    reference_ds = xr.open_dataset(
+        reference_filename
     )
 
-    figure = create_combined_figure(
-        independence_values=independence_values,
-        moments_results=moments_results,
-        bc_early_values=bc_early_values,
-        bc_late_values=bc_late_values,
-        reference_label=reference_label,
-        raw_stability_ks=raw_stability_ks,
-        bc_stability_ks=bc_stability_ks,
-    )
+    try:
 
-    if write2file:
-
-        output_directory = os.path.dirname(
-            output_filename
+        check_model_dataset(
+            ds=raw_model_ds,
+            variable_name=model_variable,
+            dataset_label="Raw model dataset",
         )
 
-        if output_directory:
-            os.makedirs(
-                output_directory,
-                exist_ok=True,
+        for method, dataset in (
+            corrected_model_datasets.items()
+        ):
+
+            check_model_dataset(
+                ds=dataset,
+                variable_name=model_variable,
+                dataset_label=(
+                    f"Bias-corrected model dataset "
+                    f"({method})"
+                ),
             )
 
-        figure.savefig(
-            output_filename,
-            dpi=figure_dpi,
-            bbox_inches="tight",
-            facecolor="white",
+        check_independence_stability_structure(
+            ds=raw_model_ds,
+            dataset_label="Raw model dataset",
         )
 
-        print()
-        print(
-            f"Wrote figure: "
-            f"{output_filename}"
+        for method, dataset in corrected_model_datasets.items():
+            check_independence_stability_structure(
+                ds=dataset,
+                dataset_label=(
+                    f"Bias-corrected model dataset ({method})"
+                ),
+            )
+
+        raw_month_gate = calculate_raw_month_gate(
+            raw_model_ds=raw_model_ds,
+            reference_ds=reference_ds,
+            model_variable=model_variable,
+            reference_variable=reference_variable,
         )
 
-    if show_figure:
-        plt.show()
-    else:
-        plt.close(
-            figure
+        month_correction_lookup = build_month_correction_lookup(
+            raw_month_gate
         )
+
+        (
+            fidelity_counts,
+            monthly_results,
+        ) = calculate_all_months_fidelity(
+            raw_model_ds=raw_model_ds,
+            corrected_model_datasets=(
+                corrected_model_datasets
+            ),
+            reference_ds=reference_ds,
+            model_variable=model_variable,
+            reference_variable=reference_variable,
+            month_correction_lookup=month_correction_lookup,
+        )
+
+        (
+            independence_stability_counts,
+            independence_stability_monthly_results,
+        ) = calculate_all_months_independence_and_stability(
+            raw_model_ds=raw_model_ds,
+            corrected_model_datasets=corrected_model_datasets,
+            model_variable=model_variable,
+            month_correction_lookup=month_correction_lookup,
+        )
+
+        summary_counts = combine_test_counts(
+            independence_stability_counts,
+            fidelity_counts,
+        )
+
+    finally:
+
+        raw_model_ds.close()
+
+        for dataset in (
+            corrected_model_datasets.values()
+        ):
+            dataset.close()
+
+        reference_ds.close()
+
+    print_raw_month_gate(
+        raw_month_gate
+    )
+
+    print_fidelity_counts(
+        fidelity_counts
+    )
+
+    print_monthly_results(
+        monthly_results
+    )
+
+    print_independence_stability_results(
+        independence_stability_counts,
+        independence_stability_monthly_results,
+    )
+
+    print()
+    print("Combined heatmap counts")
+    print("-----------------------")
+    print(summary_counts)
+
+    make_summary_heatmap(
+        summary_counts=summary_counts,
+        filename=(
+            filename_heatmap
+            if write2file
+            else None
+        ),
+    )

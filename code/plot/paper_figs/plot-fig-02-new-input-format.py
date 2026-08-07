@@ -42,19 +42,21 @@ The model sample can be selected in two ways:
 The number and bounds of the lead bins are determined from the same settings
 used by the sample-building script.
 
-Bias-corrected input
---------------------
-The script retains an option for a future bias-corrected model sample:
+Model-data method
+-----------------
+The model sample can be selected with one user parameter:
 
-    USE_BIAS_CORRECTED_MODEL = False
-        Read the current raw monthly sample.
+    MODEL_DATA_METHOD = "raw"
+        Read the raw monthly maximum-sample file.
 
-    USE_BIAS_CORRECTED_MODEL = True
-        Read a file with `_bc_<reference>` appended to its filename and select
-        model variables with `_bc_<reference>` appended to their names.
+    MODEL_DATA_METHOD = "mm", "q", "doy", "ld", or "q_doy"
+        Read a bias-corrected monthly maximum-sample file whose filename ends
+        in `_bc_<method>_<reference>.nc`.
 
-This assumes the future bias-corrected file keeps the same compact dimensions
-and the same `month(i_date)` assignments.
+For bias-corrected input, BIAS_CORRECTION_REFERENCE selects either "senorge"
+or "era5". The compact output files from the bias-correction/sample-building
+scripts retain the original model variable names, so this plotting script always
+reads `tp24_max` or `tp24_max_lead<start>_<end>` without a BC suffix.
 
 Example
 -------
@@ -123,19 +125,24 @@ number_of_lead_bins = 2
 model_sampling_group = "full"
 
 
-# Choose whether to use the original or bias-corrected S2S model sample.
+# Select the model-data source / bias-correction method.
 #
-# False -> original model sample
-# True  -> bias-corrected model sample created by the bias-correction script
-USE_BIAS_CORRECTED_MODEL = False
+# Options:
+#     "raw"   -> uncorrected monthly maximum sample
+#     "mm"    -> monthly-mean multiplicative correction
+#     "q"     -> quantile-based correction
+#     "doy"   -> day-of-year correction
+#     "ld"    -> lead-day correction
+#     "q_doy" -> combined quantile/day-of-year correction
+MODEL_DATA_METHOD = "q_doy"
 
-# Reference dataset used for the bias correction.
-# Only used when USE_BIAS_CORRECTED_MODEL = True.
+# Reference dataset used for bias correction. Ignored when
+# MODEL_DATA_METHOD == "raw".
 #
 # Options:
 #     "era5"
 #     "senorge"
-BIAS_CORRECTION_REFERENCE = "senorge"
+BIAS_CORRECTION_REFERENCE = "era5"
 
 
 write2file = False
@@ -281,7 +288,23 @@ def validate_model_sampling_settings():
         )
 
 
-    if USE_BIAS_CORRECTED_MODEL:
+    valid_methods = {
+        "raw",
+        "mm",
+        "q",
+        "doy",
+        "ld",
+        "q_doy",
+    }
+
+    if MODEL_DATA_METHOD not in valid_methods:
+        raise ValueError(
+            f"MODEL_DATA_METHOD must be one of "
+            f"{sorted(valid_methods)}. "
+            f"Got '{MODEL_DATA_METHOD}'."
+        )
+
+    if MODEL_DATA_METHOD != "raw":
 
         valid_references = {
             "era5",
@@ -463,14 +486,9 @@ def get_selected_model_variable():
         )
 
 
-    if USE_BIAS_CORRECTED_MODEL:
-
-        variable = (
-            f"{variable}_bc_"
-            f"{BIAS_CORRECTION_REFERENCE}"
-        )
-
-
+    # Bias-corrected compact sample files retain the same variable names as
+    # the raw compact sample file. The method/reference are encoded only in
+    # the filename.
     return variable
 
 
@@ -544,14 +562,14 @@ def get_model_sampling_label():
 
     if model_sampling_group == "full":
 
-        if USE_BIAS_CORRECTED_MODEL:
+        if MODEL_DATA_METHOD != "raw":
 
             return (
-                f"Model extremes, bias corrected to "
-                f"{BIAS_CORRECTION_REFERENCE.upper()}"
+                f"Model extremes, {MODEL_DATA_METHOD} bias correction "
+                f"to {BIAS_CORRECTION_REFERENCE.upper()}"
             )
 
-        return "Model extremes"
+        return "Model extremes (raw)"
 
 
     split_number = int(
@@ -568,12 +586,14 @@ def get_model_sampling_label():
     )
 
 
-    if USE_BIAS_CORRECTED_MODEL:
+    if MODEL_DATA_METHOD != "raw":
 
         label += (
-            f", bias corrected to "
+            f", {MODEL_DATA_METHOD} bias correction to "
             f"{BIAS_CORRECTION_REFERENCE.upper()}"
         )
+    else:
+        label += ", raw"
 
 
     return label
@@ -626,8 +646,8 @@ def make_model_filename():
     """
     Create the compact S2S monthly-sample input filename.
 
-    A future bias-corrected file is expected to use the same structure and to
-    append `_bc_<reference>` to the raw sample filename.
+    Bias-corrected compact sample files use the same structure and append
+    `_bc_<method>_<reference>` to the raw sample filename.
     """
 
     lead_label = (
@@ -649,7 +669,7 @@ def make_model_filename():
         ),
     )
 
-    if USE_BIAS_CORRECTED_MODEL:
+    if MODEL_DATA_METHOD != "raw":
 
         stem, extension = os.path.splitext(
             filename
@@ -657,6 +677,7 @@ def make_model_filename():
 
         filename = (
             f"{stem}_bc_"
+            f"{MODEL_DATA_METHOD}_"
             f"{BIAS_CORRECTION_REFERENCE}"
             f"{extension}"
         )
@@ -693,9 +714,10 @@ def make_senorge_filename():
 def make_figure_filename():
     """Create an output figure name that records the model-data choice."""
 
-    if USE_BIAS_CORRECTED_MODEL:
+    if MODEL_DATA_METHOD != "raw":
         suffix = (
-            f"bc-{BIAS_CORRECTION_REFERENCE}"
+            f"bc-{MODEL_DATA_METHOD}-"
+            f"{BIAS_CORRECTION_REFERENCE}"
         )
     else:
         suffix = "raw"
@@ -1587,11 +1609,11 @@ if __name__ == "__main__":
     )
 
     print(
-        f"Bias corrected:   "
-        f"{USE_BIAS_CORRECTED_MODEL}"
+        f"Data method:       "
+        f"{MODEL_DATA_METHOD}"
     )
 
-    if USE_BIAS_CORRECTED_MODEL:
+    if MODEL_DATA_METHOD != "raw":
 
         print(
             f"BC reference:     "
@@ -1616,11 +1638,6 @@ if __name__ == "__main__":
 
     full_variable = "tp24_max"
 
-    if USE_BIAS_CORRECTED_MODEL:
-        full_variable += (
-            f"_bc_{BIAS_CORRECTION_REFERENCE}"
-        )
-
     print(
         f"full:   "
         f"{full_variable}"
@@ -1639,11 +1656,6 @@ if __name__ == "__main__":
             f"tp24_max_lead"
             f"{bin_start}_{bin_end}"
         )
-
-        if USE_BIAS_CORRECTED_MODEL:
-            split_variable += (
-                f"_bc_{BIAS_CORRECTION_REFERENCE}"
-            )
 
         print(
             f"split{bin_number}: "

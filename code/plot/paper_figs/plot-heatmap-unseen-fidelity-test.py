@@ -127,7 +127,7 @@ number_of_lead_bins = 2
 # Options:
 #     "era5"
 #     "senorge"
-REFERENCE_DATASET = "era5"
+REFERENCE_DATASET = "senorge"
 
 # Bias-correction methods to compare.
 #
