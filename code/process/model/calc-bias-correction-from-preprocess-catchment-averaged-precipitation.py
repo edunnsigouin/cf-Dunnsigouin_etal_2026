@@ -76,18 +76,39 @@ Each correction method is written to its own NetCDF file:
     preprocessed_model_tp24_<catchment>_<start>_<end>_bc_ld_<reference>.nc
     preprocessed_model_tp24_<catchment>_<start>_<end>_bc_q_doy_<reference>.nc
 
-Every output retains the model coordinates and provenance variables. It
-contains:
+Every output retains the model coordinates and provenance variables and
+contains the bias-corrected tp24 field.
 
-    tp24
-        Bias-corrected precipitation with the same dimension structure as the
-        model input.
+In addition, each output contains ONLY the lookup table relevant to that
+correction method:
 
-    bias_correction_factor
-        Multiplicative factor applied at every model-data position.
+    q:
+        model_mean_lookup(quantile_global)
+        reference_mean_lookup(quantile_global)
+        bias_correction_factor_lookup(quantile_global)
+        bias_correction_factor(lead_day, number, i_date)
 
-The helper coordinates used internally to calculate quantile and day-of-year
-groups are removed before writing.
+    doy:
+        model_mean_lookup(doy)
+        reference_mean_lookup(doy)
+        bias_correction_factor_lookup(doy)
+        bias_correction_factor(lead_day, number, i_date)
+
+    ld:
+        model_mean_lookup(lead_day)
+        reference_mean
+        bias_correction_factor_lookup(lead_day)
+        bias_correction_factor(lead_day, number, i_date)
+
+    q_doy:
+        model_mean_lookup(doy, quantile_doy)
+        reference_mean_lookup(doy, quantile_doy)
+        bias_correction_factor_lookup(doy, quantile_doy)
+        bias_correction_factor(lead_day, number, i_date)
+
+The full-size bias_correction_factor is the lookup-table factor mapped onto
+each model value. Helper coordinates such as doy, quantile_doy and
+quantile_global are not retained on the full model dimensions in the output.
 """
 
 from __future__ import annotations
@@ -1118,16 +1139,29 @@ def mean_by_doy_quantile(
     )
 
 
-def correction_factors(
+def correction_lookup_tables(
     method,
     reference,
     model,
 ):
-    """Calculate multiplicative correction factors for one method."""
+    """
+    Calculate compact lookup tables plus the mapped model-sized factors.
+
+    Returns
+    -------
+    model_mean
+        Model lookup-table mean before broadcasting.
+    reference_mean
+        Reference lookup-table mean before broadcasting.
+    factor_lookup
+        Compact multiplicative factor before broadcasting.
+    mapped_factors
+        Compact factors mapped onto every model-data position.
+    """
 
     if method == "q":
 
-        reference_group_mean = (
+        reference_mean = (
             reference[
                 MODEL_VARIABLE
             ]
@@ -1137,7 +1171,7 @@ def correction_factors(
             .mean()
         )
 
-        model_group_mean = (
+        model_mean = (
             model[
                 MODEL_VARIABLE
             ]
@@ -1147,25 +1181,7 @@ def correction_factors(
             .mean()
         )
 
-        factors = (
-            reference_group_mean
-            / model_group_mean
-        )
-
-        factors[
-            -(
-                quantile_cutoff
-                - 1
-            ):
-        ] = factors[
-            -quantile_cutoff
-        ]
-
-        # Averaging over the model data can leave scalar coordinates such as
-        # number attached to the one-dimensional quantile factor array. Remove
-        # those scalar coordinates before using the model quantile indices for
-        # vectorized selection.
-        factors = factors.drop_vars(
+        reference_mean = reference_mean.drop_vars(
             [
                 "number",
                 "lead_day",
@@ -1174,13 +1190,43 @@ def correction_factors(
             errors="ignore",
         )
 
-        return factors.isel(
+        model_mean = model_mean.drop_vars(
+            [
+                "number",
+                "lead_day",
+                "i_date",
+            ],
+            errors="ignore",
+        )
+
+        factor_lookup = (
+            reference_mean
+            / model_mean
+        )
+
+        factor_lookup[
+            -(
+                quantile_cutoff
+                - 1
+            ):
+        ] = factor_lookup[
+            -quantile_cutoff
+        ]
+
+        mapped_factors = factor_lookup.isel(
             quantile_global=model.quantile_global
+        )
+
+        return (
+            model_mean,
+            reference_mean,
+            factor_lookup,
+            mapped_factors,
         )
 
     if method == "doy":
 
-        reference_mean = (
+        reference_mean_unsmoothed = (
             reference[
                 MODEL_VARIABLE
             ]
@@ -1190,7 +1236,7 @@ def correction_factors(
             .mean()
         )
 
-        model_mean = (
+        model_mean_unsmoothed = (
             model[
                 MODEL_VARIABLE
             ]
@@ -1203,26 +1249,25 @@ def correction_factors(
             )
         )
 
-        reference_rolling = wrapped_rolling_mean(
+        reference_mean = wrapped_rolling_mean(
             window_size=reference_doy_window,
-            da=reference_mean,
+            da=reference_mean_unsmoothed,
             dim="doy",
         )
 
-        model_rolling = wrapped_rolling_mean(
+        model_mean = wrapped_rolling_mean(
             window_size=model_doy_window,
-            da=model_mean,
+            da=model_mean_unsmoothed,
             dim="doy",
         )
 
-        factors = (
-            reference_rolling.values
-            /
-            model_rolling.values
+        factor_lookup = (
+            reference_mean
+            / model_mean
         )
 
-        return np.repeat(
-            factors[
+        mapped_factors = np.repeat(
+            factor_lookup.values[
                 model.doy - 1
             ]
             .T[
@@ -1236,30 +1281,44 @@ def correction_factors(
             axis=1,
         )
 
+        return (
+            model_mean,
+            reference_mean,
+            factor_lookup,
+            mapped_factors,
+        )
+
     if method == "ld":
 
-        factors = (
-            reference
-            .mean(
-                "date"
-            )[
+        reference_mean = (
+            reference[
                 MODEL_VARIABLE
             ]
-            /
-            model
+            .mean(
+                "date"
+            )
+        )
+
+        model_mean = (
+            model[
+                MODEL_VARIABLE
+            ]
             .mean(
                 "number"
             )
             .mean(
                 "i_date"
-            )[
-                MODEL_VARIABLE
-            ]
+            )
         )
 
-        return np.repeat(
+        factor_lookup = (
+            reference_mean
+            / model_mean
+        )
+
+        mapped_factors = np.repeat(
             np.repeat(
-                factors.values[
+                factor_lookup.values[
                     :,
                     np.newaxis,
                     np.newaxis,
@@ -1275,9 +1334,16 @@ def correction_factors(
             axis=2,
         )
 
+        return (
+            model_mean,
+            reference_mean,
+            factor_lookup,
+            mapped_factors,
+        )
+
     if method == "q_doy":
 
-        reference_quantile_mean = mean_by_doy_quantile(
+        reference_mean_raw = mean_by_doy_quantile(
             ds=reference,
             delta=(
                 reference_doy_window
@@ -1286,33 +1352,36 @@ def correction_factors(
             // 2,
         )
 
-        model_quantile_mean = mean_by_doy_quantile(
+        model_mean_raw = mean_by_doy_quantile(
             ds=model,
             delta=0,
         )
 
-        factors = (
-            wrapped_rolling_mean(
-                window_size=quantile_doy_rolling_window,
-                da=reference_quantile_mean,
-                dim="doy",
-            )
-            /
-            wrapped_rolling_mean(
-                window_size=quantile_doy_rolling_window,
-                da=model_quantile_mean,
-                dim="doy",
-            )
+        reference_mean = wrapped_rolling_mean(
+            window_size=quantile_doy_rolling_window,
+            da=reference_mean_raw,
+            dim="doy",
         )
 
-        factors.values[
+        model_mean = wrapped_rolling_mean(
+            window_size=quantile_doy_rolling_window,
+            da=model_mean_raw,
+            dim="doy",
+        )
+
+        factor_lookup = (
+            reference_mean
+            / model_mean
+        )
+
+        factor_lookup.values[
             :,
             -(
                 quantile_cutoff
                 - 1
             ):
         ] = np.repeat(
-            factors.values[
+            factor_lookup.values[
                 :,
                 -quantile_cutoff
             ][
@@ -1324,10 +1393,17 @@ def correction_factors(
             axis=1,
         )
 
-        return factors[
+        mapped_factors = factor_lookup[
             model.doy - 1,
             model.quantile_doy,
         ]
+
+        return (
+            model_mean,
+            reference_mean,
+            factor_lookup,
+            mapped_factors,
+        )
 
     raise ValueError(
         f"Unknown correction method: {method}"
@@ -1338,7 +1414,13 @@ def factors_as_data_array(
     factors,
     model,
 ):
-    """Return correction factors as a model-shaped DataArray."""
+    """
+    Return full factors with exactly the model tp24 dimension order.
+
+    Some xarray vectorized indexing operations, especially q_doy, can return
+    the correct dimensions in a different order. Reorder by dimension name
+    before converting to NumPy.
+    """
 
     template = model[
         MODEL_VARIABLE
@@ -1349,14 +1431,33 @@ def factors_as_data_array(
         xr.DataArray,
     ):
 
-        factor_da = factors.broadcast_like(
-            template
+        expected_dims = tuple(
+            template.dims
         )
 
-        factor_da = factor_da.transpose(
-            "lead_day",
-            "number",
-            "i_date",
+        factor_dims = tuple(
+            factors.dims
+        )
+
+        if set(
+            factor_dims
+        ) == set(
+            expected_dims
+        ):
+
+            factors = factors.transpose(
+                *expected_dims
+            )
+
+        elif factor_dims != expected_dims:
+
+            raise ValueError(
+                "Correction-factor dimensions do not match model dimensions. "
+                f"Factors: {factor_dims}; model: {expected_dims}."
+            )
+
+        values = np.asarray(
+            factors.values
         )
 
     else:
@@ -1365,27 +1466,37 @@ def factors_as_data_array(
             factors
         )
 
-        if values.shape != template.shape:
-            raise ValueError(
-                "Correction-factor shape does not match model shape. "
-                f"Factors: {values.shape}; model: {template.shape}."
-            )
-
-        factor_da = xr.DataArray(
-            values,
-            dims=template.dims,
-            coords=template.coords,
+    if values.shape != template.shape:
+        raise ValueError(
+            "Correction-factor shape does not match model shape after "
+            "dimension reordering. "
+            f"Factors: {values.shape}; model: {template.shape}."
         )
 
-    factor_da.name = (
-        "bias_correction_factor"
+    factor_da = xr.DataArray(
+        values,
+        dims=template.dims,
+        coords={
+            "lead_day": model[
+                "lead_day"
+            ],
+            "number": model[
+                "number"
+            ],
+            "i_date": model[
+                "i_date"
+            ],
+        },
+        name="bias_correction_factor",
     )
 
     factor_da.attrs = {
         "description": (
-            "Multiplicative bias-correction factor applied to tp24"
+            "Multiplicative bias-correction factor mapped onto every "
+            "model-data position"
         ),
         "units": "1",
+        "broadcasted_from_lookup_table": "true",
     }
 
     return factor_da
@@ -1397,14 +1508,49 @@ def factors_as_data_array(
 
 def remove_helper_coordinates(
     ds,
+    method,
 ):
-    """Remove coordinates used only for internal correction calculations."""
+    """
+    Remove helper coordinates that are not needed in the selected output.
+
+    Retained helper dimensions by method:
+        q      -> quantile_global
+        doy    -> doy
+        ld     -> none
+        q_doy  -> doy and quantile_doy
+    """
+
+    keep_by_method = {
+        "q": {
+            "quantile_global",
+        },
+        "doy": {
+            "doy",
+        },
+        "ld": set(),
+        "q_doy": {
+            "doy",
+            "quantile_doy",
+        },
+    }
+
+    if method not in keep_by_method:
+        raise ValueError(
+            f"Unknown correction method: {method}"
+        )
 
     output = ds
 
+    keep = keep_by_method[
+        method
+    ]
+
     for coordinate in HELPER_COORDINATES:
 
-        if coordinate in output.coords:
+        if (
+            coordinate in output.coords
+            and coordinate not in keep
+        ):
 
             output = output.drop_vars(
                 coordinate
@@ -1417,17 +1563,20 @@ def build_corrected_dataset(
     model,
     method,
     factor_da,
+    model_mean,
+    reference_mean,
+    factor_lookup,
 ):
-    """Build one corrected dataset with the original model organization."""
+    """
+    Build one corrected dataset with method-specific compact lookup tables.
+    """
 
     corrected = (
         model[
             MODEL_VARIABLE
         ]
         * factor_da
-    )
-
-    corrected = corrected.transpose(
+    ).transpose(
         "lead_day",
         "number",
         "i_date",
@@ -1436,7 +1585,8 @@ def build_corrected_dataset(
     output = remove_helper_coordinates(
         model.copy(
             deep=True
-        )
+        ),
+        method=method,
     )
 
     output[
@@ -1448,6 +1598,66 @@ def build_corrected_dataset(
     output[
         "bias_correction_factor"
     ] = factor_da.astype(
+        "float32"
+    )
+
+    model_mean_out = model_mean.copy(
+        deep=True
+    )
+    reference_mean_out = reference_mean.copy(
+        deep=True
+    )
+    factor_lookup_out = factor_lookup.copy(
+        deep=True
+    )
+
+    model_mean_out.name = "model_mean_lookup"
+    reference_mean_out.name = "reference_mean_lookup"
+    factor_lookup_out.name = (
+        "bias_correction_factor_lookup"
+    )
+
+    model_mean_out.attrs = {
+        "description": (
+            f"Model mean used in the compact {method} bias-correction "
+            "lookup table"
+        ),
+        "units": "mm",
+    }
+
+    reference_mean_out.attrs = {
+        "description": (
+            f"Reference mean used in the compact {method} bias-correction "
+            "lookup table"
+        ),
+        "units": "mm",
+        "reference_dataset": reference_dataset,
+    }
+
+    factor_lookup_out.attrs = {
+        "description": (
+            f"Compact multiplicative {method} bias-correction factor "
+            "before mapping to model dimensions"
+        ),
+        "formula": "reference_mean_lookup / model_mean_lookup",
+        "units": "1",
+    }
+
+    output[
+        "model_mean_lookup"
+    ] = model_mean_out.astype(
+        "float32"
+    )
+
+    output[
+        "reference_mean_lookup"
+    ] = reference_mean_out.astype(
+        "float32"
+    )
+
+    output[
+        "bias_correction_factor_lookup"
+    ] = factor_lookup_out.astype(
         "float32"
     )
 
@@ -1485,6 +1695,13 @@ def build_corrected_dataset(
             "reference_doy_window": reference_doy_window,
             "model_doy_window": model_doy_window,
             "quantile_doy_rolling_window": quantile_doy_rolling_window,
+            "lookup_table_variables": (
+                "model_mean_lookup, reference_mean_lookup, "
+                "bias_correction_factor_lookup"
+            ),
+            "broadcast_factor_variable": (
+                "bias_correction_factor"
+            ),
         }
     )
 
@@ -1502,24 +1719,28 @@ def write_corrected_dataset(
         exist_ok=True,
     )
 
-    encoding = {
-        MODEL_VARIABLE: {
-            "dtype": "float32",
-            "_FillValue": np.float32(
-                np.nan
-            ),
-            "zlib": True,
-            "complevel": 4,
-        },
-        "bias_correction_factor": {
-            "dtype": "float32",
-            "_FillValue": np.float32(
-                np.nan
-            ),
-            "zlib": True,
-            "complevel": 4,
-        },
-    }
+    encoding = {}
+
+    for variable_name in (
+        MODEL_VARIABLE,
+        "model_mean_lookup",
+        "reference_mean_lookup",
+        "bias_correction_factor_lookup",
+        "bias_correction_factor",
+    ):
+
+        if variable_name in ds:
+
+            encoding[
+                variable_name
+            ] = {
+                "dtype": "float32",
+                "_FillValue": np.float32(
+                    np.nan
+                ),
+                "zlib": True,
+                "complevel": 4,
+            }
 
     if "hdate" in ds:
 
@@ -1581,6 +1802,30 @@ def print_output_summary(
     print(
         "Finite corrected values:",
         finite_count,
+    )
+    print(
+        "Lookup model_mean dimensions:",
+        ds[
+            "model_mean_lookup"
+        ].dims,
+    )
+    print(
+        "Lookup reference_mean dimensions:",
+        ds[
+            "reference_mean_lookup"
+        ].dims,
+    )
+    print(
+        "Lookup factor dimensions:",
+        ds[
+            "bias_correction_factor_lookup"
+        ].dims,
+    )
+    print(
+        "Broadcast factor dimensions:",
+        ds[
+            "bias_correction_factor"
+        ].dims,
     )
     print(
         "Minimum:",
@@ -1685,14 +1930,19 @@ if __name__ == "__main__":
                 flush=True,
             )
 
-            factors = correction_factors(
+            (
+                model_mean,
+                reference_mean,
+                factor_lookup,
+                mapped_factors,
+            ) = correction_lookup_tables(
                 method=method,
                 reference=reference,
                 model=model,
             )
 
             factor_da = factors_as_data_array(
-                factors=factors,
+                factors=mapped_factors,
                 model=model,
             )
 
@@ -1700,6 +1950,9 @@ if __name__ == "__main__":
                 model=model,
                 method=method,
                 factor_da=factor_da,
+                model_mean=model_mean,
+                reference_mean=reference_mean,
+                factor_lookup=factor_lookup,
             )
 
             print_output_summary(
