@@ -59,7 +59,7 @@ EVENT_DATES = [
 TIMESERIES_N_DAYS_BEFORE = 3
 TIMESERIES_M_DAYS_LEAD = 6
 
-WRITE_TO_FILE = False
+WRITE_TO_FILE = True
 
 
 # =============================================================================
@@ -107,7 +107,7 @@ PRECIP_SENORGE_PATH = (
 )
 PRECIP_SENORGE_FILE_PATTERN = f"{PRECIP_SENORGE_VAR}" + "_{year}.nc"
 
-OUTPUT_FILENAME = PATH_OUT / "fig-0X2.png"
+OUTPUT_FILENAME = PATH_OUT / "fig-06.png"
 
 
 # =============================================================================
@@ -139,7 +139,7 @@ DATE_TICK_ROTATION = 30
 # 5. Plot styling
 # =============================================================================
 
-PRECIP_LEVELS = np.arange(5, 55, 5)
+PRECIP_LEVELS = np.arange(5, 65, 5)
 PRECIP_ZERO_THRESHOLD = 5.0
 PRECIP_CMAP = plt.get_cmap("GnBu").copy()
 PRECIP_CMAP.set_under("white")
@@ -1301,7 +1301,7 @@ def add_map_panel_titles(map_axes):
         )
 
         ax.set_title(
-            f"{panel_label} {formatted_date}",
+            f"{panel_label} {formatted_date} 2023",
             fontsize=TITLE_FONTSIZE,
             pad=3,
         )
