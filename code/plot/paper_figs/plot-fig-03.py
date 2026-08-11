@@ -1,29 +1,108 @@
 """
-Create a 2 x 2 panel extreme-value figure comparing observations and raw UNSEEN.
+Create a two-panel extreme-value figure comparing observations with one
+selected UNSEEN model sample.
 
-Default layout
---------------
-(a) August, M = 1 year
-(b) August, M = 10 years
-(c) May,    M = 1 year
-(d) May,    M = 10 years
+Panel layout
+------------
+The figure contains one row and two columns:
 
-The two calendar months, the two M-year horizons, the x-axis mode, and the
-observational reference dataset are all user inputs.
+    a) first user-selected calendar month
+    b) second user-selected calendar month
 
-Each calendar month is fitted only once for each dataset. The fitted return-
-level curve is then displayed either against return period or against the
-probability of at least one exceedance in M independent years:
+The months are controlled by PANEL_MONTHS, where:
 
-    p_M = 1 - (1 - 1 / T) ** M
+    1 = January
+    2 = February
+    ...
+    5 = May
+    ...
+    8 = August
+    ...
+    12 = December
+
+For example:
+
+    PANEL_MONTHS = [8, 5]
+
+gives:
+
+    a) August
+    b) May
+
+Both panels use M = 1 year. Therefore:
+
+    X_AXIS_MODE = "return_period"
+        shows annual return period [years].
+
+    X_AXIS_MODE = "aep"
+        shows 1-year exceedance probability [%].
+
+The y-axis in both panels is:
+
+    Monthly maximum 2-day precipitation [mm]
+
+Model input
+-----------
+The model input is the compact monthly-maximum sample. Supported model-data
+methods are:
+
+    raw
+    mm
+    q
+    ld
+    doy
+    q_doy
+
+The raw compact filename is:
+
+    monthly_max_samples_<variable>_<N>dayacc_<catchment>_
+    lead<full>_split<...>_<forecast_start>_<forecast_end>.nc
+
+Bias-corrected files use the same compact structure and variable names, with
+the correction method and reference dataset encoded in the filename:
+
+    ..._bc_mm_<reference>.nc
+    ..._bc_q_<reference>.nc
+    ..._bc_ld_<reference>.nc
+    ..._bc_doy_<reference>.nc
+    ..._bc_q_doy_<reference>.nc
+
+The compact precipitation variables are:
+
+    tp24_max(number, i_date)
+
+or, for a lead-location split:
+
+    tp24_max_lead<start>_<end>(number, i_date)
+
+Calendar-month membership is stored in month(i_date).
+
+Reference dataset
+-----------------
+REFERENCE_DATASET selects both:
+
+    1. the observational dataset plotted in the figure;
+    2. the reference encoded in a bias-corrected model filename.
+
+Extreme-value calculation
+-------------------------
+Each selected calendar month is fitted once for each dataset. The fitted
+return-level curve is displayed either against return period or against the
+probability of at least one exceedance in one year.
+
+Because M = 1:
+
+    p_1 = 1 / T
+
+where T is the return period.
 
 Storm Hans is always the August 2023 observational value. Each panel also
-shows the observational record for that panel's calendar month over
+shows the observational calendar-month record over
 RECORD_START_YEAR-RECORD_END_YEAR.
 
 Important
 ---------
-SciPy's ``genextreme`` shape parameter ``c`` has the opposite sign from the
+SciPy's genextreme shape parameter c has the opposite sign from the
 conventional GEV shape parameter xi:
 
     xi = -c
@@ -54,18 +133,15 @@ from Dunnsigouin_etal_2026 import config
 # Panel configuration
 # -----------------------------------------------------------------------------
 
-# The two columns of the 2 x 2 figure.
+# The two side-by-side panels.
 # 1 = January, ..., 5 = May, ..., 8 = August, ..., 12 = December.
 PANEL_MONTHS = [
     8,
     5,
 ]
 
-# The two rows of the 2 x 2 figure.
-PANEL_M_YEARS = [
-    1,
-    10,
-]
+# Both panels always use a one-year exceedance horizon.
+M_YEARS = 1
 
 # Options:
 #     "return_period" -> return period in years
@@ -80,7 +156,7 @@ X_AXIS_MODE = "return_period"
 # Options:
 #     "senorge"
 #     "era5"
-REFERENCE_DATASET = "era5"
+REFERENCE_DATASET = "senorge"
 
 CATCHMENT = "regine_drammen"
 X_DAYS = 2
@@ -105,7 +181,7 @@ ERA5_GRID = "0.5x0.5"
 
 
 # -----------------------------------------------------------------------------
-# Raw UNSEEN model sample
+# UNSEEN compact model sample
 # -----------------------------------------------------------------------------
 
 MODEL_VARIABLE = "tp24"
@@ -119,6 +195,8 @@ FIRST_INPUT_LEAD = 16
 LAST_INPUT_LEAD = 46
 NUMBER_OF_LEAD_BINS = 2
 
+# Which compact sample variable to use.
+#
 # Options:
 #     "full"
 #     "split1"
@@ -126,11 +204,20 @@ NUMBER_OF_LEAD_BINS = 2
 #     ...
 MODEL_SAMPLING_GROUP = "full"
 
+# Model-data / bias-correction method.
+#
 # Options:
-#     "raw"             -> plot only raw UNSEEN
-#     "bias_corrected"  -> plot only bias-corrected UNSEEN
-#     "both"            -> plot raw and bias-corrected UNSEEN
-MODEL_DATA_MODE = "raw"
+#     "raw"   -> uncorrected compact monthly-maximum sample
+#     "mm"    -> monthly-mean correction from script 2
+#     "q"     -> quantile correction
+#     "ld"    -> lead-day correction
+#     "doy"   -> day-of-year correction
+#     "q_doy" -> combined quantile/day-of-year correction
+MODEL_DATA_METHOD = "raw"
+
+# Optional explicit compact model filename. Leave as None to construct the
+# filename automatically from the settings above.
+MODEL_FILENAME_OVERRIDE = None
 
 
 # -----------------------------------------------------------------------------
@@ -172,28 +259,14 @@ RANDOM_SEED = 42
 # Plot settings
 # -----------------------------------------------------------------------------
 
-# Share only the axis labels, not the underlying x/y scales.
-# Shared x labels use a generic description because M differs between columns.
+# Both panels use their own x-axis label.
 SHARE_X_LABEL = False
+
+# Use one common precipitation label for both panels.
 SHARE_Y_LABEL = False
 
-# Panel-title options.
-# False gives titles such as "a)", "b)", "c)", and "d)".
-# True gives titles such as "a) August".
-INCLUDE_MONTH_IN_PANEL_TITLE = False
-
-# Y-axis label options.
-# True gives, for example:
-#     "Maximum August 2-day precipitation [mm]"
-# False gives:
-#     "Maximum monthly 2-day precipitation [mm]"
-#
-# Month-specific labels cannot be shared across panels when PANEL_MONTHS
-# contains different months. In that case set SHARE_Y_LABEL = False.
-INCLUDE_MONTH_IN_Y_LABEL = True
-
-FIG_WIDTH_IN = 14
-FIG_HEIGHT_IN = 10
+FIG_WIDTH_IN = 12
+FIG_HEIGHT_IN = 5.5
 
 TITLE_FONTSIZE = 14
 AXIS_LABELSIZE = 12
@@ -203,7 +276,7 @@ ANNOTATION_FONTSIZE = 11
 
 OBSERVATION_COLOR = "tab:blue"
 RAW_UNSEEN_COLOR = "goldenrod"
-BIAS_CORRECTED_UNSEEN_COLOR = "forestgreen"
+BIAS_CORRECTED_UNSEEN_COLOR = "goldenrod"
 
 # Horizontal reference-event colors. These colors are also used for the
 # corresponding legend entries.
@@ -230,7 +303,7 @@ XMAX_AEP = 100.0
 YMIN = 0.0
 YMAX = 200
 
-WRITE_TO_FILE = False
+WRITE_TO_FILE = True
 FIGURE_DPI = 300
 
 
@@ -267,13 +340,19 @@ def validate_user_settings():
             "X_AXIS_MODE must be 'return_period' or 'aep'."
         )
 
-    if MODEL_DATA_MODE not in {
+    valid_model_methods = {
         "raw",
-        "bias_corrected",
-        "both",
-    }:
+        "mm",
+        "q",
+        "ld",
+        "doy",
+        "q_doy",
+    }
+
+    if MODEL_DATA_METHOD not in valid_model_methods:
         raise ValueError(
-            "MODEL_DATA_MODE must be 'raw', 'bias_corrected', or 'both'."
+            f"MODEL_DATA_METHOD must be one of "
+            f"{sorted(valid_model_methods)}."
         )
 
     if len(PANEL_MONTHS) != 2:
@@ -281,33 +360,10 @@ def validate_user_settings():
             "PANEL_MONTHS must contain exactly two calendar months."
         )
 
-    if len(PANEL_M_YEARS) != 2:
-        raise ValueError(
-            "PANEL_M_YEARS must contain exactly two time horizons."
-        )
-
-    if (
-        SHARE_Y_LABEL
-        and INCLUDE_MONTH_IN_Y_LABEL
-        and len(set(PANEL_MONTHS)) > 1
-    ):
-        raise ValueError(
-            "SHARE_Y_LABEL cannot be True when "
-            "INCLUDE_MONTH_IN_Y_LABEL is True and PANEL_MONTHS contains "
-            "different months. Set SHARE_Y_LABEL = False or "
-            "INCLUDE_MONTH_IN_Y_LABEL = False."
-        )
-
     for month in PANEL_MONTHS:
         if not isinstance(month, int) or month not in range(1, 13):
             raise ValueError(
                 "Each entry in PANEL_MONTHS must be an integer from 1 to 12."
-            )
-
-    for m_years in PANEL_M_YEARS:
-        if not isinstance(m_years, int) or m_years < 1:
-            raise ValueError(
-                "Each entry in PANEL_M_YEARS must be a positive integer."
             )
 
     if EXTREME_VALUE_DISTRIBUTION not in {1, 2, 3}:
@@ -444,28 +500,42 @@ def get_reference_label():
     return ERA5_LABEL
 
 
-def get_bias_correction_reference():
-    """Return the reference used by the bias-corrected UNSEEN file."""
+def model_is_raw():
+    """Return True when the selected compact model sample is uncorrected."""
 
-    return REFERENCE_DATASET
+    return MODEL_DATA_METHOD == "raw"
 
 
-def plot_raw_model():
-    """Return True when raw UNSEEN should be plotted."""
+def get_model_method_label():
+    """Return a short publication-style label for the selected model sample."""
 
-    return MODEL_DATA_MODE in {
-        "raw",
-        "both",
+    labels = {
+        "raw": "Model raw",
+        "mm": "Model BC (MM)",
+        "q": "Model BC (Q)",
+        "ld": "Model BC (LD)",
+        "doy": "Model BC (DOY)",
+        "q_doy": "Model BC (Q-DOY)",
     }
 
+    return labels[MODEL_DATA_METHOD]
 
-def plot_bias_corrected_model():
-    """Return True when bias-corrected UNSEEN should be plotted."""
 
-    return MODEL_DATA_MODE in {
-        "bias_corrected",
-        "both",
-    }
+def get_model_file_id(
+    catchment_name,
+):
+    """Return the short catchment identifier used in compact sample filenames."""
+
+    if catchment_name.startswith(
+        "regine_"
+    ):
+        return catchment_name.replace(
+            "regine_",
+            "",
+            1,
+        )
+
+    return catchment_name
 
 
 # =============================================================================
@@ -533,29 +603,22 @@ def get_selected_model_lead_range():
     return build_lead_bins()[split_number - 1]
 
 
-def get_raw_model_variable():
-    """Return the raw UNSEEN variable name."""
+def get_model_variable():
+    """
+    Return the selected compact precipitation variable.
+
+    Raw and corrected compact files preserve the same variable names.
+    """
+
+    if MODEL_SAMPLING_GROUP == "full":
+        return "tp24_max"
 
     lead_start, lead_end = get_selected_model_lead_range()
-
-    return f"max_value_lead{lead_start}_{lead_end}"
-
-
-def get_bias_corrected_model_variable():
-    """Return the bias-corrected UNSEEN variable name."""
 
     return (
-        f"{get_raw_model_variable()}_bc_"
-        f"{get_bias_correction_reference()}"
+        f"tp24_max_lead"
+        f"{lead_start}_{lead_end}"
     )
-
-
-def get_selected_sample_count_variable():
-    """Return the sample-count variable for the selected lead range."""
-
-    lead_start, lead_end = get_selected_model_lead_range()
-
-    return f"sample_count_lead{lead_start}_{lead_end}"
 
 
 def lead_split_filename_label():
@@ -608,18 +671,39 @@ def make_reference_filename():
     )
 
 
-def make_raw_model_filename():
-    """Construct the raw UNSEEN filename."""
+def make_model_filename():
+    """
+    Construct the selected compact monthly-maximum model filename.
 
-    filename = (
-        f"unseen_sample_monthly_catchment_precipitation_extremes_"
-        f"{MODEL_VARIABLE}_{X_DAYS}dayacc_"
-        f"{CATCHMENT}_"
+    The correction method/reference are encoded in the filename while the
+    precipitation variable names remain unchanged.
+    """
+
+    if MODEL_FILENAME_OVERRIDE is not None:
+        return str(
+            MODEL_FILENAME_OVERRIDE
+        )
+
+    base_filename = (
+        f"monthly_max_samples_"
+        f"{MODEL_VARIABLE}_"
+        f"{X_DAYS}dayacc_"
+        f"{get_model_file_id(CATCHMENT)}_"
         f"{lead_split_filename_label()}_"
-        f"forecast_hindcast_"
         f"{FORECAST_DATE_RANGE[0]}_"
-        f"{FORECAST_DATE_RANGE[1]}.nc"
+        f"{FORECAST_DATE_RANGE[1]}"
     )
+
+    if MODEL_DATA_METHOD == "raw":
+        filename = (
+            f"{base_filename}.nc"
+        )
+    else:
+        filename = (
+            f"{base_filename}_"
+            f"bc_{MODEL_DATA_METHOD}_"
+            f"{REFERENCE_DATASET}.nc"
+        )
 
     return os.path.join(
         config.dirs["s2s_processed"],
@@ -627,33 +711,34 @@ def make_raw_model_filename():
     )
 
 
-def make_bias_corrected_model_filename():
-    """Construct the bias-corrected UNSEEN filename."""
-
-    raw_filename = make_raw_model_filename()
-    stem, extension = os.path.splitext(raw_filename)
-
-    return (
-        f"{stem}_bc_"
-        f"{get_bias_correction_reference()}"
-        f"{extension}"
-    )
-
-
 def make_figure_filename():
-    """Construct the 2 x 2 figure filename."""
+    """Construct the publication figure filename."""
 
     months_label = "-".join(
         MONTH_NAMES[month - 1].lower()
         for month in PANEL_MONTHS
     )
 
-    horizons_label = "-".join(
-        f"{m_years}year"
-        for m_years in PANEL_M_YEARS
-    )
+    distribution_label = {
+        1: "gev",
+        2: "gumbel",
+        3: "genex",
+    }[EXTREME_VALUE_DISTRIBUTION]
 
-    filename = f'fig-03-{X_AXIS_MODE}.png'
+    if MODEL_DATA_METHOD == "raw":
+        model_label = "raw"
+    else:
+        model_label = f"bc-{MODEL_DATA_METHOD}"
+
+    filename = (
+        f"fig-03_"
+        f"{X_AXIS_MODE}_"
+        f"M{M_YEARS}_"
+        f"{months_label}_"
+        f"{model_label}_"
+        f"{REFERENCE_DATASET}_"
+        f"{distribution_label}.png"
+    )
 
     return os.path.join(
         config.dirs["fig"],
@@ -809,25 +894,75 @@ def read_model_month(
     variable,
     month,
     dataset_name,
-    check_sample_count,
 ):
-    """Read one calendar month from a raw or bias-corrected UNSEEN sample."""
+    """
+    Read one calendar month from a compact monthly-maximum model sample.
 
-    with xr.open_dataset(filename) as ds:
+    month(i_date) identifies the calendar month. Finite values are pooled
+    across ensemble member (number) and initialization row (i_date).
+    """
+
+    with xr.open_dataset(
+        filename,
+        decode_timedelta=False,
+    ) as ds:
+
         check_variable_exists(
             ds,
             variable,
             dataset_name,
         )
 
-        values = np.asarray(
-            ds[variable]
-            .sel(month_of_year=month)
-            .values,
-            dtype=float,
+        check_variable_exists(
+            ds,
+            "month",
+            dataset_name,
         )
 
-        values = values[np.isfinite(values)]
+        if set(
+            ds[
+                variable
+            ].dims
+        ) != {
+            "number",
+            "i_date",
+        }:
+            raise ValueError(
+                f"Variable '{variable}' in {dataset_name} must have "
+                "dimensions ('number', 'i_date'). "
+                f"Found {ds[variable].dims}."
+            )
+
+        if ds[
+            "month"
+        ].dims != (
+            "i_date",
+        ):
+            raise ValueError(
+                f"Variable 'month' in {dataset_name} must have "
+                "dimension ('i_date',)."
+            )
+
+        selected = ds[
+            variable
+        ].where(
+            ds[
+                "month"
+            ]
+            == month,
+            drop=True,
+        )
+
+        values = np.asarray(
+            selected.values,
+            dtype=float,
+        ).ravel()
+
+        values = values[
+            np.isfinite(
+                values
+            )
+        ]
 
         if values.size < 10:
             raise ValueError(
@@ -835,34 +970,10 @@ def read_model_month(
                 f"for {MONTH_NAMES[month - 1]}."
             )
 
-        if check_sample_count:
-            sample_count_variable = get_selected_sample_count_variable()
-
-            if sample_count_variable in ds:
-                stored_count = int(
-                    ds[sample_count_variable]
-                    .sel(month_of_year=month)
-                    .values
-                )
-
-                if stored_count != values.size:
-                    raise ValueError(
-                        f"Stored sample count ({stored_count}) does not match "
-                        f"the {values.size} finite values read for "
-                        f"{MONTH_NAMES[month - 1]}."
-                    )
-
-                print(
-                    f"{dataset_name}, {MONTH_NAMES[month - 1]}: "
-                    f"{values.size} values, sample-count check OK."
-                )
-
-            else:
-                print(
-                    f"Sample-count variable '{sample_count_variable}' was not "
-                    f"found. Using {values.size} finite values for "
-                    f"{MONTH_NAMES[month - 1]}."
-                )
+        print(
+            f"{dataset_name}, {MONTH_NAMES[month - 1]}: "
+            f"{values.size} finite values."
+        )
 
     return values
 
@@ -1250,7 +1361,7 @@ def print_panel_event_statistics(
     if bias_corrected_analysis is not None:
         fitted_datasets.append(
             (
-                "Model BC",
+                get_model_method_label(),
                 bias_corrected_analysis,
             )
         )
@@ -1470,24 +1581,10 @@ def get_shared_x_axis_label():
     return "M-year exceedance probability [%]"
 
 
-def get_y_axis_label(
-    month=None,
-):
-    """Return a generic or calendar-month-specific precipitation label."""
+def get_y_axis_label():
+    """Return the common precipitation y-axis label."""
 
-    if INCLUDE_MONTH_IN_Y_LABEL:
-        if month is None:
-            raise ValueError(
-                "A calendar month is required when "
-                "INCLUDE_MONTH_IN_Y_LABEL is True."
-            )
-
-        return (
-            f"Maximum {MONTH_NAMES[month - 1]} "
-            f"{X_DAYS}-day precipitation [mm]"
-        )
-
-    return f"Maximum monthly {X_DAYS}-day precipitation [mm]"
+    return "Monthly maximum 2-day precipitation [mm]"
 
 
 def format_x_axis(
@@ -1686,19 +1783,14 @@ def plot_panel(
 
     if not SHARE_Y_LABEL:
         ax.set_ylabel(
-            get_y_axis_label(
-                month=month,
-            ),
+            get_y_axis_label(),
             fontsize=AXIS_LABELSIZE,
         )
 
-    if INCLUDE_MONTH_IN_PANEL_TITLE:
-        panel_title = (
-            f"{panel_label}) "
-            f"{MONTH_NAMES[month - 1]}"
-        )
-    else:
-        panel_title = f"{panel_label})"
+    panel_title = (
+        f"{panel_label}) "
+        f"{MONTH_NAMES[month - 1]}"
+    )
 
     ax.set_title(
         panel_title,
@@ -1761,7 +1853,7 @@ def plot_panel(
                     [0],
                     color=BIAS_CORRECTED_UNSEEN_COLOR,
                     linewidth=CURVE_LINEWIDTH,
-                    label="Model BC",
+                    label=get_model_method_label(),
                 )
             )
 
@@ -1805,10 +1897,10 @@ def plot_figure(
     month_results,
     filename_out,
 ):
-    """Create the 2 x 2 publication-quality figure."""
+    """Create the two-panel publication-quality figure."""
 
     fig, axes = plt.subplots(
-        nrows=2,
+        nrows=1,
         ncols=2,
         figsize=(
             FIG_WIDTH_IN,
@@ -1817,56 +1909,60 @@ def plot_figure(
         constrained_layout=True,
     )
 
-    panel_labels = ["a", "b", "c", "d"]
-    panel_number = 0
+    panel_labels = [
+        "a",
+        "b",
+    ]
 
-    # Month-major order:
-    # a) first month, first M
-    # b) first month, second M
-    # c) second month, first M
-    # d) second month, second M
-    for row_index, month in enumerate(PANEL_MONTHS):
-        for column_index, m_years in enumerate(PANEL_M_YEARS):
-            result = month_results[month]
+    for panel_number, month in enumerate(
+        PANEL_MONTHS
+    ):
 
-            plot_panel(
-                ax=axes[row_index, column_index],
-                panel_label=panel_labels[panel_number],
-                month=month,
-                m_years=m_years,
-                return_periods=return_periods,
-                reference_data=result["reference_data"],
-                observation_analysis=result["observation_analysis"],
-                raw_analysis=result["raw_analysis"],
-                bias_corrected_analysis=result[
-                    "bias_corrected_analysis"
-                ],
-                show_legend=panel_number == 0,
-            )
+        result = month_results[
+            month
+        ]
 
-            panel_number += 1
+        plot_panel(
+            ax=axes[
+                panel_number
+            ],
+            panel_label=panel_labels[
+                panel_number
+            ],
+            month=month,
+            m_years=M_YEARS,
+            return_periods=return_periods,
+            reference_data=result[
+                "reference_data"
+            ],
+            observation_analysis=result[
+                "observation_analysis"
+            ],
+            raw_analysis=result[
+                "raw_analysis"
+            ],
+            bias_corrected_analysis=result[
+                "bias_corrected_analysis"
+            ],
+            show_legend=panel_number == 0,
+        )
 
     if SHARE_X_LABEL:
+
         fig.supxlabel(
             get_shared_x_axis_label(),
             fontsize=AXIS_LABELSIZE,
         )
 
     if SHARE_Y_LABEL:
-        shared_y_month = (
-            PANEL_MONTHS[0]
-            if INCLUDE_MONTH_IN_Y_LABEL
-            else None
-        )
 
         fig.supylabel(
-            get_y_axis_label(
-                month=shared_y_month,
-            ),
+            get_y_axis_label(),
             fontsize=AXIS_LABELSIZE,
         )
 
     if WRITE_TO_FILE:
+
         fig.savefig(
             filename_out,
             dpi=FIGURE_DPI,
@@ -1888,17 +1984,22 @@ def plot_figure(
 # =============================================================================
 
 def main():
-    """Run the two-month, two-horizon analysis."""
+    """Run the two-month, one-year-horizon analysis."""
 
     validate_user_settings()
 
     filename_reference = make_reference_filename()
-    filename_raw_model = make_raw_model_filename()
-    filename_bias_corrected_model = make_bias_corrected_model_filename()
+    filename_model = make_model_filename()
     filename_out = make_figure_filename()
 
-    raw_variable = get_raw_model_variable()
-    bias_corrected_variable = get_bias_corrected_model_variable()
+    model_variable = get_model_variable()
+
+    if not os.path.isfile(
+        filename_model
+    ):
+        raise FileNotFoundError(
+            f"Selected compact model file not found: {filename_model}"
+        )
 
     print(
         f"Reference dataset:             {get_reference_label()}"
@@ -1907,33 +2008,21 @@ def main():
         f"Reference file:                {filename_reference}"
     )
     print(
-        f"Model-data mode:               {MODEL_DATA_MODE}"
+        f"Model-data method:             {MODEL_DATA_METHOD}"
     )
-
-    if plot_raw_model():
-        print(
-            f"Raw UNSEEN file:               {filename_raw_model}"
-        )
-        print(
-            f"Raw UNSEEN variable:           {raw_variable}"
-        )
-
-    if plot_bias_corrected_model():
-        print(
-            f"Bias-corrected UNSEEN file:    "
-            f"{filename_bias_corrected_model}"
-        )
-        print(
-            f"Bias-corrected variable:       "
-            f"{bias_corrected_variable}"
-        )
+    print(
+        f"Model file:                    {filename_model}"
+    )
+    print(
+        f"Model variable:                {model_variable}"
+    )
 
     print(
         f"Months:                        "
         f"{', '.join(MONTH_NAMES[m - 1] for m in PANEL_MONTHS)}"
     )
     print(
-        f"M-year horizons:               {PANEL_M_YEARS}"
+        f"M-year horizon:                {M_YEARS}"
     )
     print(
         f"X-axis mode:                   {X_AXIS_MODE}"
@@ -1962,42 +2051,28 @@ def main():
             random_seed=RANDOM_SEED + 20 * month_index,
         )
 
-        raw_analysis = None
+        model_values = read_model_month(
+            filename=filename_model,
+            variable=model_variable,
+            month=month,
+            dataset_name=(
+                f"UNSEEN model dataset "
+                f"({MODEL_DATA_METHOD})"
+            ),
+        )
 
-        if plot_raw_model():
-            raw_values = read_model_month(
-                filename=filename_raw_model,
-                variable=raw_variable,
-                month=month,
-                dataset_name="raw UNSEEN dataset",
-                check_sample_count=True,
-            )
+        model_analysis = analyse_distribution(
+            values=model_values,
+            return_periods=return_periods,
+            random_seed=RANDOM_SEED + 20 * month_index + 1,
+        )
 
-            raw_analysis = analyse_distribution(
-                values=raw_values,
-                return_periods=return_periods,
-                random_seed=RANDOM_SEED + 20 * month_index + 1,
-            )
-
-        bias_corrected_analysis = None
-
-        if plot_bias_corrected_model():
-            bias_corrected_values = read_model_month(
-                filename=filename_bias_corrected_model,
-                variable=bias_corrected_variable,
-                month=month,
-                dataset_name=(
-                    f"bias-corrected UNSEEN dataset "
-                    f"({get_reference_label()} reference)"
-                ),
-                check_sample_count=False,
-            )
-
-            bias_corrected_analysis = analyse_distribution(
-                values=bias_corrected_values,
-                return_periods=return_periods,
-                random_seed=RANDOM_SEED + 20 * month_index + 2,
-            )
+        if model_is_raw():
+            raw_analysis = model_analysis
+            bias_corrected_analysis = None
+        else:
+            raw_analysis = None
+            bias_corrected_analysis = model_analysis
 
         month_results[month] = {
             "reference_data": reference_data,
@@ -2011,17 +2086,10 @@ def main():
             f"{observation_analysis['values'].size}"
         )
 
-        if raw_analysis is not None:
-            print(
-                f"Raw UNSEEN sample size:        "
-                f"{raw_analysis['values'].size}"
-            )
-
-        if bias_corrected_analysis is not None:
-            print(
-                f"Bias-corrected sample size:    "
-                f"{bias_corrected_analysis['values'].size}"
-            )
+        print(
+            f"{get_model_method_label()} sample size: "
+            f"{model_analysis['values'].size}"
+        )
 
         print(
             f"{MONTH_NAMES[month - 1]} record "
@@ -2051,7 +2119,7 @@ def main():
     # c) second month, first M
     # d) second month, second M
     for month in PANEL_MONTHS:
-        for m_years in PANEL_M_YEARS:
+        for m_years in [M_YEARS]:
             result = month_results[month]
 
             print_panel_event_statistics(

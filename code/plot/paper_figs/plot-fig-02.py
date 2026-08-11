@@ -1,32 +1,62 @@
 """
 Plot monthly distributions of catchment precipitation extremes.
 
-The S2S model input is read from the monthly extreme-sample file produced by
-the lead-bin sample-building script.
+The S2S model input is read from the compact monthly maximum-sample file
+produced from the preprocessed combined forecast/hindcast dataset.
 
-The model sample can optionally be read from the multiplicatively
-bias-corrected file produced by the bias-correction script. Set
-``USE_BIAS_CORRECTED_MODEL = True`` and select ``era5`` or ``senorge`` as
-the correction reference.
+Expected raw model structure
+----------------------------
+The model sample is organized by ensemble member and initialization:
 
+    tp24_max(number, i_date)
+    tp24_max_lead<start>_<end>(number, i_date)
+    month(i_date)
+    model_type(i_date)
+    hdate(i_date)
+    date_of_max(number, i_date)
+    lead_of_max(number, i_date)
+
+Unlike the older sample format, calendar month is not a dimension. Instead,
+`month(i_date)` assigns every initialization to one month. To obtain a monthly
+distribution, the script:
+
+1. selects i_date values whose `month` equals the requested calendar month;
+2. reads all ensemble-member values for those initializations;
+3. flattens the selected (number, i_date) values;
+4. removes NaNs.
+
+Forecasts have 51 ensemble members. Hindcasts have 11 real members and NaN
+padding for the remaining member positions, so removing NaNs produces the
+correct monthly sample automatically.
+
+Model sample selection
+----------------------
 The model sample can be selected in two ways:
 
     model_sampling_group = "full"
-        Read the complete usable lead-time distribution.
+        Read tp24_max over the complete usable accumulated lead range.
 
     model_sampling_group = "split1", "split2", ...
-        Read one of the subsampled distributions. The number and lead bounds
-        of these distributions are determined automatically from
-        `number_of_lead_bins`.
+        Read one lead-location subset such as tp24_max_lead17_31.
 
-The lead-bin calculation exactly follows the sample-building script:
+The number and bounds of the lead bins are determined from the same settings
+used by the sample-building script.
 
-1. Account for the X-day accumulation first.
-2. Determine the usable accumulated ending leads.
-3. Split those usable leads into `number_of_lead_bins` consecutive,
-   approximately equal bins.
-4. If the usable lead count is not evenly divisible, extra leads are assigned
-   to the later bins.
+Model-data method
+-----------------
+The model sample can be selected with one user parameter:
+
+    MODEL_DATA_METHOD = "raw"
+        Read the raw monthly maximum-sample file.
+
+    MODEL_DATA_METHOD = "mm", "q", "doy", "ld", or "q_doy"
+        Read a bias-corrected monthly maximum-sample file whose filename ends
+        in `_bc_<method>_<reference>.nc`.
+
+For bias-corrected input, BIAS_CORRECTION_REFERENCE selects either "senorge"
+or "era5". The compact output files from the bias-correction/sample-building
+scripts retain the original model variable names, so this plotting script always
+reads `tp24_max` or `tp24_max_lead<start>_<end>` without a BC suffix.
 
 Example
 -------
@@ -37,27 +67,11 @@ With:
     x_days = 2
     number_of_lead_bins = 2
 
-the usable accumulated ending leads are 17-46, and the available model
-distributions are:
+the usable accumulated ending leads are 17-46, and the available variables are:
 
-    "full"   -> max_value_lead17_46
-    "split1" -> max_value_lead17_31
-    "split2" -> max_value_lead32_46
-
-With x_days = 3 and number_of_lead_bins = 2:
-
-    "full"   -> max_value_lead18_46
-    "split1" -> max_value_lead18_31
-    "split2" -> max_value_lead32_46
-
-The script also reads the corresponding monthly sample-count variable when it
-is available, for example:
-
-    max_value_lead17_31
-        -> sample_count_lead17_31
-
-This count is used as a consistency check against the finite values actually
-read from the model distribution.
+    "full"   -> tp24_max
+    "split1" -> tp24_max_lead17_31
+    "split2" -> tp24_max_lead32_46
 """
 
 import os
@@ -111,22 +125,27 @@ number_of_lead_bins = 2
 model_sampling_group = "full"
 
 
-# Choose whether to use the original or bias-corrected S2S model sample.
+# Select the model-data source / bias-correction method.
 #
-# False -> original model sample
-# True  -> bias-corrected model sample created by the bias-correction script
-USE_BIAS_CORRECTED_MODEL = False
+# Options:
+#     "raw"   -> uncorrected monthly maximum sample
+#     "mm"    -> monthly-mean multiplicative correction
+#     "q"     -> quantile-based correction
+#     "doy"   -> day-of-year correction
+#     "ld"    -> lead-day correction
+#     "q_doy" -> combined quantile/day-of-year correction
+MODEL_DATA_METHOD = "q_doy"
 
-# Reference dataset used for the bias correction.
-# Only used when USE_BIAS_CORRECTED_MODEL = True.
+# Reference dataset used for bias correction. Ignored when
+# MODEL_DATA_METHOD == "raw".
 #
 # Options:
 #     "era5"
 #     "senorge"
-BIAS_CORRECTION_REFERENCE = "senorge"
+BIAS_CORRECTION_REFERENCE = "era5"
 
 
-write2file = True
+write2file = False
 
 
 # =============================================================================
@@ -269,7 +288,23 @@ def validate_model_sampling_settings():
         )
 
 
-    if USE_BIAS_CORRECTED_MODEL:
+    valid_methods = {
+        "raw",
+        "mm",
+        "q",
+        "doy",
+        "ld",
+        "q_doy",
+    }
+
+    if MODEL_DATA_METHOD not in valid_methods:
+        raise ValueError(
+            f"MODEL_DATA_METHOD must be one of "
+            f"{sorted(valid_methods)}. "
+            f"Got '{MODEL_DATA_METHOD}'."
+        )
+
+    if MODEL_DATA_METHOD != "raw":
 
         valid_references = {
             "era5",
@@ -432,42 +467,51 @@ def get_selected_model_lead_range():
 
 
 def get_selected_model_variable():
-    """Return the max-value variable for the selected S2S distribution."""
+    """Return the variable name for the selected S2S distribution."""
 
-    (
-        lead_start,
-        lead_end,
-    ) = get_selected_model_lead_range()
+    if model_sampling_group == "full":
 
+        variable = "tp24_max"
 
-    variable = (
-        f"max_value_lead"
-        f"{lead_start}_{lead_end}"
-    )
+    else:
 
-
-    if USE_BIAS_CORRECTED_MODEL:
+        (
+            lead_start,
+            lead_end,
+        ) = get_selected_model_lead_range()
 
         variable = (
-            f"{variable}_bc_"
-            f"{BIAS_CORRECTION_REFERENCE}"
+            f"tp24_max_lead"
+            f"{lead_start}_{lead_end}"
         )
 
 
+    # Bias-corrected compact sample files retain the same variable names as
+    # the raw compact sample file. The method/reference are encoded only in
+    # the filename.
     return variable
 
 
 def get_selected_sample_count_variable():
-    """Return the sample-count variable matching the selected distribution."""
+    """
+    Return the optional stored-count variable name.
+
+    The current compact sample files do not store monthly count variables.
+    This name is retained only for compatibility with a future file that may
+    choose to include them.
+    """
+
+    if model_sampling_group == "full":
+
+        return "sample_count_tp24_max"
 
     (
         lead_start,
         lead_end,
     ) = get_selected_model_lead_range()
 
-
     return (
-        f"sample_count_lead"
+        f"sample_count_tp24_max_lead"
         f"{lead_start}_{lead_end}"
     )
 
@@ -518,14 +562,14 @@ def get_model_sampling_label():
 
     if model_sampling_group == "full":
 
-        if USE_BIAS_CORRECTED_MODEL:
+        if MODEL_DATA_METHOD != "raw":
 
             return (
-                f"Model extremes, bias corrected to "
-                f"{BIAS_CORRECTION_REFERENCE.upper()}"
+                f"Model extremes, {MODEL_DATA_METHOD} bias correction "
+                f"to {BIAS_CORRECTION_REFERENCE.upper()}"
             )
 
-        return "Model extremes"
+        return "Model extremes (raw)"
 
 
     split_number = int(
@@ -542,12 +586,14 @@ def get_model_sampling_label():
     )
 
 
-    if USE_BIAS_CORRECTED_MODEL:
+    if MODEL_DATA_METHOD != "raw":
 
         label += (
-            f", bias corrected to "
+            f", {MODEL_DATA_METHOD} bias correction to "
             f"{BIAS_CORRECTION_REFERENCE.upper()}"
         )
+    else:
+        label += ", raw"
 
 
     return label
@@ -578,37 +624,52 @@ def get_catchment_label(
 # Filename helpers
 # =============================================================================
 
+def get_file_id(
+    catchment_name,
+):
+    """Return the short catchment label used in model-sample filenames."""
+
+    if catchment_name.startswith(
+        "regine_"
+    ):
+        return catchment_name.replace(
+            "regine_",
+            "",
+            1,
+        )
+
+    return catchment_name
+
+
+
 def make_model_filename():
     """
-    Create the S2S input filename.
+    Create the compact S2S monthly-sample input filename.
 
-    When USE_BIAS_CORRECTED_MODEL is True, read the output from the
-    bias-correction script, which appends ``_bc_<reference>`` to the
-    original model-sample filename.
+    Bias-corrected compact sample files use the same structure and append
+    `_bc_<method>_<reference>` to the raw sample filename.
     """
 
     lead_label = (
         lead_split_filename_label()
     )
 
-
     filename = os.path.join(
         config.dirs[
             "s2s_processed"
         ],
         (
-            f"unseen_sample_monthly_catchment_precipitation_extremes_"
-            f"{MODEL_VARIABLE}_{x_days}dayacc_"
-            f"{catchment}_"
+            f"monthly_max_samples_"
+            f"{MODEL_VARIABLE}_"
+            f"{x_days}dayacc_"
+            f"{get_file_id(catchment)}_"
             f"{lead_label}_"
-            f"forecast_hindcast_"
             f"{forecast_date_range[0]}_"
             f"{forecast_date_range[1]}.nc"
         ),
     )
 
-
-    if USE_BIAS_CORRECTED_MODEL:
+    if MODEL_DATA_METHOD != "raw":
 
         stem, extension = os.path.splitext(
             filename
@@ -616,10 +677,10 @@ def make_model_filename():
 
         filename = (
             f"{stem}_bc_"
+            f"{MODEL_DATA_METHOD}_"
             f"{BIAS_CORRECTION_REFERENCE}"
             f"{extension}"
         )
-
 
     return filename
 
@@ -653,9 +714,10 @@ def make_senorge_filename():
 def make_figure_filename():
     """Create an output figure name that records the model-data choice."""
 
-    if USE_BIAS_CORRECTED_MODEL:
+    if MODEL_DATA_METHOD != "raw":
         suffix = (
-            f"bc-{BIAS_CORRECTION_REFERENCE}"
+            f"bc-{MODEL_DATA_METHOD}-"
+            f"{BIAS_CORRECTION_REFERENCE}"
         )
     else:
         suffix = "raw"
@@ -735,17 +797,11 @@ def check_variable_exists(
 # Model data extraction
 # =============================================================================
 
-def get_model_values_by_month(
+def validate_compact_model_structure(
     model_ds,
     variable,
 ):
-    """
-    Convert the selected S2S distribution into one finite-value array per month.
-
-    Expected structure:
-
-        model_ds[variable](month_of_year, index)
-    """
+    """Check the compact `(number, i_date)` monthly-sample structure."""
 
     check_variable_exists(
         model_ds,
@@ -753,30 +809,92 @@ def get_model_values_by_month(
         "model dataset",
     )
 
+    check_variable_exists(
+        model_ds,
+        "month",
+        "model dataset",
+    )
 
-    values_by_month = []
+    required_dimensions = {
+        "number",
+        "i_date",
+    }
 
+    if set(
+        model_ds[
+            variable
+        ].dims
+    ) != required_dimensions:
 
-    for month in MONTHS:
+        raise ValueError(
+            f"Model variable '{variable}' must contain dimensions "
+            f"{sorted(required_dimensions)}, but has "
+            f"{model_ds[variable].dims}."
+        )
 
-        values = (
-            model_ds[variable]
-            .sel(
-                month_of_year=month
-            )
-            .values
+    if model_ds[
+        "month"
+    ].dims != (
+        "i_date",
+    ):
+
+        raise ValueError(
+            "Model variable 'month' must have dimensions ('i_date',), "
+            f"but has {model_ds['month'].dims}."
         )
 
 
-        values = values[
-            np.isfinite(values)
-        ]
+def get_model_values_by_month(
+    model_ds,
+    variable,
+):
+    """
+    Return one flattened finite-value array for each calendar month.
 
+    For a requested month:
+
+    1. identify i_date positions where month(i_date) matches;
+    2. retain every ensemble member for those initializations;
+    3. flatten number and i_date;
+    4. remove NaNs.
+
+    NaN removal also removes the padded forecast-member positions that do not
+    exist for the 11-member hindcasts.
+    """
+
+    validate_compact_model_structure(
+        model_ds,
+        variable,
+    )
+
+    values_by_month = []
+
+    for month_number in MONTHS:
+
+        selected = (
+            model_ds[
+                variable
+            ]
+            .where(
+                model_ds[
+                    "month"
+                ]
+                == month_number,
+                drop=True,
+            )
+        )
+
+        values = selected.values.ravel()
+
+        values = values[
+            np.isfinite(
+                values
+            )
+        ]
 
         values_by_month.append(
             values
         )
-
 
     return values_by_month
 
@@ -787,60 +905,75 @@ def check_model_sample_counts(
     sample_count_variable,
 ):
     """
-    Compare finite values read from the model variable with its stored counts.
+    Print monthly finite-value counts.
 
-    The check is skipped if the model file does not contain the count variable.
+    The compact model sample normally does not contain stored sample-count
+    variables. When an optional count variable exists, compare it with the
+    values read from the selected model variable.
     """
 
-    if (
-        sample_count_variable
-        not in model_ds
-    ):
+    calculated_counts = np.array(
+        [
+            values.size
+            for values in model_values_by_month
+        ],
+        dtype=int,
+    )
 
-        print()
+    print()
+    print(
+        "Model sample counts"
+    )
+    print(
+        "-------------------"
+    )
+
+    if sample_count_variable not in model_ds:
+
         print(
-            f"Sample-count variable "
-            f"'{sample_count_variable}' "
-            f"was not found."
+            f"{'Month':<8}"
+            f"{'read':>10}"
         )
 
         print(
-            "Continuing using finite-value counts from the "
-            "selected maximum variable."
+            "-" * 18
+        )
+
+        for month_label, calculated in zip(
+            MONTH_LABELS,
+            calculated_counts,
+        ):
+
+            print(
+                f"{month_label:<8}"
+                f"{calculated:>10}"
+            )
+
+        print(
+            "-" * 18
+        )
+
+        print(
+            "No stored sample-count variable was present; "
+            "counts above were calculated from finite values."
         )
 
         return
-
 
     stored_counts = (
         model_ds[
             sample_count_variable
         ]
-        .sel(
-            month_of_year=MONTHS
-        )
         .values
         .astype(int)
     )
 
+    if stored_counts.size != 12:
 
-    calculated_counts = np.array(
-        [
-            values.size
-            for values
-            in model_values_by_month
-        ],
-        dtype=int,
-    )
-
-
-    print()
-    print(
-        "Model sample-count check"
-    )
-    print(
-        "------------------------"
-    )
+        raise ValueError(
+            f"Stored sample-count variable '{sample_count_variable}' "
+            "must contain 12 monthly values."
+        )
 
     print(
         f"{'Month':<8}"
@@ -853,9 +986,7 @@ def check_model_sample_counts(
         "-" * 38
     )
 
-
     all_ok = True
-
 
     for (
         month_label,
@@ -873,10 +1004,8 @@ def check_model_sample_counts(
             else "FAIL"
         )
 
-
         if check == "FAIL":
             all_ok = False
-
 
         print(
             f"{month_label:<8}"
@@ -885,24 +1014,20 @@ def check_model_sample_counts(
             f"{check:>10}"
         )
 
-
     print(
         "-" * 38
     )
 
-
-    if all_ok:
-
-        print(
-            "Sample-count check passed."
-        )
-
-    else:
+    if not all_ok:
 
         raise ValueError(
             "Stored model sample counts do not match the finite "
             "values read from the selected model distribution."
         )
+
+    print(
+        "Sample-count check passed."
+    )
 
 
 # =============================================================================
@@ -1001,38 +1126,39 @@ def get_highest_may_model_event(
     model_ds,
     variable,
 ):
-    """Get the largest May event from the selected S2S distribution."""
+    """Get the largest May event from the compact S2S distribution."""
 
-    check_variable_exists(
+    validate_compact_model_structure(
         model_ds,
         variable,
-        "model dataset",
     )
-
 
     may_values = (
-        model_ds[variable]
-        .sel(
-            month_of_year=5
-        )
-    )
-
-
-    finite_values = (
-        may_values.values[
-            np.isfinite(
-                may_values.values
-            )
+        model_ds[
+            variable
         ]
+        .where(
+            model_ds[
+                "month"
+            ]
+            == 5,
+            drop=True,
+        )
+        .values
+        .ravel()
     )
 
+    finite_values = may_values[
+        np.isfinite(
+            may_values
+        )
+    ]
 
     if finite_values.size == 0:
 
         raise ValueError(
             f"No finite May values were found in '{variable}'."
         )
-
 
     return (
         5,
@@ -1483,11 +1609,11 @@ if __name__ == "__main__":
     )
 
     print(
-        f"Bias corrected:   "
-        f"{USE_BIAS_CORRECTED_MODEL}"
+        f"Data method:       "
+        f"{MODEL_DATA_METHOD}"
     )
 
-    if USE_BIAS_CORRECTED_MODEL:
+    if MODEL_DATA_METHOD != "raw":
 
         print(
             f"BC reference:     "
@@ -1510,15 +1636,7 @@ if __name__ == "__main__":
     ) = get_full_lead_range()
 
 
-    full_variable = (
-        f"max_value_lead"
-        f"{full_start}_{full_end}"
-    )
-
-    if USE_BIAS_CORRECTED_MODEL:
-        full_variable += (
-            f"_bc_{BIAS_CORRECTION_REFERENCE}"
-        )
+    full_variable = "tp24_max"
 
     print(
         f"full:   "
@@ -1535,14 +1653,9 @@ if __name__ == "__main__":
     ):
 
         split_variable = (
-            f"max_value_lead"
+            f"tp24_max_lead"
             f"{bin_start}_{bin_end}"
         )
-
-        if USE_BIAS_CORRECTED_MODEL:
-            split_variable += (
-                f"_bc_{BIAS_CORRECTION_REFERENCE}"
-            )
 
         print(
             f"split{bin_number}: "
