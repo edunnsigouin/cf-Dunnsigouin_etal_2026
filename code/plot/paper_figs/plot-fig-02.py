@@ -18,7 +18,7 @@ from Dunnsigouin_etal_2026 import config
 # User settings
 # =============================================================================
 
-catchment = "regine_drammen"
+catchment = "regine_glomma"
 x_days = 2
 
 forecast_date_range = ["2020-01-02", "2022-12-29"]
@@ -259,10 +259,7 @@ def make_figure_filename():
     if model_sampling_group != "full":
         suffix += f"-{model_sampling_group}"
 
-    if catchment == "regine_drammen":
-        filename = f"fig-02-{suffix}-{REFERENCE_DATASET}.png"
-    else:
-        filename = f"fig-02-{catchment}-{suffix}-{REFERENCE_DATASET}.png"
+    filename = f"fig-02-{catchment}-{suffix}-{REFERENCE_DATASET}.png"
 
     return os.path.join(config.dirs["fig"], filename)
 
