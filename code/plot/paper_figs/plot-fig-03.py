@@ -96,10 +96,20 @@ definition and model bias correction.
 
 Extreme-value calculation
 -------------------------
-Each selected calendar month is fitted once for each dataset. Uncertainty is
-estimated with non-parametric bootstrap resampling: each bootstrap sample is
-drawn with replacement from the original values, refitted, and converted to a
-return-level curve. Percentiles across bootstrap curves form the confidence band.
+Each selected calendar month is fitted once for each dataset. Bootstrap
+uncertainty can be estimated in two ways:
+
+    "nonparametric"
+        Draw each bootstrap sample with replacement from the original values at
+        the original sample size, refit the selected distribution, and calculate
+        a return-level curve.
+
+    "parametric"
+        Fit the selected distribution once to the original values, simulate each
+        same-size bootstrap sample from that fitted distribution, refit it, and
+        calculate a return-level curve.
+
+Percentiles across bootstrap return-level curves form the confidence band.
 
 Because M = 1:
 
@@ -239,7 +249,7 @@ MODEL_FILENAME_OVERRIDE = None
 #     1 -> GEV
 #     2 -> Gumbel
 #     3 -> GenEx
-EXTREME_VALUE_DISTRIBUTION = 1
+EXTREME_VALUE_DISTRIBUTION = 2
 
 
 # -----------------------------------------------------------------------------
@@ -261,7 +271,12 @@ MIN_RETURN_PERIOD = 1.01
 MAX_RETURN_PERIOD = 10000000.0
 NUMBER_OF_RETURN_PERIODS = 500
 
-NUMBER_OF_BOOTSTRAPS = 10
+# Bootstrap method:
+#     "nonparametric" -> resample original values with replacement
+#     "parametric"    -> fit once, simulate from the fitted distribution, then refit
+BOOTSTRAP_METHOD = "parametric"
+
+NUMBER_OF_BOOTSTRAPS = 100
 CONFIDENCE_LEVEL = 0.95
 RANDOM_SEED = 42
 
@@ -426,6 +441,9 @@ def validate_user_settings():
 
     if not isinstance(SUBSAMPLE_MODEL_TO_REFERENCE_LENGTH, bool):
         raise TypeError("SUBSAMPLE_MODEL_TO_REFERENCE_LENGTH must be True or False.")
+
+    if BOOTSTRAP_METHOD not in {"nonparametric", "parametric"}:
+        raise ValueError("BOOTSTRAP_METHOD must be 'nonparametric' or 'parametric'.")
 
     if NUMBER_OF_BOOTSTRAPS < 1:
         raise ValueError("NUMBER_OF_BOOTSTRAPS must be at least 1.")
@@ -1044,6 +1062,40 @@ def fit_distribution(values):
     return fit_genex(values)
 
 
+def simulate_from_fitted_distribution(parameters, sample_size, rng):
+    """Simulate one sample from the selected fitted extreme-value distribution."""
+
+    if EXTREME_VALUE_DISTRIBUTION == 1:
+        shape_c, location, scale = parameters
+        return genextreme.rvs(
+            shape_c, loc=location, scale=scale, size=sample_size, random_state=rng
+        )
+
+    if EXTREME_VALUE_DISTRIBUTION == 2:
+        location, scale = parameters
+        return gumbel_r.rvs(loc=location, scale=scale, size=sample_size, random_state=rng)
+
+    shape, scale = parameters
+    probabilities = rng.random(sample_size)
+    return -scale * np.log1p(-np.power(probabilities, 1.0 / shape))
+
+
+def make_bootstrap_sample(sample_values, rng, fitted_parameters=None):
+    """Generate one bootstrap sample using the configured bootstrap method."""
+
+    if BOOTSTRAP_METHOD == "nonparametric":
+        return rng.choice(sample_values, size=sample_values.size, replace=True)
+
+    if fitted_parameters is None:
+        raise ValueError("Parametric bootstrap requires fitted parameters.")
+
+    return simulate_from_fitted_distribution(
+        fitted_parameters,
+        sample_values.size,
+        rng,
+    )
+
+
 def genex_ppf(probabilities, parameters):
     """GenEx quantile function."""
 
@@ -1279,22 +1331,30 @@ def make_return_period_grid():
     return np.geomspace(MIN_RETURN_PERIOD, MAX_RETURN_PERIOD, NUMBER_OF_RETURN_PERIODS)
 
 
-def nonparametric_bootstrap_return_levels(sample_values, return_periods, random_seed):
-    """Estimate confidence limits by resampling the original sample with replacement."""
+def bootstrap_return_levels(sample_values, return_periods, random_seed):
+    """Estimate confidence limits with the configured bootstrap method."""
 
     rng = np.random.default_rng(random_seed)
-    sample_size = sample_values.size
     bootstrap_levels = np.full(
-        (NUMBER_OF_BOOTSTRAPS, return_periods.size), np.nan, dtype=float
+        (NUMBER_OF_BOOTSTRAPS, return_periods.size),
+        np.nan,
+        dtype=float,
     )
+
+    fitted_parameters = None
+    if BOOTSTRAP_METHOD == "parametric":
+        fitted_parameters = fit_distribution(sample_values)
 
     successful_fits = 0
 
     for bootstrap_number in range(NUMBER_OF_BOOTSTRAPS):
-        resampled_values = rng.choice(sample_values, size=sample_size, replace=True)
-
         try:
-            parameters = fit_distribution(resampled_values)
+            bootstrap_values = make_bootstrap_sample(
+                sample_values,
+                rng,
+                fitted_parameters=fitted_parameters,
+            )
+            parameters = fit_distribution(bootstrap_values)
             levels = calculate_return_levels(return_periods, parameters)
         except (RuntimeError, ValueError, FloatingPointError):
             continue
@@ -1314,7 +1374,9 @@ def nonparametric_bootstrap_return_levels(sample_values, return_periods, random_
     alpha = 1.0 - CONFIDENCE_LEVEL
     lower = np.nanpercentile(bootstrap_levels, 100.0 * alpha / 2.0, axis=0)
     upper = np.nanpercentile(
-        bootstrap_levels, 100.0 * (1.0 - alpha / 2.0), axis=0
+        bootstrap_levels,
+        100.0 * (1.0 - alpha / 2.0),
+        axis=0,
     )
 
     return lower, upper, successful_fits
@@ -1327,7 +1389,7 @@ def analyse_distribution(values, return_periods, random_seed):
 
     fitted_levels = calculate_return_levels(return_periods, parameters)
 
-    lower, upper, successful_fits = nonparametric_bootstrap_return_levels(
+    lower, upper, successful_fits = bootstrap_return_levels(
         sample_values=values,
         return_periods=return_periods,
         random_seed=random_seed,
@@ -1796,9 +1858,8 @@ def main():
     print(
         f"X-axis mode:                   {X_AXIS_MODE}"
     )
-    print(
-        f"Distribution:                  {get_distribution_name()}"
-    )
+    print(f"Distribution:                  {get_distribution_name()}")
+    print(f"Bootstrap method:              {BOOTSTRAP_METHOD}")
 
     return_periods = make_return_period_grid()
     month_results = {}
