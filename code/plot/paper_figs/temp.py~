@@ -1,1461 +1,505 @@
-#!/usr/bin/env python3
 """
-Combined Storm Hans figure.
-
-Figure idea
------------
-Panels a-d are map views of four selected Storm Hans dates.
-
-Each map shows:
-    - S2S daily accumulated precipitation as shading;
-    - S2S mean sea level pressure as labelled grey contours;
-    - the selected catchment boundary in red.
-
-Panel e is a catchment-mean precipitation time series over the event period.
-
-It shows:
-    - the full S2S forecast ensemble in grey;
-    - the wettest forecast ensemble member highlighted in green;
-        - seNorge Storm Hans precipitation in red;
-    - the forecast initialization date as a vertical dashed line.
-
-Together, panels a-d show the spatial weather evolution, while panel e shows
-how catchment-mean precipitation evolved through time for the forecast and
-the seNorge observational reference dataset.
+Plot monthly S2S precipitation-extreme distributions together with the
+1957–2022 record and the 2023 Storm Hans value from one reference dataset
+(ERA5 or SeNorge). The same reference dataset is used for model bias correction.
 """
 
-from pathlib import Path
+import os
 
-import cartopy.crs as ccrs
-import geopandas as gpd
-import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
 import numpy as np
-import pandas as pd
 import xarray as xr
-from matplotlib.gridspec import GridSpec
 from matplotlib.lines import Line2D
-from shapely.geometry import MultiPolygon, Polygon
 
-from Dunnsigouin_etal_2026 import config, misc
-
-
-# =============================================================================
-# 1. User settings
-# =============================================================================
-
-CATCHMENT_NAME = "drammen"  # options: "drammen", "glomma"
-
-FORECAST_DATE = "2023-08-05"
-ENSEMBLE_MEMBER = 48
-
-EVENT_DATES = [
-    "2023-08-06",
-    "2023-08-07",
-    "2023-08-08",
-    "2023-08-09",
-]
-
-TIMESERIES_N_DAYS_BEFORE = 3
-TIMESERIES_M_DAYS_LEAD = 6
-
-WRITE_TO_FILE = False
+from Dunnsigouin_etal_2026 import config
 
 
 # =============================================================================
-# 2. Data settings
+# User settings
 # =============================================================================
 
-MODEL_TYPE = "forecast"
+catchment = "regine_drammen"
+x_days = 2
 
-S2S_GRID = "0.25x0.25"
-ERA5_LAND_GRID = "0.1x0.1"
+forecast_date_range = ["2020-01-02", "2022-12-29"]
+observation_years = ["1957", "2023"]
 
-# Map-panel variables
-MAP_PRECIP_VAR = "tp24"
-MAP_MSL_VAR = "msl"
+# Daily lead range used when creating the S2S model sample.
+first_input_lead = 16
+last_input_lead = 46
 
-# Panel e precipitation variables
-PRECIP_FORECAST_VAR = "tp24"
-PRECIP_ERA5_VAR = "tp24"
-PRECIP_SENORGE_VAR = "rr"
-PRECIP_ACCUMULATION_DAYS = 1
+# Must match the value used by the sample-building script.
+number_of_lead_bins = 2
 
+# S2S distribution to plot: "full", "split1", "split2", ...
+model_sampling_group = "full"
 
-# =============================================================================
-# 3. Paths
-# =============================================================================
+# Model-data source / bias-correction method:
+# "raw", "mm", "q", "doy", "ld", or "q_doy".
+MODEL_DATA_METHOD = "raw"
 
-PATH_OUT = Path(config.dirs["fig"])
-PATH_CATCHMENT = Path(config.dirs["nve"])
+# Reference dataset used both in the figure and for bias correction.
+# Options: "era5" or "senorge".
+REFERENCE_DATASET = "era5"
 
-S2S_BASE_DIR = Path("/nird/datapeak/NS9873K/etdu/raw/s2s/mars/ecmwf")
+# ERA5 grid used when REFERENCE_DATASET == "era5".
+era5_grid = "0.5x0.5"
 
-PRECIP_FORECAST_FILE = (
-    Path(config.dirs["s2s_forecast_daily"])
-    / PRECIP_FORECAST_VAR
-    / f"{PRECIP_FORECAST_VAR}_{S2S_GRID}_{FORECAST_DATE}.nc"
-)
-
-PRECIP_ERA5_PATH = Path(config.dirs["era5_continuous_daily"]) / PRECIP_ERA5_VAR
-PRECIP_ERA5_FILE_PATTERN = f"{PRECIP_ERA5_VAR}_{S2S_GRID}" + "_{year}.nc"
-PRECIP_ERA5_DOMAIN = "norway"
-
-PRECIP_SENORGE_PATH = (
-    Path(config.dirs["senorge_continuous_daily"])
-    / PRECIP_SENORGE_VAR
-)
-PRECIP_SENORGE_FILE_PATTERN = f"{PRECIP_SENORGE_VAR}" + "_{year}.nc"
-
-OUTPUT_FILENAME = PATH_OUT / "fig-0X2.png"
+write2file = False
 
 
 # =============================================================================
-# 4. Figure settings
+# Dataset and plot settings
 # =============================================================================
 
-FIG_WIDTH_IN = 9.4
-FIG_HEIGHT_IN = 13.4
-
-MAP_EXTENT = [-10, 25, 50, 70]
-MAP_WSPACE = 0.02
-MAP_HSPACE = 0.12
-
-CENTRAL_LON = 10.0
-CENTRAL_LAT = 62.0
-
-TICK_LABELSIZE = 12
-AXIS_LABELSIZE = 11
-TITLE_FONTSIZE = 13
-CONTOUR_LABELSIZE = 9
-LEGEND_FONTSIZE = 9
-
-DATE_TICK_FORMAT = "%d %b"
-DATE_TICK_INTERVAL_DAYS = 1
-DATE_TICK_ROTATION = 30
-
-
-# =============================================================================
-# 5. Plot styling
-# =============================================================================
-
-PRECIP_LEVELS = np.arange(5, 55, 5)
-PRECIP_ZERO_THRESHOLD = 5.0
-PRECIP_CMAP = plt.get_cmap("GnBu").copy()
-PRECIP_CMAP.set_under("white")
-
-MSL_CONTOUR_LEVELS = np.arange(975, 1045, 5)
-MSL_CONTOUR_COLOR = "0.7"
-MSL_CONTOUR_LINEWIDTH = 1.5
-
-CATCHMENT_EDGE_COLOR = "red"
-CATCHMENT_LINEWIDTH = 1.0
-CATCHMENT_CRS_IF_MISSING = "EPSG:4326"
-
-PRECIP_ENSEMBLE_COLOR = "0.7"
-PRECIP_ENSEMBLE_LINEWIDTH = 1.0
-PRECIP_ENSEMBLE_ALPHA = 0.6
-PRECIP_HIGHLIGHT_COLOR = "tab:green"
-PRECIP_ERA5_COLOR = "tab:blue"
-PRECIP_SENORGE_COLOR = "tab:red"
-PRECIP_LINEWIDTH = 2.5
-
-INITIALIZATION_LINE_COLOR = "k"
-INITIALIZATION_LINE_WIDTH = 1.2
-INITIALIZATION_LINE_STYLE = "--"
-
-
-# =============================================================================
-# 6. Catchment metadata
-# =============================================================================
-
-CATCHMENTS = {
-    "drammen": {
-        "filename": "catchment_nve_regine_drammen.geojson",
-        "weights_id": "regine_drammen",
-        "label": "Drammen catchment",
+MODEL_VARIABLE = "tp24"
+REFERENCE_SETTINGS = {
+    "era5": {
+        "variable": "tp24",
+        "label": "ERA5",
+        "directory": "era5_processed",
     },
-    "glomma": {
-        "filename": "catchment_nve_regine_glomma.geojson",
-        "weights_id": "regine_glomma",
-        "label": "Glomma catchment",
+    "senorge": {
+        "variable": "rr",
+        "label": "SeNorge",
+        "directory": "senorge_processed",
     },
 }
 
+FIG_WIDTH_IN = 7.2
+FIG_HEIGHT_IN = 4.4
+AXIS_LABELSIZE = 11
+TICK_LABELSIZE = 11
+LEGEND_FONTSIZE = 7
+YMIN = 0
+YMAX = 135
+BOX_WIDTH = 0.58
+REFERENCE_COLOR = "tab:red"
+COUNTERFACTUAL_COLOR = "tab:green"
+
+MONTHS = np.arange(1, 13)
+MONTH_LABELS = [
+    "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+    "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+]
+
 
 # =============================================================================
-# 7. General helper functions
+# Lead-time configuration
 # =============================================================================
 
-def get_catchment_settings(catchment_name):
-    """Return settings for the selected catchment."""
+def validate_settings():
+    """Validate the user-selectable model and reference settings."""
+    if x_days < 1:
+        raise ValueError("x_days must be at least 1.")
+    if first_input_lead > last_input_lead:
+        raise ValueError("first_input_lead must not exceed last_input_lead.")
 
-    if catchment_name not in CATCHMENTS:
-        valid_names = ", ".join(CATCHMENTS)
+    first_usable_lead = first_input_lead + x_days - 1
+    if first_usable_lead > last_input_lead:
+        raise ValueError("x_days is too large for the available input lead window.")
+
+    number_of_usable_leads = last_input_lead - first_usable_lead + 1
+    if not isinstance(number_of_lead_bins, int):
+        raise TypeError("number_of_lead_bins must be an integer.")
+    if not 1 <= number_of_lead_bins <= number_of_usable_leads:
         raise ValueError(
-            f"Unknown catchment '{catchment_name}'. "
-            f"Valid options are: {valid_names}."
+            "number_of_lead_bins must be between 1 and the number of usable lead times."
         )
 
-    return CATCHMENTS[catchment_name]
-
-
-def make_s2s_file(variable):
-    """Create path to one S2S daily forecast file."""
-
-    return (
-        S2S_BASE_DIR
-        / MODEL_TYPE
-        / "sfc"
-        / "daily"
-        / "europe"
-        / variable
-        / f"{variable}_{S2S_GRID}_{FORECAST_DATE}.nc"
-    )
-
-
-def make_era5_weights_file(catchment_name):
-    """Return the ERA5/S2S-grid catchment-weight file."""
-
-    catchment = get_catchment_settings(catchment_name)
-
-    return (
-        PATH_CATCHMENT
-        / f"weights_catchment_{catchment['weights_id']}_era5_{S2S_GRID}.nc"
-    )
-
-
-def make_senorge_weights_file(catchment_name):
-    """Return the seNorge-grid catchment-weight file."""
-
-    catchment = get_catchment_settings(catchment_name)
-
-    return (
-        PATH_CATCHMENT
-        / f"weights_catchment_{catchment['weights_id']}_senorge.nc"
-    )
-
-
-def get_time_coord_name(da):
-    """Return the name of the time coordinate."""
-
-    for name in ["time", "valid_time"]:
-        if name in da.dims or name in da.coords:
-            return name
-
-    raise ValueError("Could not identify time coordinate.")
-
-
-def get_member_coord_name(da):
-    """Return the ensemble member coordinate name."""
-
-    for name in ["number", "member", "ensemble_member", "realization"]:
-        if name in da.dims or name in da.coords:
-            return name
-
-    raise ValueError("Could not identify ensemble member coordinate.")
-
-
-def get_lon_lat(da):
-    """Return longitude and latitude coordinates."""
-
-    lon = da["longitude"] if "longitude" in da.coords else da["lon"]
-    lat = da["latitude"] if "latitude" in da.coords else da["lat"]
-
-    return lon, lat
-
-
-def centers_to_edges(centers):
-    """Convert one-dimensional grid-cell centers to grid-cell edges."""
-
-    centers = np.asarray(centers)
-
-    if centers.ndim != 1:
-        raise ValueError("centers must be one-dimensional.")
-
-    if centers.size < 2:
-        raise ValueError("At least two center points are needed to infer edges.")
-
-    edges = np.empty(centers.size + 1)
-    edges[1:-1] = 0.5 * (centers[:-1] + centers[1:])
-    edges[0] = centers[0] - 0.5 * (centers[1] - centers[0])
-    edges[-1] = centers[-1] + 0.5 * (centers[-1] - centers[-2])
-
-    return edges
-
-
-def check_dims(da, expected_dims, name):
-    """Check that required dimensions are present."""
-
-    missing = [dim for dim in expected_dims if dim not in da.dims]
-
-    if missing:
+    valid_groups = {"full"} | {
+        f"split{number}" for number in range(1, number_of_lead_bins + 1)
+    }
+    if model_sampling_group not in valid_groups:
         raise ValueError(
-            f"{name} is missing dimensions {missing}. "
-            f"Found dimensions: {da.dims}"
+            f"Unknown model_sampling_group '{model_sampling_group}'. "
+            f"Valid options are {sorted(valid_groups)}."
+        )
+
+    valid_methods = {"raw", "mm", "q", "doy", "ld", "q_doy"}
+    if MODEL_DATA_METHOD not in valid_methods:
+        raise ValueError(
+            f"MODEL_DATA_METHOD must be one of {sorted(valid_methods)}. "
+            f"Got '{MODEL_DATA_METHOD}'."
+        )
+
+    if REFERENCE_DATASET not in REFERENCE_SETTINGS:
+        raise ValueError(
+            f"REFERENCE_DATASET must be one of {sorted(REFERENCE_SETTINGS)}. "
+            f"Got '{REFERENCE_DATASET}'."
         )
 
 
-def round_time_to_nearest_day(da):
-    """Round timestamps to the nearest calendar day."""
-
-    time_name = get_time_coord_name(da)
-    rounded_time = pd.to_datetime(da[time_name].values).round("D")
-
-    return da.assign_coords({time_name: rounded_time})
-
-
-def shift_time_back_one_day(da):
-    """Shift timestamps one day earlier."""
-
-    time_name = get_time_coord_name(da)
-    shifted_time = pd.to_datetime(da[time_name].values) - pd.Timedelta(days=1)
-
-    return da.assign_coords({time_name: shifted_time})
-
-
-def subset_to_period(da, start_date, end_date):
-    """Subset a DataArray to a date period."""
-
-    time_name = get_time_coord_name(da)
-
-    return da.sel({time_name: slice(start_date, end_date)})
-
-
-def get_plot_period(forecast_date, n_days_before, m_days_lead, x_days=1):
-    """
-    Return initialization date, plot window, loading window, and years.
-
-    The loading window is wider than the plot window so that rolling
-    accumulations can be calculated safely.
-    """
-
-    init_date = pd.to_datetime(forecast_date)
-
-    plot_start = init_date - pd.Timedelta(days=n_days_before)
-    plot_end = init_date + pd.Timedelta(days=m_days_lead)
-
-    load_start = plot_start - pd.Timedelta(days=x_days + 1)
-    load_end = plot_end + pd.Timedelta(days=x_days + 1)
-
-    years = np.arange(load_start.year, load_end.year + 1)
-
-    return init_date, plot_start, plot_end, load_start, load_end, years
-
-
-def remove_era5_ensemble_dimension_if_present(ds):
-    """Remove unnecessary ERA5 ensemble coordinate if present."""
-
-    return ds.drop_vars("number", errors="ignore")
-
-
-# =============================================================================
-# 8. Unit handling
-# =============================================================================
-
-def standardize_precipitation_units(da, variable_name):
-    """Convert precipitation to millimetres when needed."""
-
-    units = str(da.attrs.get("units", "")).strip().lower()
-
-    if variable_name == "tp24" or units in {"m", "meter", "metre"}:
-        da = da * 1000.0
-        da.attrs["units"] = "mm"
-
-    elif units in {"kg/m^2", "kg/m2", "kg m-2", "mm", "mm/day", "mm d-1"}:
-        da.attrs["units"] = "mm"
-
-    return da
-
-
-def load_weights(filename, spatial_dims):
-    """Load predefined catchment weights."""
-
-    filename = Path(filename)
-
-    if not filename.exists():
-        raise FileNotFoundError(f"Catchment weights not found: {filename}")
-
-    with xr.open_dataset(filename) as ds:
-        if "catchment_weight" not in ds:
-            raise KeyError(
-                f"'catchment_weight' not found in {filename}. "
-                f"Available variables: {list(ds.data_vars)}"
-            )
-
-        weights = ds["catchment_weight"].astype("float32").load()
-
-    weights.name = "catchment_weight"
-
-    check_dims(
-        da=weights,
-        expected_dims=spatial_dims,
-        name="Catchment weights",
-    )
-
-    return weights
-
-
-def align_weights_to_data_grid(da, weights):
-    """
-    Align two-dimensional catchment weights to the spatial grid of the data.
-
-    The data may also have non-spatial dimensions such as time or ensemble member.
-    """
-
-    spatial_dims = tuple(weights.dims)
-
-    grid_template = da
-
-    for dim in da.dims:
-        if dim not in spatial_dims:
-            grid_template = grid_template.isel({dim: 0}, drop=True)
-
-    weights_on_grid = weights.reindex_like(grid_template)
-
-    if weights_on_grid.shape != grid_template.shape:
-        raise ValueError(
-            f"Weights shape {weights_on_grid.shape} does not match "
-            f"data grid shape {grid_template.shape}."
-        )
-
-    if np.isfinite(weights_on_grid).sum().item() == 0:
-        raise ValueError(
-            "All aligned catchment weights are NaN. "
-            "This usually means the weight coordinates and data coordinates "
-            "do not overlap."
-        )
-
-    return weights_on_grid
-
-
-def catchment_weighted_mean(da, weights, spatial_dims, output_name):
-    """Calculate catchment-weighted spatial mean."""
-
-    weights_on_grid = align_weights_to_data_grid(da, weights)
-
-    valid = (
-        np.isfinite(da)
-        & np.isfinite(weights_on_grid)
-        & (weights_on_grid > 0)
-    )
-
-    weighted_sum = (
-        da.where(valid)
-        * weights_on_grid.where(valid)
-    ).sum(
-        dim=spatial_dims,
-        skipna=True,
-    )
-
-    weight_sum = weights_on_grid.where(valid).sum(
-        dim=spatial_dims,
-        skipna=True,
-    )
-
-    out = weighted_sum / weight_sum
-    out.name = output_name
-    out.attrs["units"] = da.attrs.get("units", "")
-
-    return out
-
-
-def trailing_xday_accumulation(da, x_days):
-    """Calculate trailing X-day accumulation."""
-
-    accumulated = (
-        da
-        .rolling(time=x_days, min_periods=x_days)
-        .sum()
-        .dropna("time", how="any")
-    )
-
-    accumulated.name = f"{x_days}day_accumulation"
-    accumulated.attrs["units"] = da.attrs.get("units", "mm")
-
-    return accumulated
-
-
-# =============================================================================
-# 10. Panel e: precipitation time-series data
-# =============================================================================
-
-def load_precip_forecast():
-    """Load S2S forecast precipitation."""
-
-    if not PRECIP_FORECAST_FILE.exists():
-        raise FileNotFoundError(f"File not found: {PRECIP_FORECAST_FILE}")
-
-    with xr.open_dataset(PRECIP_FORECAST_FILE) as ds:
-        if PRECIP_FORECAST_VAR not in ds:
-            raise KeyError(
-                f"'{PRECIP_FORECAST_VAR}' not found in {PRECIP_FORECAST_FILE}. "
-                f"Available variables: {list(ds.data_vars)}"
-            )
-
-        da = ds[PRECIP_FORECAST_VAR].load()
-
-    da = standardize_precipitation_units(
-        da=da,
-        variable_name=PRECIP_FORECAST_VAR,
-    )
-
-    check_dims(
-        da=da,
-        expected_dims=("time", "number", "latitude", "longitude"),
-        name="Forecast precipitation",
-    )
-
-    return da
-
-
-def load_precip_era5(years, loading_start, loading_end):
-    """Load ERA5 precipitation."""
-
-    filenames = [
-        str(PRECIP_ERA5_PATH / PRECIP_ERA5_FILE_PATTERN.format(year=int(year)))
-        for year in years
+def split_usable_accumulated_leads(first_lead, last_lead, number_of_bins):
+    """Split accumulated ending leads into approximately equal contiguous bins."""
+    number_of_leads = last_lead - first_lead + 1
+    base_size, remainder = divmod(number_of_leads, number_of_bins)
+    bin_sizes = [
+        base_size + int(index >= number_of_bins - remainder)
+        for index in range(number_of_bins)
     ]
 
-    ds = xr.open_mfdataset(
-        filenames,
-        preprocess=remove_era5_ensemble_dimension_if_present,
-        combine="by_coords",
-    )
+    lead_bins = []
+    current_start = first_lead
+    for bin_size in bin_sizes:
+        current_end = current_start + bin_size - 1
+        lead_bins.append((current_start, current_end))
+        current_start = current_end + 1
 
-    try:
-        if PRECIP_ERA5_DOMAIN is not None:
-            domain_lats, domain_lons = misc.get_domain_latlon(PRECIP_ERA5_DOMAIN)
-            ds = ds.sel(latitude=domain_lats, longitude=domain_lons)
-
-        if PRECIP_ERA5_VAR not in ds:
-            raise KeyError(
-                f"'{PRECIP_ERA5_VAR}' not found in ERA5 files. "
-                f"Available variables: {list(ds.data_vars)}"
-            )
-
-        da = ds[PRECIP_ERA5_VAR].sel(
-            time=slice(loading_start, loading_end)
-        ).load()
-
-    finally:
-        ds.close()
-
-    da = standardize_precipitation_units(
-        da=da,
-        variable_name=PRECIP_ERA5_VAR,
-    )
-
-    check_dims(
-        da=da,
-        expected_dims=("time", "latitude", "longitude"),
-        name="ERA5 precipitation",
-    )
-
-    return da
+    return lead_bins
 
 
-def load_precip_senorge(years, loading_start, loading_end):
-    """Load seNorge precipitation."""
-
-    yearly_data = []
-
-    for year in years:
-        filename = PRECIP_SENORGE_PATH / PRECIP_SENORGE_FILE_PATTERN.format(
-            year=int(year)
-        )
-
-        if not filename.exists():
-            raise FileNotFoundError(f"File not found: {filename}")
-
-        with xr.open_dataset(filename) as ds:
-            ds = xr.decode_cf(ds)
-
-            if PRECIP_SENORGE_VAR not in ds:
-                raise KeyError(
-                    f"'{PRECIP_SENORGE_VAR}' not found in {filename}. "
-                    f"Available variables: {list(ds.data_vars)}"
-                )
-
-            da_one_year = ds[PRECIP_SENORGE_VAR].sel(
-                time=slice(loading_start, loading_end)
-            )
-
-            fill_value = da_one_year.attrs.get("_FillValue")
-            if fill_value is not None:
-                da_one_year = da_one_year.where(da_one_year != fill_value)
-
-            da_one_year = standardize_precipitation_units(
-                da=da_one_year,
-                variable_name=PRECIP_SENORGE_VAR,
-            )
-
-            check_dims(
-                da=da_one_year,
-                expected_dims=("time", "Y", "X"),
-                name="seNorge precipitation",
-            )
-
-            yearly_data.append(da_one_year.load())
-
-    return xr.concat(yearly_data, dim="time").sortby("time")
-
-
-def process_precip_forecast(dates):
-    """Process S2S forecast precipitation for panel e."""
-
-    weights = load_weights(
-        filename=make_era5_weights_file(CATCHMENT_NAME),
-        spatial_dims=("latitude", "longitude"),
-    )
-
-    da = load_precip_forecast()
-
-    da_mean = catchment_weighted_mean(
-        da=da,
-        weights=weights,
-        spatial_dims=("latitude", "longitude"),
-        output_name="catchment_mean_precipitation",
-    )
-
-    da_accumulated = trailing_xday_accumulation(
-        da=da_mean,
-        x_days=PRECIP_ACCUMULATION_DAYS,
-    )
-
-    da_accumulated = round_time_to_nearest_day(da_accumulated)
-
-    return subset_to_period(
-        da=da_accumulated,
-        start_date=dates["init_date"],
-        end_date=dates["plot_end"],
+def build_lead_bins():
+    """Return the lead bins used by the model sample-building script."""
+    first_usable_lead = first_input_lead + x_days - 1
+    return split_usable_accumulated_leads(
+        first_usable_lead, last_input_lead, number_of_lead_bins
     )
 
 
-def process_precip_era5(dates):
-    """Process ERA5 precipitation for panel e."""
+def get_full_lead_range():
+    """Return the complete usable accumulated lead range."""
+    return first_input_lead + x_days - 1, last_input_lead
 
-    weights = load_weights(
-        filename=make_era5_weights_file(CATCHMENT_NAME),
-        spatial_dims=("latitude", "longitude"),
-    )
 
-    da = load_precip_era5(
-        years=dates["years"],
-        loading_start=dates["load_start"],
-        loading_end=dates["load_end"],
-    )
+def get_selected_model_lead_range():
+    """Return the lead range for the selected S2S sampling group."""
+    if model_sampling_group == "full":
+        return get_full_lead_range()
 
-    da_mean = catchment_weighted_mean(
-        da=da,
-        weights=weights,
-        spatial_dims=("latitude", "longitude"),
-        output_name="catchment_mean_precipitation",
-    )
+    split_number = int(model_sampling_group.removeprefix("split"))
+    return build_lead_bins()[split_number - 1]
 
-    da_accumulated = trailing_xday_accumulation(
-        da=da_mean,
-        x_days=PRECIP_ACCUMULATION_DAYS,
-    )
 
-    da_accumulated = round_time_to_nearest_day(da_accumulated)
+def get_selected_model_variable():
+    """Return the model variable for the selected S2S sampling group."""
+    if model_sampling_group == "full":
+        return "tp24_max"
 
-    return subset_to_period(
-        da=da_accumulated,
-        start_date=dates["plot_start"],
-        end_date=dates["plot_end"],
-    )
+    lead_start, lead_end = get_selected_model_lead_range()
+    return f"tp24_max_lead{lead_start}_{lead_end}"
 
 
-def process_precip_senorge(dates):
-    """Process seNorge precipitation for panel e."""
+def lead_split_filename_label():
+    """Return the lead-bin label used in model sample filenames."""
+    full_start, full_end = get_full_lead_range()
+    split_text = "_".join(f"{start}-{end}" for start, end in build_lead_bins())
+    return f"lead{full_start}-{full_end}_split{number_of_lead_bins}_{split_text}"
 
-    weights = load_weights(
-        filename=make_senorge_weights_file(CATCHMENT_NAME),
-        spatial_dims=("Y", "X"),
-    )
 
-    da = load_precip_senorge(
-        years=dates["years"],
-        loading_start=dates["load_start"],
-        loading_end=dates["load_end"],
-    )
-
-    # Keep the time convention used in the original precipitation script.
-    da = shift_time_back_one_day(da)
-
-    da_mean = catchment_weighted_mean(
-        da=da,
-        weights=weights,
-        spatial_dims=("Y", "X"),
-        output_name="catchment_mean_precipitation",
-    )
-
-    da_accumulated = trailing_xday_accumulation(
-        da=da_mean,
-        x_days=PRECIP_ACCUMULATION_DAYS,
-    )
-
-    da_accumulated = round_time_to_nearest_day(da_accumulated)
-
-    return subset_to_period(
-        da=da_accumulated,
-        start_date=dates["plot_start"],
-        end_date=dates["plot_end"],
-    )
-
-
-def keep_only_common_observation_dates(era5, senorge):
-    """Keep only dates available in both ERA5 and seNorge."""
-
-    common_dates = np.intersect1d(era5.time.values, senorge.time.values)
-
-    if len(common_dates) == 0:
-        raise ValueError("No common dates found between ERA5 and seNorge.")
-
-    return era5.sel(time=common_dates), senorge.sel(time=common_dates)
-
-
-def keep_forecast_dates_available_in_observations(forecast, observation_dates):
-    """Keep forecast dates that are also available in the observations."""
-
-    common_dates = np.intersect1d(forecast.time.values, observation_dates)
-
-    if len(common_dates) == 0:
-        raise ValueError("No common dates found between forecast and observations.")
-
-    return forecast.sel(time=common_dates)
-
-
-def find_wettest_ensemble_member(forecast):
-    """Find the ensemble member with the largest accumulated precipitation."""
-
-    member_name = get_member_coord_name(forecast)
-
-    maximum_by_member = forecast.max(dim="time")
-
-    wettest_member = int(maximum_by_member.idxmax(dim=member_name))
-    maximum_value = float(maximum_by_member.max())
-
-    wettest_series = forecast.sel({member_name: wettest_member})
-    time_index = wettest_series.argmax(dim="time")
-    maximum_date = pd.Timestamp(wettest_series.time[time_index].values)
-
-    return wettest_member, maximum_value, maximum_date
-
-
-# =============================================================================
-# 11. Panels a-d: map data
-# =============================================================================
-
-def open_s2s_variable(variable):
-    """Open one S2S variable and convert to plotting units."""
-
-    filename = make_s2s_file(variable)
-
-    if not filename.exists():
-        raise FileNotFoundError(f"File not found: {filename}")
-
-    ds = xr.open_dataset(filename)
-
-    if variable not in ds:
-        available = list(ds.data_vars)
-        ds.close()
-        raise KeyError(
-            f"Variable '{variable}' not found in {filename}. "
-            f"Available variables: {available}"
-        )
-
-    if variable == MAP_PRECIP_VAR:
-        ds[variable] = ds[variable] * 1000.0
-        ds[variable].attrs["units"] = "mm/day"
-
-    elif variable == MAP_MSL_VAR:
-        ds[variable] = ds[variable] / 100.0
-        ds[variable].attrs["units"] = "hPa"
-
-    return ds
-
-
-def select_member(da):
-    """Select the requested ensemble member."""
-
-    member_name = get_member_coord_name(da)
-
-    return da.sel({member_name: ENSEMBLE_MEMBER})
-
-
-def select_date(da, target_date):
-    """Select one target date and load it into memory."""
-
-    time_name = get_time_coord_name(da)
-    target_date = np.datetime64(target_date, "ns")
-
-    return da.sel({time_name: target_date}).load()
-
-
-def load_daily_s2s_variable(variable, target_date):
-    """Load one daily S2S field for the selected member and date."""
-
-    ds = open_s2s_variable(variable)
-
-    try:
-        da = ds[variable]
-        da = select_member(da)
-        da = select_date(da, target_date)
-
-    finally:
-        ds.close()
-
-    return da
-
-
-def load_map_precipitation(target_date):
-    """Load S2S precipitation for one map panel."""
-
-    return load_daily_s2s_variable(MAP_PRECIP_VAR, target_date)
-
-
-def load_map_msl(target_date):
-    """Load S2S mean sea level pressure for one map panel."""
-
-    return load_daily_s2s_variable(MAP_MSL_VAR, target_date)
-
-
-# =============================================================================
-# 12. Catchment boundary
-# =============================================================================
-
-
-# =============================================================================
-
-def load_catchment_outer_boundary(
-    filename,
-    base_dir,
-    crs_if_missing="EPSG:4326",
-):
-    """Load catchment and keep only the outer boundary."""
-
-    plot_crs = "EPSG:4326"
-    metric_crs = "EPSG:32633"
-
-    catchment_path = Path(base_dir) / filename
-
-    if not catchment_path.exists():
-        raise FileNotFoundError(f"Catchment file not found: {catchment_path}")
-
-    gdf = gpd.read_file(catchment_path)
-
-    if gdf.crs is None:
-        gdf = gdf.set_crs(crs_if_missing)
-
-    union_geom = gdf.to_crs(metric_crs).geometry.union_all()
-
-    if isinstance(union_geom, Polygon):
-        outer_geom = Polygon(union_geom.exterior)
-
-    elif isinstance(union_geom, MultiPolygon):
-        outer_geom = MultiPolygon(
-            [Polygon(poly.exterior) for poly in union_geom.geoms]
-        )
-
+def get_model_sampling_label():
+    """Return a plot-friendly label for the selected S2S sample."""
+    if model_sampling_group == "full":
+        group_label = "Model extremes"
     else:
-        outer_geom = union_geom
+        lead_start, lead_end = get_selected_model_lead_range()
+        split_number = model_sampling_group.removeprefix("split")
+        group_label = f"S2S split {split_number}, ending leads {lead_start}-{lead_end}"
 
-    outer_gdf = gpd.GeoDataFrame(
-        geometry=[outer_geom],
-        crs=metric_crs,
-    ).to_crs(plot_crs)
+    if MODEL_DATA_METHOD == "raw":
+        return f"{group_label} (raw)"
 
-    return outer_gdf.geometry.iloc[0]
+    reference_label = REFERENCE_SETTINGS[REFERENCE_DATASET]["label"]
+    return f"{group_label}, {MODEL_DATA_METHOD} bias correction to {reference_label}"
 
 
 # =============================================================================
-# 13. Figure setup
+# Filenames
 # =============================================================================
 
-def make_figure_axes():
-    """
-    Create four map panels, one precipitation time-series panel, and a colorbar.
+def get_file_id(catchment_name):
+    """Return the short catchment label used in model-sample filenames."""
+    return catchment_name.removeprefix("regine_")
 
-    Layout:
-    - Row 0: map panels a and b
-    - Row 1: map panels c and d
-    - Row 2: precipitation time-series panel e
-    """
 
-    proj_map = ccrs.LambertConformal(
-        central_longitude=CENTRAL_LON,
-        central_latitude=CENTRAL_LAT,
-    )
-
-    proj_data = ccrs.PlateCarree()
-
-    fig = plt.figure(
-        figsize=(
-            FIG_WIDTH_IN,
-            11.2,
-        )
-    )
-
-    gs = GridSpec(
-        3,
-        3,
-        figure=fig,
-        width_ratios=[
-            1.0,
-            1.0,
-            0.045,
-        ],
-        height_ratios=[
-            1.0,
-            1.0,
-            0.45,
-        ],
-        wspace=MAP_WSPACE,
-        hspace=MAP_HSPACE,
-    )
-
-    map_axes = np.empty(
+def make_model_filename():
+    """Create the raw or bias-corrected compact S2S sample filename."""
+    filename = os.path.join(
+        config.dirs["s2s_processed"],
         (
-            2,
-            2,
+            f"monthly_max_samples_{MODEL_VARIABLE}_{x_days}dayacc_"
+            f"{get_file_id(catchment)}_{lead_split_filename_label()}_"
+            f"{forecast_date_range[0]}_{forecast_date_range[1]}.nc"
         ),
-        dtype=object,
     )
 
-    map_axes[
-        0,
-        0,
-    ] = fig.add_subplot(
-        gs[
-            0,
-            0,
-        ],
-        projection=proj_map,
-    )
+    if MODEL_DATA_METHOD == "raw":
+        return filename
 
-    map_axes[
-        0,
-        1,
-    ] = fig.add_subplot(
-        gs[
-            0,
-            1,
-        ],
-        projection=proj_map,
-    )
+    stem, extension = os.path.splitext(filename)
+    return f"{stem}_bc_{MODEL_DATA_METHOD}_{REFERENCE_DATASET}{extension}"
 
-    map_axes[
-        1,
-        0,
-    ] = fig.add_subplot(
-        gs[
-            1,
-            0,
-        ],
-        projection=proj_map,
-    )
 
-    map_axes[
-        1,
-        1,
-    ] = fig.add_subplot(
-        gs[
-            1,
-            1,
-        ],
-        projection=proj_map,
-    )
+def make_reference_filename():
+    """Create the input filename for the selected reference dataset."""
+    settings = REFERENCE_SETTINGS[REFERENCE_DATASET]
+    directory = config.dirs[settings["directory"]]
+    variable = settings["variable"]
 
-    cbar_ax = fig.add_subplot(
-        gs[
-            0:2,
-            2,
-        ]
-    )
-
-    precip_ts_ax = fig.add_subplot(
-        gs[
-            2,
-            0:2,
-        ]
-    )
-
-    for ax in map_axes.flat:
-
-        ax.coastlines(
-            resolution="10m",
-            linewidth=0.5,
-        )
-
-        ax.set_extent(
-            MAP_EXTENT,
-            crs=proj_data,
-        )
+    if REFERENCE_DATASET == "era5":
+        dataset_suffix = f"era5_{era5_grid}"
+    else:
+        dataset_suffix = "senorge"
 
     return (
-        fig,
-        map_axes,
-        precip_ts_ax,
-        cbar_ax,
-        proj_data,
+        f"{directory}distribution_monthly_extremes_{variable}_{x_days}dayacc_"
+        f"{catchment}_{dataset_suffix}_{observation_years[0]}-"
+        f"{observation_years[1]}.nc"
     )
 
 
-def get_map_axes(map_axes):
-    """Return map panels as a flat list."""
-
-    return list(map_axes.flat)
-
-
-def align_axis_to_map_panels(fig, map_axes, ax_to_align):
-    """Align a time-series axis with the combined width of the map panels."""
-
-    fig.canvas.draw()
-
-    left = min(
-        map_axes[0, 0].get_position().x0,
-        map_axes[1, 0].get_position().x0,
+def make_figure_filename():
+    """Create an output filename that records the model and reference choices."""
+    model_suffix = (
+        "raw"
+        if MODEL_DATA_METHOD == "raw"
+        else f"bc-{MODEL_DATA_METHOD}-{REFERENCE_DATASET}"
     )
+    if model_sampling_group != "full":
+        model_suffix = f"{model_suffix}-{model_sampling_group}"
 
-    right = max(
-        map_axes[0, 1].get_position().x1,
-        map_axes[1, 1].get_position().x1,
-    )
-
-    pos = ax_to_align.get_position()
-
-    ax_to_align.set_position(
-        [
-            left,
-            pos.y0,
-            right - left,
-            pos.height,
-        ]
-    )
+    catchment_suffix = "" if catchment == "regine_drammen" else f"-{catchment}"
+    filename = f"fig-02{catchment_suffix}-{model_suffix}.png"
+    return os.path.join(config.dirs["fig"], filename)
 
 
 # =============================================================================
-# 14. Map plotting
+# Data extraction
 # =============================================================================
 
-def plot_precipitation_map(ax, da_precip, proj_data):
-    """Plot daily precipitation as shaded grid cells."""
+def check_variable_exists(ds, variable, dataset_name):
+    """Raise a clear error if a required variable is missing."""
+    if variable not in ds:
+        raise KeyError(
+            f"Variable '{variable}' was not found in {dataset_name}. "
+            f"Available variables are {list(ds.data_vars)}."
+        )
 
-    lon, lat = get_lon_lat(da_precip)
-    precip = da_precip.values
 
-    lon_edges = centers_to_edges(lon.values)
-    lat_edges = centers_to_edges(lat.values)
+def validate_compact_model_structure(model_ds, variable):
+    """Check the compact (number, i_date) model sample structure."""
+    check_variable_exists(model_ds, variable, "model dataset")
+    check_variable_exists(model_ds, "month", "model dataset")
 
-    if lat_edges[0] > lat_edges[-1]:
-        lat_edges = lat_edges[::-1]
-        precip = precip[::-1, :]
+    if set(model_ds[variable].dims) != {"number", "i_date"}:
+        raise ValueError(
+            f"Model variable '{variable}' must have dimensions 'number' and 'i_date'; "
+            f"got {model_ds[variable].dims}."
+        )
+    if model_ds["month"].dims != ("i_date",):
+        raise ValueError(
+            "Model variable 'month' must have dimensions ('i_date',); "
+            f"got {model_ds['month'].dims}."
+        )
 
-    if lon_edges[0] > lon_edges[-1]:
-        lon_edges = lon_edges[::-1]
-        precip = precip[:, ::-1]
 
-    lon_edges_2d, lat_edges_2d = np.meshgrid(lon_edges, lat_edges)
+def get_model_values_by_month(model_ds, variable):
+    """Return one flattened array of finite model values for each calendar month."""
+    validate_compact_model_structure(model_ds, variable)
 
-    return ax.pcolormesh(
-        lon_edges_2d,
-        lat_edges_2d,
-        precip,
-        cmap=PRECIP_CMAP,
-        vmin=PRECIP_ZERO_THRESHOLD,
-        vmax=PRECIP_LEVELS.max(),
-        shading="auto",
-        transform=proj_data,
+    values_by_month = []
+    for month_number in MONTHS:
+        selected = model_ds[variable].where(
+            model_ds["month"] == month_number, drop=True
+        )
+        values = selected.values.ravel()
+        values_by_month.append(values[np.isfinite(values)])
+
+    return values_by_month
+
+
+def get_monthly_records_before_hans(reference_ds, variable):
+    """Return monthly record values from 1957–2022, excluding Storm Hans in 2023."""
+    check_variable_exists(reference_ds, variable, "reference dataset")
+    return reference_ds[variable].sel(year=slice(1957, 2022)).max(dim="year")
+
+
+def get_storm_hans_event(reference_ds, variable):
+    """Return the month and value of the largest reference event in 2023."""
+    check_variable_exists(reference_ds, variable, "reference dataset")
+    values_2023 = reference_ds[variable].sel(year=2023)
+    flat = values_2023.stack(z=("month",))
+    max_index = flat.argmax("z")
+
+    max_value = float(flat.isel(z=max_index).values)
+    max_month = int(flat["month"].isel(z=max_index).values)
+    return max_month, max_value
+
+
+def get_highest_may_model_event(model_ds, variable):
+    """Return the largest May value in the selected S2S model distribution."""
+    validate_compact_model_structure(model_ds, variable)
+    may_values = model_ds[variable].where(model_ds["month"] == 5, drop=True).values.ravel()
+    finite_values = may_values[np.isfinite(may_values)]
+
+    if finite_values.size == 0:
+        raise ValueError(f"No finite May values were found in '{variable}'.")
+
+    return 5, float(finite_values.max())
+
+
+# =============================================================================
+# Plotting
+# =============================================================================
+
+def make_legend_handles():
+    """Create legend handles for the plotted data."""
+    reference_label = REFERENCE_SETTINGS[REFERENCE_DATASET]["label"]
+    return [
+        Line2D(
+            [0], [0], marker="o", linestyle="none",
+            markerfacecolor=REFERENCE_COLOR, markeredgecolor=REFERENCE_COLOR,
+            markersize=6, label=f"{reference_label} record 1957–2022",
+        ),
+        Line2D(
+            [0], [0], marker="^", linestyle="none",
+            markerfacecolor=REFERENCE_COLOR, markeredgecolor=REFERENCE_COLOR,
+            markersize=6, label=f"{reference_label} Storm Hans 2023",
+        ),
+        Line2D(
+            [0], [0], marker="o", linestyle="none", markerfacecolor="white",
+            markeredgecolor="0.6", markersize=5, label=get_model_sampling_label(),
+        ),
+        Line2D(
+            [0], [0], marker="o", linestyle="none",
+            markerfacecolor=COUNTERFACTUAL_COLOR,
+            markeredgecolor=COUNTERFACTUAL_COLOR,
+            markersize=5, label="Counterfactual Storm Hans",
+        ),
+    ]
+
+
+def apply_axis_formatting(ax):
+    """Apply labels, limits, ticks, and simple panel styling."""
+    ax.set_ylabel(
+        f"Monthly maximum {x_days}-precipitation",
+        fontsize=AXIS_LABELSIZE,
+    )
+    ax.set_xlabel("Month", fontsize=AXIS_LABELSIZE)
+    ax.set_xlim(0.4, 12.6)
+    ax.set_ylim(YMIN, YMAX)
+    ax.set_xticks(MONTHS)
+    ax.set_xticklabels(MONTH_LABELS)
+    ax.tick_params(axis="both", labelsize=TICK_LABELSIZE)
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+
+
+def plot_monthly_extreme_distributions(
+    model_values_by_month,
+    reference_ds,
+    model_ds,
+    model_variable,
+    filename_out,
+):
+    """Create the monthly precipitation extreme-distribution figure."""
+    reference_settings = REFERENCE_SETTINGS[REFERENCE_DATASET]
+    reference_variable = reference_settings["variable"]
+
+    reference_records = get_monthly_records_before_hans(
+        reference_ds, reference_variable
+    )
+    hans_month, hans_value = get_storm_hans_event(reference_ds, reference_variable)
+    counterfactual_month, counterfactual_value = get_highest_may_model_event(
+        model_ds, model_variable
     )
 
+    fig, ax = plt.subplots(figsize=(FIG_WIDTH_IN, FIG_HEIGHT_IN))
 
-def plot_msl_contours(ax, da_msl, proj_data):
-    """Plot labelled mean sea level pressure contours."""
+    ax.boxplot(
+        model_values_by_month,
+        positions=MONTHS,
+        widths=BOX_WIDTH,
+        patch_artist=False,
+        showfliers=True,
+        flierprops={
+            "marker": "o", "markerfacecolor": "none", "markeredgecolor": "0.6",
+            "markersize": 4, "linestyle": "none", "markeredgewidth": 0.8,
+        },
+        boxprops={"color": "0.25", "linewidth": 1.0},
+        whiskerprops={"color": "0.25", "linewidth": 1.0},
+        capprops={"color": "0.25", "linewidth": 1.0},
+        medianprops={"color": "black", "linewidth": 1.4},
+    )
 
-    lon, lat = get_lon_lat(da_msl)
-
-    contour = ax.contour(
-        lon.values,
-        lat.values,
-        da_msl.values,
-        levels=MSL_CONTOUR_LEVELS,
-        colors=MSL_CONTOUR_COLOR,
-        linewidths=MSL_CONTOUR_LINEWIDTH,
-        transform=proj_data,
+    ax.scatter(
+        MONTHS,
+        reference_records.values,
+        color=REFERENCE_COLOR,
+        linewidths=1.5,
+        s=35,
+        zorder=4,
+    )
+    ax.scatter(
+        hans_month,
+        hans_value,
+        color=REFERENCE_COLOR,
+        linewidths=1.5,
+        marker="^",
+        s=35,
+        zorder=5,
+    )
+    ax.scatter(
+        counterfactual_month,
+        counterfactual_value,
+        color=COUNTERFACTUAL_COLOR,
+        linewidths=1.0,
+        s=20,
         zorder=6,
     )
 
-    ax.clabel(
-        contour,
-        inline=True,
-        inline_spacing=4,
-        fontsize=CONTOUR_LABELSIZE,
-        fmt="%d",
-        colors=MSL_CONTOUR_COLOR,
-    )
-
-
-def plot_catchment_boundary(ax, geometry, proj_data):
-    """Overlay catchment boundary."""
-
-    ax.add_geometries(
-        [geometry],
-        crs=proj_data,
-        facecolor="none",
-        edgecolor=CATCHMENT_EDGE_COLOR,
-        linewidth=CATCHMENT_LINEWIDTH,
-        zorder=9,
-    )
-
-
-def plot_event_panel(ax, target_date, catchment_boundary, proj_data):
-    """Plot one daily map panel."""
-
-    da_precip = load_map_precipitation(target_date)
-    da_msl = load_map_msl(target_date)
-
-    mesh = plot_precipitation_map(ax, da_precip, proj_data)
-    plot_msl_contours(ax, da_msl, proj_data)
-    plot_catchment_boundary(ax, catchment_boundary, proj_data)
-
-    return mesh
-
-
-# =============================================================================
-# 15. Panel e: precipitation time series
-# =============================================================================
-
-def plot_precipitation_timeseries(ax, catchment_label):
-    """Plot catchment-mean precipitation in panel e."""
-
-    (
-        init_date,
-        plot_start,
-        plot_end,
-        load_start,
-        load_end,
-        years,
-    ) = get_plot_period(
-        forecast_date=FORECAST_DATE,
-        n_days_before=TIMESERIES_N_DAYS_BEFORE,
-        m_days_lead=TIMESERIES_M_DAYS_LEAD,
-        x_days=PRECIP_ACCUMULATION_DAYS,
-    )
-
-    dates = {
-        "init_date": init_date,
-        "plot_start": plot_start,
-        "plot_end": plot_end,
-        "load_start": load_start,
-        "load_end": load_end,
-        "years": years,
-    }
-
-    forecast = process_precip_forecast(dates)
-    era5 = process_precip_era5(dates)
-    senorge = process_precip_senorge(dates)
-
-    era5, senorge = keep_only_common_observation_dates(
-        era5=era5,
-        senorge=senorge,
-    )
-
-    forecast = keep_forecast_dates_available_in_observations(
-        forecast=forecast,
-        observation_dates=era5.time.values,
-    )
-
-    wettest_member, maximum_precipitation, maximum_date = find_wettest_ensemble_member(
-        forecast=forecast,
-    )
-
-    print(
-        "\nPrecipitation time-series panel:"
-        f"\nWettest ensemble member: {wettest_member}"
-        f"\nMaximum precipitation: {maximum_precipitation:.1f} mm"
-        f"\nDate: {maximum_date:%Y-%m-%d}\n"
-    )
-
-    member_name = get_member_coord_name(forecast)
-
-    ax.axvline(
-        init_date,
-        color=INITIALIZATION_LINE_COLOR,
-        linewidth=INITIALIZATION_LINE_WIDTH,
-        linestyle=INITIALIZATION_LINE_STYLE,
-        label="Forecast initialization",
-    )
-
-    ax.plot(
-        [],
-        [],
-        color=PRECIP_ENSEMBLE_COLOR,
-        linewidth=PRECIP_ENSEMBLE_LINEWIDTH,
-        alpha=PRECIP_ENSEMBLE_ALPHA,
-        label="Forecast ensemble",
-    )
-
-    for member in forecast[member_name].values:
-        if member == wettest_member:
-            continue
-
-        ax.plot(
-            forecast["time"],
-            forecast.sel({member_name: member}),
-            color=PRECIP_ENSEMBLE_COLOR,
-            linewidth=PRECIP_ENSEMBLE_LINEWIDTH,
-            alpha=PRECIP_ENSEMBLE_ALPHA,
-        )
-
-    ax.plot(
-        forecast["time"],
-        forecast.sel({member_name: wettest_member}),
-        color=PRECIP_HIGHLIGHT_COLOR,
-        linewidth=PRECIP_LINEWIDTH,
-        zorder=10,
-        label="Counterfactual Storm Hans",
-    )
-
-    ax.plot(
-        senorge["time"],
-        senorge,
-        color=PRECIP_SENORGE_COLOR,
-        linewidth=PRECIP_LINEWIDTH,
-        label="SeNorge Storm Hans",
-    )
-
-    ax.set_title(
-        f"e) {catchment_label} precipitation",
-        fontsize=TITLE_FONTSIZE,
-        pad=5,
-    )
-
-    ax.set_ylabel("mm", fontsize=AXIS_LABELSIZE)
-
-    ax.set_xlabel(
-        "Date",
-        fontsize=AXIS_LABELSIZE,
-    )
-
-    ax.tick_params(
-        axis="both",
-        labelsize=TICK_LABELSIZE,
-    )
-
-    ax.xaxis.set_major_formatter(
-        mdates.DateFormatter(
-            DATE_TICK_FORMAT
-        )
-    )
-
-    ax.xaxis.set_major_locator(
-        mdates.DayLocator(
-            interval=DATE_TICK_INTERVAL_DAYS
-        )
-    )
-
-    plt.setp(
-        ax.get_xticklabels(),
-        rotation=DATE_TICK_ROTATION,
-        ha="right",
-        rotation_mode="anchor",
-    )
-
-    ax.set_xlim(plot_start, plot_end)
-    ax.margins(x=0)
-
+    apply_axis_formatting(ax)
     ax.legend(
+        handles=make_legend_handles(),
         loc="upper left",
         frameon=False,
         fontsize=LEGEND_FONTSIZE,
     )
+    fig.tight_layout()
 
-
-# =============================================================================
-# 17. Panel f: runoff time series
-# =============================================================================
-
-
-
-# =============================================================================
-# 16. Figure finishing
-# =============================================================================
-
-def add_map_panel_titles(map_axes):
-    """Add panel labels and dates to map panels a-d."""
-
-    panel_labels = ["a)", "b)", "c)", "d)"]
-
-    for ax, panel_label, date in zip(
-        get_map_axes(map_axes),
-        panel_labels,
-        EVENT_DATES,
-    ):
-        formatted_date = (
-            np.datetime64(date)
-            .astype("datetime64[D]")
-            .astype(object)
-            .strftime("%B %-d")
-        )
-
-        ax.set_title(
-            f"{panel_label} {formatted_date}",
-            fontsize=TITLE_FONTSIZE,
-            pad=3,
-        )
-
-
-def add_colorbar(fig, mesh, cbar_ax):
-    """Add precipitation colorbar beside the map panels."""
-
-    cbar = fig.colorbar(
-        mesh,
-        cax=cbar_ax,
-        orientation="vertical",
-    )
-
-    cbar.set_label(
-        "Precipitation (mm)",
-        fontsize=AXIS_LABELSIZE,
-    )
-
-    cbar.ax.tick_params(labelsize=TICK_LABELSIZE)
-
-
-def add_map_legend(map_axes, catchment_label):
-    """Add map legend inside panel a."""
-
-    legend_handles = [
-        Line2D(
-            [0],
-            [0],
-            color=CATCHMENT_EDGE_COLOR,
-            linewidth=2,
-            label=catchment_label,
-        ),
-        Line2D(
-            [0],
-            [0],
-            color=MSL_CONTOUR_COLOR,
-            linewidth=MSL_CONTOUR_LINEWIDTH,
-            label="Mean sea level pressure (hPa)",
-        ),
-    ]
-
-    legend = map_axes[0, 0].legend(
-        handles=legend_handles,
-        loc="upper left",
-        frameon=True,
-        fontsize=LEGEND_FONTSIZE,
-    )
-
-    legend.get_frame().set_facecolor("white")
-    legend.get_frame().set_edgecolor("black")
-    legend.get_frame().set_linewidth(0.8)
-    legend.get_frame().set_alpha(1.0)
-    legend.set_zorder(100)
-
-
-def finalize_figure(
-    fig,
-    map_axes,
-    precip_ts_ax,
-    cbar_ax,
-    mesh,
-    catchment_label,
-    savepath,
-):
-    """Add titles, colorbar, legend, layout, save, and show."""
-
-    add_map_panel_titles(
-        map_axes
-    )
-
-    add_colorbar(
-        fig,
-        mesh,
-        cbar_ax,
-    )
-
-    add_map_legend(
-        map_axes,
-        catchment_label,
-    )
-
-    fig.subplots_adjust(
-        left=0.09,
-        right=0.98,
-        bottom=0.075,
-        top=0.965,
-    )
-
-    align_axis_to_map_panels(
-        fig,
-        map_axes,
-        precip_ts_ax,
-    )
-
-    if WRITE_TO_FILE:
-
-        fig.savefig(
-            savepath,
-            dpi=300,
-            bbox_inches="tight",
-        )
+    if write2file:
+        fig.savefig(filename_out, dpi=300, bbox_inches="tight")
+        print("Wrote:", filename_out)
 
     plt.show()
 
 
 # =============================================================================
-# 17. Main workflow
+# Main
 # =============================================================================
 
-def main():
-    """Run the full plotting workflow."""
-
-    catchment = get_catchment_settings(CATCHMENT_NAME)
-
-    catchment_boundary = load_catchment_outer_boundary(
-        filename=catchment["filename"],
-        base_dir=PATH_CATCHMENT,
-        crs_if_missing=CATCHMENT_CRS_IF_MISSING,
-    )
-
-    (
-        fig,
-        map_axes,
-        precip_ts_ax,
-        cbar_ax,
-        proj_data,
-    ) = make_figure_axes()
-
-    mesh = None
-
-    for ax, target_date in zip(get_map_axes(map_axes), EVENT_DATES):
-        mesh = plot_event_panel(
-            ax=ax,
-            target_date=target_date,
-            catchment_boundary=catchment_boundary,
-            proj_data=proj_data,
-        )
-
-    plot_precipitation_timeseries(
-        ax=precip_ts_ax,
-        catchment_label=catchment["label"],
-    )
-
-    finalize_figure(
-        fig=fig,
-        map_axes=map_axes,
-        precip_ts_ax=precip_ts_ax,
-        cbar_ax=cbar_ax,
-        mesh=mesh,
-        catchment_label=catchment["label"],
-        savepath=OUTPUT_FILENAME,
-    )
-
-
 if __name__ == "__main__":
-    main()
+    validate_settings()
+
+    model_variable = get_selected_model_variable()
+    filename_model = make_model_filename()
+    filename_reference = make_reference_filename()
+    filename_out = make_figure_filename()
+    lead_start, lead_end = get_selected_model_lead_range()
+
+    print("Selected settings")
+    print("-----------------")
+    print(f"Model group:       {model_sampling_group}")
+    print(f"Model leads:       {lead_start}-{lead_end}")
+    print(f"Model variable:    {model_variable}")
+    print(f"Data method:       {MODEL_DATA_METHOD}")
+    print(f"Reference dataset: {REFERENCE_DATASET}")
+    print()
+    print("Reading model file:    ", filename_model)
+    print("Reading reference file:", filename_reference)
+
+    model_ds = xr.open_dataset(filename_model)
+    reference_ds = xr.open_dataset(filename_reference)
+
+    try:
+        model_values_by_month = get_model_values_by_month(model_ds, model_variable)
+        plot_monthly_extreme_distributions(
+            model_values_by_month=model_values_by_month,
+            reference_ds=reference_ds,
+            model_ds=model_ds,
+            model_variable=model_variable,
+            filename_out=filename_out,
+        )
+    finally:
+        model_ds.close()
+        reference_ds.close()
