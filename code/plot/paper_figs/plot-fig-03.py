@@ -77,18 +77,29 @@ or, for a lead-location split:
 
 Calendar-month membership is stored in month(i_date).
 
+The model sample can optionally be randomly subsampled, without replacement,
+to the fitted reference-sample length for the same calendar month. This makes
+the model and reference fits use equal sample sizes while retaining the full
+model sample by default.
+
 Reference dataset
 -----------------
-REFERENCE_DATASET selects both:
+Exactly one observational reference dataset is used throughout the analysis.
 
-    1. the observational dataset plotted in the figure;
-    2. the reference encoded in a bias-corrected model filename.
+REFERENCE_DATASET selects that single dataset for both:
+
+    1. observational thresholds and reference-event values shown in the figure;
+    2. bias correction of the model data when MODEL_DATA_METHOD is not "raw".
+
+The script does not support using separate reference datasets for threshold
+definition and model bias correction.
 
 Extreme-value calculation
 -------------------------
-Each selected calendar month is fitted once for each dataset. The fitted
-return-level curve is displayed either against return period or against the
-probability of at least one exceedance in one year.
+Each selected calendar month is fitted once for each dataset. Uncertainty is
+estimated with non-parametric bootstrap resampling: each bootstrap sample is
+drawn with replacement from the original values, refitted, and converted to a
+return-level curve. Percentiles across bootstrap curves form the confidence band.
 
 Because M = 1:
 
@@ -135,10 +146,7 @@ from Dunnsigouin_etal_2026 import config
 
 # The two side-by-side panels.
 # 1 = January, ..., 5 = May, ..., 8 = August, ..., 12 = December.
-PANEL_MONTHS = [
-    8,
-    5,
-]
+PANEL_MONTHS = [8, 5]
 
 # Both panels always use a one-year exceedance horizon.
 M_YEARS = 1
@@ -150,9 +158,13 @@ X_AXIS_MODE = "return_period"
 
 
 # -----------------------------------------------------------------------------
-# Observational reference dataset
+# Single reference dataset
 # -----------------------------------------------------------------------------
 
+# One reference dataset is used for both observational thresholds/events and,
+# when bias correction is selected, the model-data bias correction reference.
+# Separate threshold and bias-correction reference datasets are not supported.
+#
 # Options:
 #     "senorge"
 #     "era5"
@@ -161,20 +173,17 @@ REFERENCE_DATASET = "senorge"
 CATCHMENT = "regine_drammen"
 X_DAYS = 2
 
-OBSERVATION_YEARS = [
-    "1957",
-    "2023",
-]
+OBSERVATION_YEARS = ["1957", "2023"]
 
 # If True, 2023 is read but excluded from each observational fit.
-EXCLUDE_2023_FROM_FIT = True
+EXCLUDE_2023_FROM_FIT = False
 
 SENORGE_VARIABLE = "rr"
-if EXCLUDE_2023_FROM_FIT == False:
+if not EXCLUDE_2023_FROM_FIT:
     SENORGE_LABEL = f"SeNorge {OBSERVATION_YEARS[0]}-{OBSERVATION_YEARS[-1]}"
 else:
     SENORGE_LABEL = f"SeNorge {OBSERVATION_YEARS[0]}-2022"
-    
+
 ERA5_VARIABLE = "tp24"
 ERA5_LABEL = f"ERA5 {OBSERVATION_YEARS[0]}-{OBSERVATION_YEARS[-1]}"
 ERA5_GRID = "0.5x0.5"
@@ -186,10 +195,7 @@ ERA5_GRID = "0.5x0.5"
 
 MODEL_VARIABLE = "tp24"
 
-FORECAST_DATE_RANGE = [
-    "2020-01-02",
-    "2022-12-29",
-]
+FORECAST_DATE_RANGE = ["2020-01-02", "2022-12-29"]
 
 FIRST_INPUT_LEAD = 16
 LAST_INPUT_LEAD = 46
@@ -214,6 +220,11 @@ MODEL_SAMPLING_GROUP = "full"
 #     "doy"   -> day-of-year correction
 #     "q_doy" -> combined quantile/day-of-year correction
 MODEL_DATA_METHOD = "raw"
+
+# If True, randomly subsample each calendar-month model sample without
+# replacement to the fitted reference-sample length for that month.
+# If False, use all finite model values.
+SUBSAMPLE_MODEL_TO_REFERENCE_LENGTH = False
 
 # Optional explicit compact model filename. Leave as None to construct the
 # filename automatically from the settings above.
@@ -250,7 +261,7 @@ MIN_RETURN_PERIOD = 1.01
 MAX_RETURN_PERIOD = 10000000.0
 NUMBER_OF_RETURN_PERIODS = 500
 
-NUMBER_OF_BOOTSTRAPS = 100
+NUMBER_OF_BOOTSTRAPS = 1000
 CONFIDENCE_LEVEL = 0.95
 RANDOM_SEED = 42
 
@@ -303,7 +314,7 @@ XMAX_AEP = 100.0
 YMIN = 0.0
 YMAX = 200
 
-WRITE_TO_FILE = True
+WRITE_TO_FILE = False
 FIGURE_DPI = 300
 
 
@@ -331,23 +342,12 @@ def validate_user_settings():
     """Check user-defined settings before any calculations."""
 
     if REFERENCE_DATASET not in {"senorge", "era5"}:
-        raise ValueError(
-            "REFERENCE_DATASET must be 'senorge' or 'era5'."
-        )
+        raise ValueError("REFERENCE_DATASET must be 'senorge' or 'era5'.")
 
     if X_AXIS_MODE not in {"return_period", "aep"}:
-        raise ValueError(
-            "X_AXIS_MODE must be 'return_period' or 'aep'."
-        )
+        raise ValueError("X_AXIS_MODE must be 'return_period' or 'aep'.")
 
-    valid_model_methods = {
-        "raw",
-        "mm",
-        "q",
-        "ld",
-        "doy",
-        "q_doy",
-    }
+    valid_model_methods = {"raw", "mm", "q", "ld", "doy", "q_doy"}
 
     if MODEL_DATA_METHOD not in valid_model_methods:
         raise ValueError(
@@ -367,33 +367,23 @@ def validate_user_settings():
             )
 
     if EXTREME_VALUE_DISTRIBUTION not in {1, 2, 3}:
-        raise ValueError(
-            "EXTREME_VALUE_DISTRIBUTION must be 1, 2, or 3."
-        )
+        raise ValueError("EXTREME_VALUE_DISTRIBUTION must be 1, 2, or 3.")
 
     if X_DAYS < 1:
-        raise ValueError(
-            "X_DAYS must be at least 1."
-        )
+        raise ValueError("X_DAYS must be at least 1.")
 
     if FIRST_INPUT_LEAD > LAST_INPUT_LEAD:
-        raise ValueError(
-            "FIRST_INPUT_LEAD must not exceed LAST_INPUT_LEAD."
-        )
+        raise ValueError("FIRST_INPUT_LEAD must not exceed LAST_INPUT_LEAD.")
 
     first_usable_lead = FIRST_INPUT_LEAD + X_DAYS - 1
 
     if first_usable_lead > LAST_INPUT_LEAD:
-        raise ValueError(
-            "X_DAYS is too large for the requested input lead window."
-        )
+        raise ValueError("X_DAYS is too large for the requested input lead window.")
 
     number_of_usable_leads = LAST_INPUT_LEAD - first_usable_lead + 1
 
     if not isinstance(NUMBER_OF_LEAD_BINS, int):
-        raise TypeError(
-            "NUMBER_OF_LEAD_BINS must be an integer."
-        )
+        raise TypeError("NUMBER_OF_LEAD_BINS must be an integer.")
 
     if (
         NUMBER_OF_LEAD_BINS < 1
@@ -404,13 +394,7 @@ def validate_user_settings():
             "of usable accumulated leads."
         )
 
-    valid_groups = {"full"}
-    valid_groups.update(
-        {
-            f"split{bin_number}"
-            for bin_number in range(1, NUMBER_OF_LEAD_BINS + 1)
-        }
-    )
+    valid_groups = {"full", *(f"split{i}" for i in range(1, NUMBER_OF_LEAD_BINS + 1))}
 
     if MODEL_SAMPLING_GROUP not in valid_groups:
         raise ValueError(
@@ -418,14 +402,10 @@ def validate_user_settings():
         )
 
     if MIN_RETURN_PERIOD <= 1:
-        raise ValueError(
-            "MIN_RETURN_PERIOD must be greater than 1."
-        )
+        raise ValueError("MIN_RETURN_PERIOD must be greater than 1.")
 
     if MAX_RETURN_PERIOD <= MIN_RETURN_PERIOD:
-        raise ValueError(
-            "MAX_RETURN_PERIOD must exceed MIN_RETURN_PERIOD."
-        )
+        raise ValueError("MAX_RETURN_PERIOD must exceed MIN_RETURN_PERIOD.")
 
     if XMIN_RETURN_PERIOD <= 0:
         raise ValueError(
@@ -433,44 +413,31 @@ def validate_user_settings():
         )
 
     if XMAX_RETURN_PERIOD <= XMIN_RETURN_PERIOD:
-        raise ValueError(
-            "XMAX_RETURN_PERIOD must exceed XMIN_RETURN_PERIOD."
-        )
+        raise ValueError("XMAX_RETURN_PERIOD must exceed XMIN_RETURN_PERIOD.")
 
     if XMIN_AEP <= 0:
-        raise ValueError(
-            "XMIN_AEP must be greater than 0 for a logarithmic axis."
-        )
+        raise ValueError("XMIN_AEP must be greater than 0 for a logarithmic axis.")
 
     if XMAX_AEP <= XMIN_AEP:
-        raise ValueError(
-            "XMAX_AEP must exceed XMIN_AEP."
-        )
+        raise ValueError("XMAX_AEP must exceed XMIN_AEP.")
 
     if XMAX_AEP > 100:
-        raise ValueError(
-            "XMAX_AEP cannot exceed 100%."
-        )
+        raise ValueError("XMAX_AEP cannot exceed 100%.")
+
+    if not isinstance(SUBSAMPLE_MODEL_TO_REFERENCE_LENGTH, bool):
+        raise TypeError("SUBSAMPLE_MODEL_TO_REFERENCE_LENGTH must be True or False.")
 
     if NUMBER_OF_BOOTSTRAPS < 1:
-        raise ValueError(
-            "NUMBER_OF_BOOTSTRAPS must be at least 1."
-        )
+        raise ValueError("NUMBER_OF_BOOTSTRAPS must be at least 1.")
 
     if not 0 < CONFIDENCE_LEVEL < 1:
-        raise ValueError(
-            "CONFIDENCE_LEVEL must lie between 0 and 1."
-        )
+        raise ValueError("CONFIDENCE_LEVEL must lie between 0 and 1.")
 
 
 def get_distribution_name():
     """Return the selected distribution name."""
 
-    return {
-        1: "GEV",
-        2: "Gumbel",
-        3: "GenEx",
-    }[EXTREME_VALUE_DISTRIBUTION]
+    return {1: "GEV", 2: "Gumbel", 3: "GenEx"}[EXTREME_VALUE_DISTRIBUTION]
 
 
 def get_reference_variable():
@@ -485,10 +452,7 @@ def get_reference_variable():
 def get_reference_name():
     """Return the publication-style reference name."""
 
-    return {
-        "senorge": "SeNorge",
-        "era5": "ERA5",
-    }[REFERENCE_DATASET]
+    return {"senorge": "SeNorge", "era5": "ERA5"}[REFERENCE_DATASET]
 
 
 def get_reference_label():
@@ -521,19 +485,11 @@ def get_model_method_label():
     return labels[MODEL_DATA_METHOD]
 
 
-def get_model_file_id(
-    catchment_name,
-):
+def get_model_file_id(catchment_name):
     """Return the short catchment identifier used in compact sample filenames."""
 
-    if catchment_name.startswith(
-        "regine_"
-    ):
-        return catchment_name.replace(
-            "regine_",
-            "",
-            1,
-        )
+    if catchment_name.startswith("regine_"):
+        return catchment_name.replace("regine_", "", 1)
 
     return catchment_name
 
@@ -542,11 +498,7 @@ def get_model_file_id(
 # UNSEEN lead configuration
 # =============================================================================
 
-def split_usable_accumulated_leads(
-    first_lead,
-    last_lead,
-    number_of_bins,
-):
+def split_usable_accumulated_leads(first_lead, last_lead, number_of_bins):
     """Split usable accumulated ending leads into near-equal bins."""
 
     number_of_leads = last_lead - first_lead + 1
@@ -584,10 +536,7 @@ def build_lead_bins():
 def get_full_lead_range():
     """Return the complete usable lead range."""
 
-    return (
-        FIRST_INPUT_LEAD + X_DAYS - 1,
-        LAST_INPUT_LEAD,
-    )
+    return FIRST_INPUT_LEAD + X_DAYS - 1, LAST_INPUT_LEAD
 
 
 def get_selected_model_lead_range():
@@ -596,9 +545,7 @@ def get_selected_model_lead_range():
     if MODEL_SAMPLING_GROUP == "full":
         return get_full_lead_range()
 
-    split_number = int(
-        MODEL_SAMPLING_GROUP.replace("split", "")
-    )
+    split_number = int(MODEL_SAMPLING_GROUP.replace("split", ""))
 
     return build_lead_bins()[split_number - 1]
 
@@ -615,10 +562,7 @@ def get_model_variable():
 
     lead_start, lead_end = get_selected_model_lead_range()
 
-    return (
-        f"tp24_max_lead"
-        f"{lead_start}_{lead_end}"
-    )
+    return f"tp24_max_lead{lead_start}_{lead_end}"
 
 
 def lead_split_filename_label():
@@ -665,10 +609,7 @@ def make_reference_filename():
         f"{OBSERVATION_YEARS[0]}-{OBSERVATION_YEARS[1]}.nc"
     )
 
-    return os.path.join(
-        config.dirs["era5_processed"],
-        filename,
-    )
+    return os.path.join(config.dirs["era5_processed"], filename)
 
 
 def make_model_filename():
@@ -680,9 +621,7 @@ def make_model_filename():
     """
 
     if MODEL_FILENAME_OVERRIDE is not None:
-        return str(
-            MODEL_FILENAME_OVERRIDE
-        )
+        return str(MODEL_FILENAME_OVERRIDE)
 
     base_filename = (
         f"monthly_max_samples_"
@@ -705,10 +644,7 @@ def make_model_filename():
             f"{REFERENCE_DATASET}.nc"
         )
 
-    return os.path.join(
-        config.dirs["s2s_processed"],
-        filename,
-    )
+    return os.path.join(config.dirs["s2s_processed"], filename)
 
 
 def make_figure_filename():
@@ -740,21 +676,14 @@ def make_figure_filename():
         f"{distribution_label}.png"
     )
 
-    return os.path.join(
-        config.dirs["fig"],
-        filename,
-    )
+    return os.path.join(config.dirs["fig"], filename)
 
 
 # =============================================================================
 # Data reading
 # =============================================================================
 
-def check_variable_exists(
-    ds,
-    variable,
-    dataset_name,
-):
+def check_variable_exists(ds, variable, dataset_name):
     """Raise an informative error if a variable is absent."""
 
     if variable not in ds:
@@ -764,10 +693,7 @@ def check_variable_exists(
         )
 
 
-def read_reference_month(
-    filename,
-    month,
-):
+def read_reference_month(filename, month):
     """
     Read one observational calendar month plus its record and Storm Hans.
 
@@ -889,12 +815,7 @@ def read_reference_month(
     }
 
 
-def read_model_month(
-    filename,
-    variable,
-    month,
-    dataset_name,
-):
+def read_model_month(filename, variable, month, dataset_name):
     """
     Read one calendar month from a compact monthly-maximum model sample.
 
@@ -978,6 +899,24 @@ def read_model_month(
     return values
 
 
+def subsample_model_values(model_values, reference_size, random_seed):
+    """Optionally subsample model values without replacement to reference size."""
+
+    if not SUBSAMPLE_MODEL_TO_REFERENCE_LENGTH:
+        return model_values
+
+    if model_values.size < reference_size:
+        raise ValueError(
+            "Cannot subsample the model to the reference length because the model "
+            f"sample has {model_values.size} values and the reference fit has "
+            f"{reference_size}."
+        )
+
+    rng = np.random.default_rng(random_seed)
+    indices = rng.choice(model_values.size, size=reference_size, replace=False)
+    return model_values[indices]
+
+
 # =============================================================================
 # Distribution fitting
 # =============================================================================
@@ -1014,10 +953,7 @@ def fit_gumbel(values):
     return location, scale
 
 
-def genex_negative_log_likelihood(
-    log_parameters,
-    values,
-):
+def genex_negative_log_likelihood(log_parameters, values):
     """Negative log-likelihood for the two-parameter GenEx."""
 
     shape, scale = np.exp(log_parameters)
@@ -1109,17 +1045,11 @@ def fit_distribution(values):
     return fit_genex(values)
 
 
-def genex_ppf(
-    probabilities,
-    parameters,
-):
+def genex_ppf(probabilities, parameters):
     """GenEx quantile function."""
 
     shape, scale = parameters
-    probabilities = np.asarray(
-        probabilities,
-        dtype=float,
-    )
+    probabilities = np.asarray(probabilities, dtype=float)
 
     return (
         -scale
@@ -1132,10 +1062,7 @@ def genex_ppf(
     )
 
 
-def calculate_return_levels(
-    return_periods,
-    fitted_parameters,
-):
+def calculate_return_levels(return_periods, fitted_parameters):
     """Calculate fitted return levels."""
 
     probabilities = 1.0 - 1.0 / return_periods
@@ -1165,67 +1092,18 @@ def calculate_return_levels(
     )
 
 
-def generate_random_sample(
-    fitted_parameters,
-    sample_size,
-    rng,
-):
-    """Generate one parametric-bootstrap sample."""
-
-    if EXTREME_VALUE_DISTRIBUTION == 1:
-        shape_c, location, scale = fitted_parameters
-
-        return genextreme.rvs(
-            shape_c,
-            loc=location,
-            scale=scale,
-            size=sample_size,
-            random_state=rng,
-        )
-
-    if EXTREME_VALUE_DISTRIBUTION == 2:
-        location, scale = fitted_parameters
-
-        return gumbel_r.rvs(
-            loc=location,
-            scale=scale,
-            size=sample_size,
-            random_state=rng,
-        )
-
-    uniforms = rng.uniform(
-        np.finfo(float).eps,
-        1.0 - np.finfo(float).eps,
-        size=sample_size,
-    )
-
-    return genex_ppf(
-        uniforms,
-        fitted_parameters,
-    )
-
-
 def calculate_empirical_return_periods(values):
     """Calculate empirical Weibull return periods."""
 
     sorted_values = np.sort(values)[::-1]
 
-    ranks = np.arange(
-        1,
-        sorted_values.size + 1,
-    )
-
-    return_periods = (
-        sorted_values.size + 1
-    ) / ranks
+    ranks = np.arange(1, sorted_values.size + 1)
+    return_periods = (sorted_values.size + 1) / ranks
 
     return return_periods, sorted_values
 
 
-def calculate_event_return_period(
-    event_value,
-    fitted_parameters,
-):
+def calculate_event_return_period(event_value, fitted_parameters):
     """Calculate the fitted return period corresponding to one event."""
 
     if EXTREME_VALUE_DISTRIBUTION == 1:
@@ -1271,10 +1149,7 @@ def calculate_event_return_period(
     return 1.0 / exceedance_probability
 
 
-def calculate_m_year_exceedance_probability(
-    return_period,
-    m_years,
-):
+def calculate_m_year_exceedance_probability(return_period, m_years):
     """
     Convert a fitted return period to the probability of at least one
     exceedance in m_years independent years.
@@ -1298,9 +1173,7 @@ def calculate_m_year_exceedance_probability(
     )
 
 
-def format_return_period(
-    return_period,
-):
+def format_return_period(return_period):
     """Format a finite or infinite return period for console output."""
 
     if np.isinf(return_period):
@@ -1404,122 +1277,64 @@ def print_panel_event_statistics(
 def make_return_period_grid():
     """Create a logarithmic return-period grid."""
 
-    return np.geomspace(
-        MIN_RETURN_PERIOD,
-        MAX_RETURN_PERIOD,
-        NUMBER_OF_RETURN_PERIODS,
-    )
+    return np.geomspace(MIN_RETURN_PERIOD, MAX_RETURN_PERIOD, NUMBER_OF_RETURN_PERIODS)
 
 
-def parametric_bootstrap_return_levels(
-    sample_values,
-    fitted_parameters,
-    return_periods,
-    random_seed,
-):
-    """Estimate confidence limits for one fitted curve."""
+def nonparametric_bootstrap_return_levels(sample_values, return_periods, random_seed):
+    """Estimate confidence limits by resampling the original sample with replacement."""
 
     rng = np.random.default_rng(random_seed)
     sample_size = sample_values.size
-
     bootstrap_levels = np.full(
-        (
-            NUMBER_OF_BOOTSTRAPS,
-            return_periods.size,
-        ),
-        np.nan,
-        dtype=float,
+        (NUMBER_OF_BOOTSTRAPS, return_periods.size), np.nan, dtype=float
     )
 
     successful_fits = 0
 
     for bootstrap_number in range(NUMBER_OF_BOOTSTRAPS):
-        simulated_values = generate_random_sample(
-            fitted_parameters=fitted_parameters,
-            sample_size=sample_size,
-            rng=rng,
-        )
+        resampled_values = rng.choice(sample_values, size=sample_size, replace=True)
 
         try:
-            bootstrap_parameters = fit_distribution(
-                simulated_values
-            )
-
-            levels = calculate_return_levels(
-                return_periods,
-                bootstrap_parameters,
-            )
-
-        except (
-            RuntimeError,
-            ValueError,
-            FloatingPointError,
-        ):
+            parameters = fit_distribution(resampled_values)
+            levels = calculate_return_levels(return_periods, parameters)
+        except (RuntimeError, ValueError, FloatingPointError):
             continue
 
         if not np.isfinite(levels).all():
             continue
 
-        bootstrap_levels[
-            bootstrap_number,
-            :,
-        ] = levels
-
+        bootstrap_levels[bootstrap_number] = levels
         successful_fits += 1
 
-    minimum_successful_fits = int(
-        0.90 * NUMBER_OF_BOOTSTRAPS
-    )
-
+    minimum_successful_fits = int(0.90 * NUMBER_OF_BOOTSTRAPS)
     if successful_fits < minimum_successful_fits:
         raise RuntimeError(
-            f"Only {successful_fits} of {NUMBER_OF_BOOTSTRAPS} "
-            f"bootstrap fits succeeded."
+            f"Only {successful_fits} of {NUMBER_OF_BOOTSTRAPS} bootstrap fits succeeded."
         )
 
     alpha = 1.0 - CONFIDENCE_LEVEL
-
-    lower = np.nanpercentile(
-        bootstrap_levels,
-        100.0 * alpha / 2.0,
-        axis=0,
-    )
-
+    lower = np.nanpercentile(bootstrap_levels, 100.0 * alpha / 2.0, axis=0)
     upper = np.nanpercentile(
-        bootstrap_levels,
-        100.0 * (1.0 - alpha / 2.0),
-        axis=0,
+        bootstrap_levels, 100.0 * (1.0 - alpha / 2.0), axis=0
     )
 
     return lower, upper, successful_fits
 
 
-def analyse_distribution(
-    values,
-    return_periods,
-    random_seed,
-):
+def analyse_distribution(values, return_periods, random_seed):
     """Fit and summarize one sample."""
 
     parameters = fit_distribution(values)
 
-    fitted_levels = calculate_return_levels(
-        return_periods,
-        parameters,
+    fitted_levels = calculate_return_levels(return_periods, parameters)
+
+    lower, upper, successful_fits = nonparametric_bootstrap_return_levels(
+        sample_values=values,
+        return_periods=return_periods,
+        random_seed=random_seed,
     )
 
-    lower, upper, successful_fits = (
-        parametric_bootstrap_return_levels(
-            sample_values=values,
-            fitted_parameters=parameters,
-            return_periods=return_periods,
-            random_seed=random_seed,
-        )
-    )
-
-    empirical_return_periods, empirical_values = (
-        calculate_empirical_return_periods(values)
-    )
+    empirical_return_periods, empirical_values = calculate_empirical_return_periods(values)
 
     return {
         "values": values,
@@ -1537,16 +1352,10 @@ def analyse_distribution(
 # Axis transformation and formatting
 # =============================================================================
 
-def convert_return_periods_to_plot_x(
-    return_periods,
-    m_years,
-):
+def convert_return_periods_to_plot_x(return_periods, m_years):
     """Convert return periods to the selected panel x-coordinate."""
 
-    return_periods = np.asarray(
-        return_periods,
-        dtype=float,
-    )
+    return_periods = np.asarray(return_periods, dtype=float)
 
     if X_AXIS_MODE == "return_period":
         return return_periods
@@ -1587,26 +1396,17 @@ def get_y_axis_label():
     return "Monthly maximum 2-day precipitation [mm]"
 
 
-def format_x_axis(
-    ax,
-    m_years,
-):
+def format_x_axis(ax, m_years):
     """Format one panel's x-axis."""
 
     ax.set_xscale("log")
 
     if X_AXIS_MODE == "return_period":
-        ax.set_xlim(
-            XMIN_RETURN_PERIOD,
-            XMAX_RETURN_PERIOD,
-        )
+        ax.set_xlim(XMIN_RETURN_PERIOD, XMAX_RETURN_PERIOD)
 
     else:
         # AEP decreases as return period increases, so reverse the axis.
-        ax.set_xlim(
-            XMAX_AEP,
-            XMIN_AEP,
-        )
+        ax.set_xlim(XMAX_AEP, XMIN_AEP)
 
         def percent_formatter(x, pos):
             if x <= 0:
@@ -1637,10 +1437,7 @@ def plot_panel(
 ):
     """Plot one publication-style panel."""
 
-    plot_x = convert_return_periods_to_plot_x(
-        return_periods,
-        m_years,
-    )
+    plot_x = convert_return_periods_to_plot_x(return_periods, m_years)
 
     observation_empirical_x = convert_return_periods_to_plot_x(
         observation_analysis["empirical_return_periods"],
@@ -1765,15 +1562,9 @@ def plot_panel(
             zorder=2,
         )
 
-    format_x_axis(
-        ax,
-        m_years,
-    )
+    format_x_axis(ax, m_years)
 
-    ax.set_ylim(
-        bottom=YMIN,
-        top=YMAX,
-    )
+    ax.set_ylim(YMIN, YMAX)
 
     if not SHARE_X_LABEL:
         ax.set_xlabel(
@@ -1787,10 +1578,7 @@ def plot_panel(
             fontsize=AXIS_LABELSIZE,
         )
 
-    panel_title = (
-        f"{panel_label}) "
-        f"{MONTH_NAMES[month - 1]}"
-    )
+    panel_title = f"{panel_label}) {MONTH_NAMES[month - 1]}"
 
     ax.set_title(
         panel_title,
@@ -1800,16 +1588,6 @@ def plot_panel(
         pad=5,
     )
 
-    #if X_AXIS_MODE == "aep":
-        #ax.text(
-        #    0.98,
-        #    0.97,
-        #    f"M = {m_years} year" if m_years == 1 else f"M = {m_years} years",
-        #    transform=ax.transAxes,
-        #    ha="right",
-        #    va="top",
-        #    fontsize=ANNOTATION_FONTSIZE,
-        #)
 
     ax.tick_params(
         axis="both",
@@ -1892,11 +1670,7 @@ def plot_panel(
         )
 
 
-def plot_figure(
-    return_periods,
-    month_results,
-    filename_out,
-):
+def plot_figure(return_periods, month_results, filename_out):
     """Create the two-panel publication-quality figure."""
 
     fig, axes = plt.subplots(
@@ -1909,10 +1683,7 @@ def plot_figure(
         constrained_layout=True,
     )
 
-    panel_labels = [
-        "a",
-        "b",
-    ]
+    panel_labels = ["a", "b"]
 
     for panel_number, month in enumerate(
         PANEL_MONTHS
@@ -1994,21 +1765,20 @@ def main():
 
     model_variable = get_model_variable()
 
-    if not os.path.isfile(
-        filename_model
-    ):
+    if not os.path.isfile(filename_model):
         raise FileNotFoundError(
             f"Selected compact model file not found: {filename_model}"
         )
 
-    print(
-        f"Reference dataset:             {get_reference_label()}"
-    )
+    print(f"Reference dataset:             {get_reference_label()}")
+    print("Reference use:                 thresholds/events + model bias correction")
     print(
         f"Reference file:                {filename_reference}"
     )
+    print(f"Model-data method:             {MODEL_DATA_METHOD}")
     print(
-        f"Model-data method:             {MODEL_DATA_METHOD}"
+        "Subsample model to reference:  "
+        f"{SUBSAMPLE_MODEL_TO_REFERENCE_LENGTH}"
     )
     print(
         f"Model file:                    {filename_model}"
@@ -2061,10 +1831,16 @@ def main():
             ),
         )
 
+        model_values = subsample_model_values(
+            model_values=model_values,
+            reference_size=reference_data["fit_values"].size,
+            random_seed=RANDOM_SEED + 20 * month_index + 1,
+        )
+
         model_analysis = analyse_distribution(
             values=model_values,
             return_periods=return_periods,
-            random_seed=RANDOM_SEED + 20 * month_index + 1,
+            random_seed=RANDOM_SEED + 20 * month_index + 2,
         )
 
         if model_is_raw():
@@ -2104,37 +1880,19 @@ def main():
                 f"{reference_data['storm_hans_value']:.3f} mm"
             )
 
-    panel_labels = [
-        "a",
-        "b",
-        "c",
-        "d",
-    ]
+    panel_labels = ["a", "b"]
 
-    panel_number = 0
-
-    # Use the same month-major order as the plotted panels:
-    # a) first month, first M
-    # b) first month, second M
-    # c) second month, first M
-    # d) second month, second M
-    for month in PANEL_MONTHS:
-        for m_years in [M_YEARS]:
-            result = month_results[month]
-
-            print_panel_event_statistics(
-                panel_label=panel_labels[panel_number],
-                month=month,
-                m_years=m_years,
-                reference_data=result["reference_data"],
-                observation_analysis=result["observation_analysis"],
-                raw_analysis=result["raw_analysis"],
-                bias_corrected_analysis=result[
-                    "bias_corrected_analysis"
-                ],
-            )
-
-            panel_number += 1
+    for panel_label, month in zip(panel_labels, PANEL_MONTHS):
+        result = month_results[month]
+        print_panel_event_statistics(
+            panel_label=panel_label,
+            month=month,
+            m_years=M_YEARS,
+            reference_data=result["reference_data"],
+            observation_analysis=result["observation_analysis"],
+            raw_analysis=result["raw_analysis"],
+            bias_corrected_analysis=result["bias_corrected_analysis"],
+        )
 
     plot_figure(
         return_periods=return_periods,
