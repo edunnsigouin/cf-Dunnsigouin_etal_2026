@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 Create monthly precipitation-maximum samples from one preprocessed S2S file.
 
@@ -21,24 +20,29 @@ For raw input, the script calculates the requested trailing X-day
 accumulation. For bias-corrected input, the accumulation has already been
 performed, so the script does not accumulate the data again.
 
-Calendar-month assignment
--------------------------
-The calendar month is always assigned from the original daily valid dates for
-lead days 16-46. In other words, month assignment always uses the N=1 forecast
-window, even when the precipitation maxima are calculated from 2-day, 3-day,
-or another N-day accumulation.
+Sample-month assignment
+-----------------------
+Each i_date is assigned one monthly sample label from the 31 original daily
+valid dates for lead days 16-46. The assignment therefore uses the N=1 forecast
+window even when precipitation maxima are calculated from a multi-day
+accumulation.
+
+Forecast rows use f_date directly. Hindcast rows first reconstruct their true
+valid dates from the original hindcast initialization date stored in hdate.
+hdate uses an unusual encoding in which the intended YYYYMMDD integer is stored
+as nanoseconds after 1970-01-01. For example, an encoded nanosecond value of
+20000102 represents the true initialization date 2000-01-02.
 
 For each i_date:
 
-1. Read the 31 daily valid dates corresponding to lead days 16-46.
-2. Count how many of those dates fall in each calendar month.
-3. Assign the initialization to the month containing the most dates.
+1. Read the 31 nominal daily f_date values for lead days 16-46.
+2. For hindcasts, decode hdate and shift those 31 dates from the nominal i_date
+   to the true hindcast initialization date.
+3. Convert the 31 true valid dates to calendar year-month labels.
+4. Assign sample_month(i_date) to the YYYYMM value containing the most dates.
 
-Because there are 31 daily lead dates, there must always be one calendar month
-with a strict majority. A tie cannot occur.
-
-This gives every forecast/hindcast initialization one fixed calendar-month
-assignment that does not change when accumulation_days changes.
+Because 31 daily dates are used, the assignment has a strict majority and
+cannot tie. sample_month is independent of accumulation_days.
 
 The precipitation calculation remains accumulation-dependent. For example:
 
@@ -53,8 +57,8 @@ Workflow
 --------
 1. Read either raw daily or already accumulated bias-corrected
    catchment-mean precipitation.
-2. Assign each i_date to a calendar month using the 31 valid dates stored in
-   f_date for lead days 16-46.
+2. Reconstruct true hindcast valid dates from hdate and assign each i_date to
+   one YYYYMM sample_month using the 31 valid dates for lead days 16-46.
 3. For raw input, calculate trailing N-day precipitation accumulations along
    lead_day. For bias-corrected input, use the existing N-day accumulation.
 4. For every (number, i_date), find the maximum accumulated precipitation over
@@ -122,7 +126,7 @@ number_of_lead_bins = 2
 # "bias_corrected":
 #     Read an already accumulated and bias-corrected model file. No additional
 #     rolling accumulation is performed.
-input_data_type = "bias_corrected"
+input_data_type = "raw"
 
 # Settings used only when input_data_type == "bias_corrected".
 #
@@ -266,7 +270,7 @@ def make_output_filename(
     return (
         path_out
         / (
-            f"monthly_max_samples_{variable}_"
+            f"test-monthly_max_samples_{variable}_"
             f"{accumulation_days}dayacc_"
             f"{get_file_id(catchment)}_"
             f"lead{first_usable_lead}-{last_input_lead}_"
@@ -667,128 +671,135 @@ def calculate_accumulation(
 
 
 # =============================================================================
-# Calendar-month assignment
+# Sample-month assignment
 # =============================================================================
 
-def month_with_most_daily_valid_dates(
-    valid_dates,
-):
-    """
-    Return the month containing the most daily valid dates.
+def decode_hdate_yyyymmdd(hdate_values):
+    """Decode hdate values whose nanosecond integer stores YYYYMMDD."""
 
-    Month assignment always uses the complete N=1 valid-date window for input
-    lead days 16-46. There are 31 dates, so one month must have a strict
-    majority and a tie is impossible.
-    """
+    values = np.asarray(hdate_values)
 
-    finite_dates = valid_dates[
-        ~np.isnat(
-            valid_dates
-        )
-    ]
+    if np.issubdtype(values.dtype, np.datetime64):
+        encoded = values.astype("datetime64[ns]").astype("int64")
+        missing_value = np.datetime64("NaT", "ns").astype("int64")
+        finite = encoded != missing_value
+    elif np.issubdtype(values.dtype, np.integer):
+        encoded = values.astype("int64")
+        finite = encoded != np.iinfo("int64").min
+    else:
+        raise TypeError("hdate must be datetime64 or integer encoded values.")
 
-    expected_number_of_dates = (
-        last_input_lead
-        - first_input_lead
-        + 1
+    decoded = np.full(encoded.shape, np.datetime64("NaT", "ns"), dtype="datetime64[ns]")
+
+    for index in np.flatnonzero(finite):
+        date_code = f"{encoded[index]:08d}"
+
+        if len(date_code) != 8:
+            raise ValueError(f"Cannot decode hdate value {encoded[index]} as YYYYMMDD.")
+
+        year = int(date_code[:4])
+        month = int(date_code[4:6])
+        day = int(date_code[6:8])
+
+        try:
+            decoded[index] = np.datetime64(f"{year:04d}-{month:02d}-{day:02d}", "ns")
+        except ValueError as exc:
+            raise ValueError(
+                f"Cannot decode hdate value {encoded[index]} as a valid YYYYMMDD date."
+            ) from exc
+
+    return decoded
+
+
+def calculate_true_daily_valid_dates(input_f_dates, model_type, hdate, i_date):
+    """Return the true 31 daily valid dates for every forecast/hindcast i_date."""
+
+    daily_f_dates = input_f_dates.transpose("i_date", "lead_day").sel(
+        lead_day=slice(first_input_lead, last_input_lead)
     )
 
-    if finite_dates.size != expected_number_of_dates:
+    true_dates = np.asarray(daily_f_dates.values).astype("datetime64[ns]")
+    model_types = np.char.lower(np.asarray(model_type.values).astype(str))
+    nominal_initializations = np.asarray(i_date.values).astype("datetime64[ns]")
+    decoded_hdates = decode_hdate_yyyymmdd(hdate.values)
+
+    forecast_rows = model_types == "forecast"
+    hindcast_rows = model_types == "hindcast"
+
+    unknown_rows = ~(forecast_rows | hindcast_rows)
+    if np.any(unknown_rows):
+        unknown = sorted(set(np.asarray(model_type.values).astype(str)[unknown_rows]))
+        raise ValueError(f"Unsupported model_type values: {unknown}")
+
+    if np.any(np.isnat(decoded_hdates[hindcast_rows])):
+        raise ValueError("One or more hindcast rows have missing decoded hdate values.")
+
+    offsets = decoded_hdates[hindcast_rows] - nominal_initializations[hindcast_rows]
+    true_dates[hindcast_rows] += offsets[:, np.newaxis]
+
+    return xr.DataArray(
+        true_dates,
+        dims=("i_date", "lead_day"),
+        coords={
+            "i_date": daily_f_dates["i_date"],
+            "lead_day": daily_f_dates["lead_day"],
+        },
+        name="true_f_date",
+    )
+
+
+def majority_sample_month(valid_dates):
+    """Return the strict-majority YYYYMM value from 31 true daily valid dates."""
+
+    finite_dates = valid_dates[~np.isnat(valid_dates)]
+    expected_size = last_input_lead - first_input_lead + 1
+
+    if finite_dates.size != expected_size:
         raise ValueError(
-            f"Expected {expected_number_of_dates} daily valid dates for "
-            f"lead days {first_input_lead}-{last_input_lead}, "
-            f"but found {finite_dates.size}."
+            f"Expected {expected_size} valid dates for lead days "
+            f"{first_input_lead}-{last_input_lead}, found {finite_dates.size}."
         )
 
-    month_numbers = (
-        finite_dates
-        .astype(
-            "datetime64[M]"
-        )
-        .astype(
-            "int64"
-        )
-        % 12
-        + 1
-    )
+    months_since_epoch = finite_dates.astype("datetime64[M]").astype("int64")
+    years = months_since_epoch // 12 + 1970
+    months = months_since_epoch % 12 + 1
+    sample_months = 100 * years + months
 
-    months, counts = np.unique(
-        month_numbers,
-        return_counts=True,
-    )
-
+    unique_values, counts = np.unique(sample_months, return_counts=True)
     largest_count = counts.max()
 
-    if np.sum(
-        counts == largest_count
-    ) != 1:
+    if np.sum(counts == largest_count) != 1:
         raise ValueError(
-            "Calendar-month assignment produced a tie, even though the "
-            "daily lead window contains 31 dates."
+            "sample_month assignment produced a tie despite using "
+            f"{expected_size} daily dates."
         )
 
-    selected_position = np.argmax(
-        counts
+    return int(unique_values[np.argmax(counts)])
+
+
+def calculate_sample_month(input_f_dates, model_type, hdate, i_date):
+    """Assign one strict-majority YYYYMM sample_month to every i_date."""
+
+    true_daily_dates = calculate_true_daily_valid_dates(
+        input_f_dates=input_f_dates,
+        model_type=model_type,
+        hdate=hdate,
+        i_date=i_date,
     )
 
-    return np.int8(
-        months[
-            selected_position
-        ]
-    )
-
-
-def calculate_month_coordinate(
-    input_f_dates,
-):
-    """
-    Assign one fixed calendar month to every i_date.
-
-    The assignment uses all daily f_date values for lead days 16-46,
-    regardless of accumulation_days.
-    """
-
-    daily_f_dates = (
-        input_f_dates
-        .transpose(
-            "i_date",
-            "lead_day",
-        )
-        .sel(
-            lead_day=slice(
-                first_input_lead,
-                last_input_lead,
-            )
-        )
-    )
-
-    months = np.array(
+    sample_months = np.array(
         [
-            month_with_most_daily_valid_dates(
-                daily_f_dates.isel(
-                    i_date=index
-                ).values
-            )
-            for index in range(
-                daily_f_dates.sizes[
-                    "i_date"
-                ]
-            )
+            majority_sample_month(true_daily_dates.isel(i_date=index).values)
+            for index in range(true_daily_dates.sizes["i_date"])
         ],
-        dtype="int8",
+        dtype="int32",
     )
 
     return xr.DataArray(
-        months,
-        dims=(
-            "i_date",
-        ),
-        coords={
-            "i_date": daily_f_dates[
-                "i_date"
-            ],
-        },
-        name="month",
+        sample_months,
+        dims=("i_date",),
+        coords={"i_date": true_daily_dates["i_date"]},
+        name="sample_month",
     )
 
 
@@ -960,7 +971,7 @@ def build_output_dataset(
     tp24_max,
     lead_of_max,
     date_of_max,
-    month,
+    sample_month,
     lead_bin_variables,
     lead_bins,
 ):
@@ -975,7 +986,7 @@ def build_output_dataset(
             "lead_of_max": lead_of_max.astype(
                 "float32"
             ),
-            "month": month,
+            "sample_month": sample_month,
             "model_type": input_ds[
                 "model_type"
             ],
@@ -1021,16 +1032,19 @@ def build_output_dataset(
         }
     )
 
-    output[
-        "month"
-    ].attrs.update(
+    output["sample_month"].attrs.update(
         {
             "description": (
-                "Calendar month containing the largest number of daily valid "
-                "dates across input lead days 16-46"
+                "Calendar year-month containing the largest number of true daily "
+                "valid dates across input lead days 16-46"
             ),
+            "format": "YYYYMM",
             "assignment_window": (
                 "Fixed N=1 daily valid-date window for lead days 16-46"
+            ),
+            "hindcast_date_handling": (
+                "Hindcast valid dates are shifted from nominal f_date using the "
+                "decoded original hdate initialization"
             ),
             "tie_handling": (
                 "No tie is possible because the assignment window contains "
@@ -1152,13 +1166,13 @@ def build_output_dataset(
             "first_usable_accumulated_lead": first_usable_lead,
             "last_usable_accumulated_lead": last_input_lead,
             "number_of_lead_bins": number_of_lead_bins,
-            "calendar_month_assignment": (
-                "Month containing the largest number of N=1 daily valid dates "
-                "across input lead days 16-46; independent of "
-                "accumulation_days"
+            "sample_month_assignment": (
+                "YYYYMM containing the largest number of true N=1 daily valid dates "
+                "across input lead days 16-46; hindcasts use decoded hdate"
             ),
-            "calendar_month_assignment_number_of_dates": 31,
-            "calendar_month_tie_handling": (
+            "sample_month_assignment_number_of_dates": 31,
+            "sample_month_format": "YYYYMM",
+            "sample_month_tie_handling": (
                 "No tie possible because 31 daily valid dates are used"
             ),
             "lead_bin_sampling": (
@@ -1207,37 +1221,12 @@ def print_summary(
     )
 
     print()
-    print(
-        "Samples assigned to each month"
-    )
-    print(
-        "------------------------------"
-    )
+    print("Initialization rows assigned to each sample month")
+    print("-----------------------------------------------")
 
-    for month_number in range(
-        1,
-        13,
-    ):
-
-        initialization_mask = (
-            output[
-                "month"
-            ]
-            == month_number
-        )
-
-        sample_count = np.isfinite(
-            output[
-                "tp24_max"
-            ].where(
-                initialization_mask
-            )
-        ).sum().item()
-
-        print(
-            f"Month {month_number:>2}: "
-            f"{sample_count:>8} finite samples"
-        )
+    sample_months, counts = np.unique(output["sample_month"].values, return_counts=True)
+    for sample_month_value, count in zip(sample_months, counts):
+        print(f"{int(sample_month_value)}: {int(count):>8} i_date rows")
 
 
 def write_output(
@@ -1277,6 +1266,8 @@ def write_output(
             np.nan
         ),
     }
+
+    encoding["sample_month"] = {"dtype": "int32"}
 
     encoding[
         "hdate"
@@ -1373,7 +1364,7 @@ if __name__ == "__main__":
         accumulation_days,
     )
     print(
-        "Month-assignment leads:",
+        "Sample-month assignment leads:",
         (
             f"{first_input_lead}-"
             f"{last_input_lead} "
@@ -1421,12 +1412,13 @@ if __name__ == "__main__":
         input_ds
     )
 
-    # Assign the calendar month from the full N=1 daily valid-date window
-    # (lead days 16-46), independently of accumulation_days.
-    month = calculate_month_coordinate(
-        input_ds[
-            "f_date"
-        ]
+    # Assign one YYYYMM sample month from the full N=1 daily valid-date window
+    # (lead days 16-46). Hindcast rows use true dates reconstructed from hdate.
+    sample_month = calculate_sample_month(
+        input_f_dates=input_ds["f_date"],
+        model_type=input_ds["model_type"],
+        hdate=input_ds["hdate"],
+        i_date=input_ds["i_date"],
     )
 
     (
@@ -1449,7 +1441,7 @@ if __name__ == "__main__":
         tp24_max=tp24_max,
         lead_of_max=lead_of_max,
         date_of_max=date_of_max,
-        month=month,
+        sample_month=sample_month,
         lead_bin_variables=lead_bin_variables,
         lead_bins=lead_bins,
     )
