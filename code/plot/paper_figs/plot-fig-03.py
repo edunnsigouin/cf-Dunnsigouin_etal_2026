@@ -176,7 +176,7 @@ X_DAYS = 2
 OBSERVATION_YEARS = ["1957", "2023"]
 
 # If True, 2023 is read but excluded from each observational fit.
-EXCLUDE_2023_FROM_FIT = False
+EXCLUDE_2023_FROM_FIT = True
 
 SENORGE_VARIABLE = "rr"
 if not EXCLUDE_2023_FROM_FIT:
@@ -239,7 +239,7 @@ MODEL_FILENAME_OVERRIDE = None
 #     1 -> GEV
 #     2 -> Gumbel
 #     3 -> GenEx
-EXTREME_VALUE_DISTRIBUTION = 2
+EXTREME_VALUE_DISTRIBUTION = 1
 
 
 # -----------------------------------------------------------------------------
@@ -314,7 +314,7 @@ XMAX_AEP = 100.0
 YMIN = 0.0
 YMAX = 200
 
-WRITE_TO_FILE = False
+WRITE_TO_FILE = True
 FIGURE_DPI = 300
 
 
@@ -670,7 +670,6 @@ def make_figure_filename():
         f"fig-03_"
         f"{X_AXIS_MODE}_"
         f"M{M_YEARS}_"
-        f"{months_label}_"
         f"{model_label}_"
         f"{REFERENCE_DATASET}_"
         f"{distribution_label}.png"
