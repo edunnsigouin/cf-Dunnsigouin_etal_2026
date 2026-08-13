@@ -91,7 +91,7 @@ MODEL_FILENAME_OVERRIDE = None
 #     "parametric"    -> fit once, simulate from the fitted distribution, then refit
 BOOTSTRAP_METHOD = "nonparametric"
 
-NUMBER_OF_BOOTSTRAPS = 50
+NUMBER_OF_BOOTSTRAPS = 100
 CONFIDENCE_LEVEL = 0.95
 RANDOM_SEED = 42
 MIN_SUCCESSFUL_BOOTSTRAP_FRACTION = 0.90
