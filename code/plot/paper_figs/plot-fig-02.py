@@ -21,7 +21,7 @@ from Dunnsigouin_etal_2026 import config
 catchment = "regine_glomma"
 x_days = 2
 
-forecast_date_range = ["2020-01-02", "2022-12-29"]
+forecast_date_range = ["2020-01-02", "2023-12-28"]
 observation_years = ["1957", "2023"]
 
 # Daily lead range used when creating the S2S model sample.
