@@ -152,7 +152,7 @@ input_filename_override = None
 # Leave as None to use the automatically generated filename.
 output_filename_override = None
 
-write2file = False
+write2file = True
 
 
 # =============================================================================
@@ -1406,16 +1406,6 @@ if __name__ == "__main__":
         i_date=input_ds["i_date"],
     )
 
-    #for i in range(0,sample_month.i_date.size):
-    #    print(i,sample_month[i].values)
-
-    for i in [7096, 7097, 7098]:
-        print("\nIndex:", i)
-        print("model_type:", input_ds["model_type"].values[i])
-        print("i_date:", input_ds["i_date"].values[i])
-        print("hdate:", input_ds["hdate"].values[i])
-        print("f_date:", input_ds["f_date"].values[i])    
-    """
     (
         tp24_max,
         lead_of_max,
@@ -1455,4 +1445,4 @@ if __name__ == "__main__":
                 lead_bin_variables
             ),
         )
-"""
+

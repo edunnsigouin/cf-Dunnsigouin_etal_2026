@@ -16,10 +16,10 @@ The figure contains two panels, each showing Hindcast, Forecast, and All.
 Panel a) plots the monthly YYYYMM time series:
 
     Hindcast
-        HINDCAST_MEMBERS × hindcast i_date count in each YYYYMM.
+        Number of finite hindcast realizations assigned to each YYYYMM.
 
     Forecast
-        FORECAST_MEMBERS × forecast i_date count in each YYYYMM.
+        Number of finite forecast realizations assigned to each YYYYMM.
 
     All
         Hindcast + Forecast in each YYYYMM.
@@ -27,8 +27,8 @@ Panel a) plots the monthly YYYYMM time series:
 Panel b) aggregates the same counts by calendar month only, summing over all
 years so the x-axis is January through December.
 
-The ensemble sizes are source-specific because hindcast and forecast rows do not
-use the same number of members.
+The ensemble size is determined from the finite realization values in each i_date
+row, allowing forecast ensemble size to vary between 51 and 101 members.
 """
 
 from pathlib import Path
@@ -53,7 +53,7 @@ VARIABLE = "tp24"
 CATCHMENT = "regine_drammen"
 ACCUMULATION_DAYS = 2
 
-FORECAST_DATE_RANGE = ["2020-01-02", "2023-12-28"]
+FORECAST_DATE_RANGE = ["2020-01-02", "2022-12-29"]
 
 FIRST_INPUT_LEAD = 16
 LAST_INPUT_LEAD = 46
@@ -63,10 +63,6 @@ NUMBER_OF_LEAD_BINS = 2
 INPUT_DATA_TYPE = "raw"  # "raw" or "bias_corrected"
 BIAS_CORRECTION_METHOD = "ld"  # "q", "doy", "ld", or "q_doy"
 BIAS_CORRECTION_REFERENCE = "era5"  # "senorge" or "era5"
-
-# Source-specific ensemble sizes.
-HINDCAST_MEMBERS = 11
-FORECAST_MEMBERS = 51
 
 # Optional time limits. Use None for the complete sample_month range.
 PLOT_START_MONTH = None  # e.g. 200001
@@ -96,7 +92,7 @@ TICK_LABELSIZE = 10
 LEGEND_FONTSIZE = 10
 
 SHOW_GRID = True
-WRITE_TO_FILE = False
+WRITE_TO_FILE = True
 SHOW_FIGURE = True
 
 
@@ -173,7 +169,7 @@ def make_figure_filename():
 
     filename = (
         f"t_sample_month_realization_counts_{VARIABLE}_{ACCUMULATION_DAYS}dayacc_"
-        f"{get_file_id(CATCHMENT)}_{source}.png"
+        f"{get_file_id(CATCHMENT)}_{source}_{FORECAST_DATE_RANGE[0]}-{FORECAST_DATE_RANGE[-1]}.png"
     )
     return Path(config.dirs["fig"]) / filename
 
@@ -184,9 +180,6 @@ def make_figure_filename():
 
 def validate_user_settings():
     """Validate user-configurable settings."""
-
-    if HINDCAST_MEMBERS < 1 or FORECAST_MEMBERS < 1:
-        raise ValueError("HINDCAST_MEMBERS and FORECAST_MEMBERS must be at least 1.")
 
     if ACCUMULATION_DAYS < 1:
         raise ValueError("ACCUMULATION_DAYS must be at least 1.")
@@ -241,12 +234,12 @@ def validate_sample_month_value(value, name):
 
 
 def read_sample_metadata():
-    """Read sample_month and model_type from the compact sample file."""
+    """Read sample metadata and count finite realizations for each i_date."""
 
     filename = make_input_filename()
 
     with xr.open_dataset(filename, decode_timedelta=False) as ds:
-        required = {"sample_month", "model_type"}
+        required = {"sample_month", "model_type", "tp24_max"}
         missing = required - set(ds.variables)
         if missing:
             raise KeyError(f"Input file is missing variables: {sorted(missing)}")
@@ -257,8 +250,23 @@ def read_sample_metadata():
         if ds["model_type"].dims != ("i_date",):
             raise ValueError("model_type must have dimension ('i_date',).")
 
+        expected_tp24_dims = {"number", "i_date"}
+        if set(ds["tp24_max"].dims) != expected_tp24_dims:
+            raise ValueError(
+                f"tp24_max must contain dimensions {sorted(expected_tp24_dims)}, "
+                f"but has {ds['tp24_max'].dims}."
+            )
+
         sample_month = np.asarray(ds["sample_month"].load().values, dtype="int64")
         model_type = np.char.lower(np.asarray(ds["model_type"].load().values).astype(str))
+        realization_count = (
+            np.isfinite(ds["tp24_max"])
+            .sum(dim="number")
+            .transpose("i_date")
+            .load()
+            .values
+            .astype("int64")
+        )
 
     valid_types = {"forecast", "hindcast"}
     unknown = sorted(set(model_type) - valid_types)
@@ -268,7 +276,7 @@ def read_sample_metadata():
     for value in np.unique(sample_month):
         validate_sample_month_value(int(value), "sample_month")
 
-    return sample_month, model_type
+    return sample_month, model_type, realization_count
 
 
 # =============================================================================
@@ -283,8 +291,8 @@ def sample_month_to_period(sample_month):
     return pd.Period(year=year, month=month, freq="M")
 
 
-def calculate_monthly_counts(sample_month, model_type):
-    """Calculate forecast, hindcast, and combined realization counts."""
+def calculate_monthly_counts(sample_month, model_type, realization_count):
+    """Calculate monthly forecast, hindcast, and combined realization counts."""
 
     periods = pd.PeriodIndex([sample_month_to_period(value) for value in sample_month])
 
@@ -303,15 +311,10 @@ def calculate_monthly_counts(sample_month, model_type):
 
     monthly_counts = {}
 
-    for label, type_name, members in [
-        ("Forecast", "forecast", FORECAST_MEMBERS),
-        ("Hindcast", "hindcast", HINDCAST_MEMBERS),
-    ]:
-        group_periods = periods[model_type == type_name]
-        i_date_counts = pd.Series(1, index=group_periods).groupby(level=0).sum()
-        i_date_counts = i_date_counts.reindex(all_months, fill_value=0).astype(int)
-
-        monthly_counts[label] = members * i_date_counts
+    for label, type_name in [("Forecast", "forecast"), ("Hindcast", "hindcast")]:
+        mask = model_type == type_name
+        counts = pd.Series(realization_count[mask], index=periods[mask]).groupby(level=0).sum()
+        monthly_counts[label] = counts.reindex(all_months, fill_value=0).astype(int)
 
     monthly_counts["All"] = monthly_counts["Forecast"] + monthly_counts["Hindcast"]
 
@@ -455,20 +458,23 @@ def plot_realization_counts(plot_dates, monthly_counts, calendar_month_counts):
 # Reporting
 # =============================================================================
 
-def print_summary(sample_month, model_type, monthly_counts):
+def print_summary(sample_month, model_type, realization_count, monthly_counts):
     """Print sample sizes and monthly count ranges."""
 
-    forecast_rows = int(np.sum(model_type == "forecast"))
-    hindcast_rows = int(np.sum(model_type == "hindcast"))
+    forecast_mask = model_type == "forecast"
+    hindcast_mask = model_type == "hindcast"
+
+    forecast_rows = int(forecast_mask.sum())
+    hindcast_rows = int(hindcast_mask.sum())
+    forecast_total = int(realization_count[forecast_mask].sum())
+    hindcast_total = int(realization_count[hindcast_mask].sum())
 
     print("Input:", make_input_filename())
     print(f"Forecast i_date rows:    {forecast_rows:,}")
     print(f"Hindcast i_date rows:    {hindcast_rows:,}")
-    print(f"Forecast members/row:    {FORECAST_MEMBERS}")
-    print(f"Hindcast members/row:    {HINDCAST_MEMBERS}")
-    print(f"Forecast samples total:  {FORECAST_MEMBERS * forecast_rows:,}")
-    print(f"Hindcast samples total:  {HINDCAST_MEMBERS * hindcast_rows:,}")
-    print(f"All samples total:       {FORECAST_MEMBERS * forecast_rows + HINDCAST_MEMBERS * hindcast_rows:,}")
+    print(f"Forecast samples total:  {forecast_total:,}")
+    print(f"Hindcast samples total:  {hindcast_total:,}")
+    print(f"All samples total:       {forecast_total + hindcast_total:,}")
     print(f"First sample_month:      {int(np.min(sample_month))}")
     print(f"Last sample_month:       {int(np.max(sample_month))}")
 
@@ -486,11 +492,13 @@ def main():
 
     validate_user_settings()
 
-    sample_month, model_type = read_sample_metadata()
-    plot_dates, monthly_counts = calculate_monthly_counts(sample_month, model_type)
+    sample_month, model_type, realization_count = read_sample_metadata()
+    plot_dates, monthly_counts = calculate_monthly_counts(
+        sample_month, model_type, realization_count
+    )
     calendar_month_counts = calculate_calendar_month_counts(plot_dates, monthly_counts)
 
-    print_summary(sample_month, model_type, monthly_counts)
+    print_summary(sample_month, model_type, realization_count, monthly_counts)
     plot_realization_counts(
         plot_dates,
         monthly_counts,

@@ -68,16 +68,16 @@ STORM_HANS_MONTH = 8
 
 RECORD_START_YEAR = 1957
 AUGUST_RECORD_END_YEAR = 2022
-MAY_RECORD_END_YEAR = 2022
+MAY_RECORD_END_YEAR = 2023
 
 OBSERVATION_YEARS = ["1957", "2023"]
-EXCLUDE_2023_FROM_REFERENCE_FIT = True
+EXCLUDE_2023_FROM_REFERENCE_FIT = False
 
 CATCHMENT = "regine_drammen"
 X_DAYS = 2
 MODEL_VARIABLE = "tp24"
 
-FORECAST_DATE_RANGE = ["2020-01-02", "2022-12-29"]
+FORECAST_DATE_RANGE = ["2020-01-02", "2023-12-28"]
 FIRST_INPUT_LEAD = 16
 LAST_INPUT_LEAD = 46
 NUMBER_OF_LEAD_BINS = 2
@@ -89,9 +89,9 @@ MODEL_FILENAME_OVERRIDE = None
 # Bootstrap method:
 #     "nonparametric" -> resample original values with replacement
 #     "parametric"    -> fit once, simulate from the fitted distribution, then refit
-BOOTSTRAP_METHOD = "nonparametric"
+BOOTSTRAP_METHOD = "parametric"
 
-NUMBER_OF_BOOTSTRAPS = 100
+NUMBER_OF_BOOTSTRAPS = 10
 CONFIDENCE_LEVEL = 0.95
 RANDOM_SEED = 42
 MIN_SUCCESSFUL_BOOTSTRAP_FRACTION = 0.90
@@ -127,7 +127,7 @@ RETURN_PERIOD_YMAX_YEARS = 10_000_000.0
 
 SHARE_Y_AXES = False
 SHOW_GRID = True
-WRITE_TO_FILE = True
+WRITE_TO_FILE = False
 SHOW_FIGURE = True
 
 
@@ -331,7 +331,7 @@ def make_raw_model_filename():
     """Construct the raw compact model filename."""
 
     filename = (
-        f"monthly_max_samples_{MODEL_VARIABLE}_{X_DAYS}dayacc_"
+        f"test-monthly_max_samples_{MODEL_VARIABLE}_{X_DAYS}dayacc_"
         f"{get_model_file_id(CATCHMENT)}_{lead_split_filename_label()}_"
         f"{FORECAST_DATE_RANGE[0]}_{FORECAST_DATE_RANGE[1]}.nc"
     )
@@ -443,10 +443,17 @@ def read_model_month(month):
                 f"Variable '{variable}' was not found in {filename}. "
                 f"Available variables: {list(ds.data_vars)}"
             )
-        if "month" not in ds:
-            raise KeyError(f"Variable 'month' was not found in {filename}.")
+        if "sample_month" not in ds:
+            raise KeyError(f"Variable 'sample_month' was not found in {filename}.")
 
-        selected = ds[variable].where(ds["month"] == month, drop=True)
+        if ds["sample_month"].dims != ("i_date",):
+            raise ValueError(
+                f"Variable 'sample_month' in {filename} must have dimension "
+                f"('i_date',), found {ds['sample_month'].dims}."
+            )
+
+        calendar_month = ds["sample_month"] % 100
+        selected = ds[variable].where(calendar_month == month, drop=True)
         values = np.asarray(selected.values, dtype=float).ravel()
 
     values = values[np.isfinite(values)]

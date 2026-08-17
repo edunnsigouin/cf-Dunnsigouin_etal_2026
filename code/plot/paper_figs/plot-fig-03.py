@@ -75,7 +75,7 @@ or, for a lead-location split:
 
     tp24_max_lead<start>_<end>(number, i_date)
 
-Calendar-month membership is stored in month(i_date).
+Calendar-month membership is derived from sample_month(i_date), stored as YYYYMM.
 
 The model sample can optionally be randomly subsampled, without replacement,
 to the fitted reference-sample length for the same calendar month. This makes
@@ -186,7 +186,7 @@ X_DAYS = 2
 OBSERVATION_YEARS = ["1957", "2023"]
 
 # If True, 2023 is read but excluded from each observational fit.
-EXCLUDE_2023_FROM_FIT = True
+EXCLUDE_2023_FROM_FIT = False
 
 SENORGE_VARIABLE = "rr"
 if not EXCLUDE_2023_FROM_FIT:
@@ -205,7 +205,7 @@ ERA5_GRID = "0.5x0.5"
 
 MODEL_VARIABLE = "tp24"
 
-FORECAST_DATE_RANGE = ["2020-01-02", "2022-12-29"]
+FORECAST_DATE_RANGE = ["2020-01-02", "2023-12-28"]
 
 FIRST_INPUT_LEAD = 16
 LAST_INPUT_LEAD = 46
@@ -642,7 +642,7 @@ def make_model_filename():
         return str(MODEL_FILENAME_OVERRIDE)
 
     base_filename = (
-        f"monthly_max_samples_"
+        f"test-monthly_max_samples_"
         f"{MODEL_VARIABLE}_"
         f"{X_DAYS}dayacc_"
         f"{get_model_file_id(CATCHMENT)}_"
@@ -836,7 +836,7 @@ def read_model_month(filename, variable, month, dataset_name):
     """
     Read one calendar month from a compact monthly-maximum model sample.
 
-    month(i_date) identifies the calendar month. Finite values are pooled
+    sample_month(i_date) stores YYYYMM. Calendar month is derived with % 100.
     across ensemble member (number) and initialization row (i_date).
     """
 
@@ -853,7 +853,7 @@ def read_model_month(filename, variable, month, dataset_name):
 
         check_variable_exists(
             ds,
-            "month",
+            "sample_month",
             dataset_name,
         )
 
@@ -871,25 +871,14 @@ def read_model_month(filename, variable, month, dataset_name):
                 f"Found {ds[variable].dims}."
             )
 
-        if ds[
-            "month"
-        ].dims != (
-            "i_date",
-        ):
+        if ds["sample_month"].dims != ("i_date",):
             raise ValueError(
-                f"Variable 'month' in {dataset_name} must have "
+                f"Variable 'sample_month' in {dataset_name} must have "
                 "dimension ('i_date',)."
             )
 
-        selected = ds[
-            variable
-        ].where(
-            ds[
-                "month"
-            ]
-            == month,
-            drop=True,
-        )
+        calendar_month = ds["sample_month"] % 100
+        selected = ds[variable].where(calendar_month == month, drop=True)
 
         values = np.asarray(
             selected.values,

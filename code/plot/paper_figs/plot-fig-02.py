@@ -18,7 +18,7 @@ from Dunnsigouin_etal_2026 import config
 # User settings
 # =============================================================================
 
-catchment = "regine_glomma"
+catchment = "regine_drammen"
 x_days = 2
 
 forecast_date_range = ["2020-01-02", "2023-12-28"]
@@ -217,7 +217,7 @@ def make_model_filename():
     filename = os.path.join(
         config.dirs["s2s_processed"],
         (
-            f"monthly_max_samples_{MODEL_VARIABLE}_{x_days}dayacc_"
+            f"test-monthly_max_samples_{MODEL_VARIABLE}_{x_days}dayacc_"
             f"{get_file_id(catchment)}_{lead_split_filename_label()}_"
             f"{forecast_date_range[0]}_{forecast_date_range[1]}.nc"
         ),
@@ -259,7 +259,7 @@ def make_figure_filename():
     if model_sampling_group != "full":
         suffix += f"-{model_sampling_group}"
 
-    filename = f"fig-02-{catchment}-{suffix}-{REFERENCE_DATASET}.png"
+    filename = f"fig-02-{catchment}-{suffix}-{REFERENCE_DATASET}-{forecast_date_range[0]}-{forecast_date_range[-1]}.png"
 
     return os.path.join(config.dirs["fig"], filename)
 
@@ -280,17 +280,17 @@ def check_variable_exists(ds, variable, dataset_name):
 def validate_compact_model_structure(model_ds, variable):
     """Check the compact (number, i_date) model sample structure."""
     check_variable_exists(model_ds, variable, "model dataset")
-    check_variable_exists(model_ds, "month", "model dataset")
+    check_variable_exists(model_ds, "sample_month", "model dataset")
 
     if set(model_ds[variable].dims) != {"number", "i_date"}:
         raise ValueError(
             f"Model variable '{variable}' must have dimensions 'number' and 'i_date'; "
             f"got {model_ds[variable].dims}."
         )
-    if model_ds["month"].dims != ("i_date",):
+    if model_ds["sample_month"].dims != ("i_date",):
         raise ValueError(
-            "Model variable 'month' must have dimensions ('i_date',); "
-            f"got {model_ds['month'].dims}."
+            "Model variable 'sample_month' must have dimensions ('i_date',); "
+            f"got {model_ds['sample_month'].dims}."
         )
 
 
@@ -298,11 +298,11 @@ def get_model_values_by_month(model_ds, variable):
     """Return one flattened array of finite model values for each calendar month."""
     validate_compact_model_structure(model_ds, variable)
 
+    calendar_month = model_ds["sample_month"] % 100
+
     values_by_month = []
     for month_number in MONTHS:
-        selected = model_ds[variable].where(
-            model_ds["month"] == month_number, drop=True
-        )
+        selected = model_ds[variable].where(calendar_month == month_number, drop=True)
         values = selected.values.ravel()
         values_by_month.append(values[np.isfinite(values)])
 
@@ -330,7 +330,8 @@ def get_storm_hans_event(reference_ds, variable):
 def get_highest_may_model_event(model_ds, variable):
     """Return the largest May value in the selected S2S model distribution."""
     validate_compact_model_structure(model_ds, variable)
-    may_values = model_ds[variable].where(model_ds["month"] == 5, drop=True).values.ravel()
+    calendar_month = model_ds["sample_month"] % 100
+    may_values = model_ds[variable].where(calendar_month == 5, drop=True).values.ravel()
     finite_values = may_values[np.isfinite(may_values)]
 
     if finite_values.size == 0:
