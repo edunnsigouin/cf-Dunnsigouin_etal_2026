@@ -53,7 +53,7 @@ LAST_INPUT_LEAD = 46
 NUMBER_OF_LEAD_BINS = 2
 
 # Used for panels a-b. Options: "GEV", "Gumbel", "GenEx".
-TOP_DISTRIBUTION = "GEV"
+TOP_DISTRIBUTION = "Gumbel"
 
 # Used by all panels. Options: "return_period" or "aep".
 PLOT_METRIC = "return_period"
@@ -285,7 +285,7 @@ def make_figure_filename():
     """Construct the six-panel output figure filename."""
     model_label = "raw" if MODEL_DATA_METHOD == "raw" else f"bc-{MODEL_DATA_METHOD}"
     return Path(config.dirs["fig"]) / (
-        f"fig-03-{PLOT_METRIC}-{model_label}-{REFERENCE_DATASET}.png"
+        f"fig-03-{PLOT_METRIC}-{model_label}-{REFERENCE_DATASET}-{TOP_DISTRIBUTION}.png"
     )
 
 
