@@ -11,9 +11,15 @@ The figure combines three checks:
 Inputs
 ------
 The script reads three NetCDF files:
-    - the raw S2S monthly extreme-sample file;
-    - the bias-corrected S2S monthly extreme-sample file;
+    - the raw compact S2S monthly extreme-sample file;
+    - the bias-corrected compact S2S monthly extreme-sample file;
     - ONE selected reference dataset: ERA5 or SeNorge.
+
+The compact S2S files organize samples as (number, i_date). Sample-month
+membership is stored as sample_month(i_date) in YYYYMM format, model source is
+stored in model_type(i_date), and the unique i_date coordinate identifies each
+forecast or hindcast initialization row. Calendar month is derived internally
+as sample_month % 100.
 
 Panel (a) calculates independence from the raw all-lead sample.
 Panels (b)-(e) overlay raw and bias-corrected bootstrap distributions and their
@@ -27,10 +33,13 @@ For the default settings
     x_days = 2
     number_of_lead_bins = 2
 
-the usable accumulated ending leads are 17-46 and the S2S variables are:
-    all leads : max_value_lead17_46
-    early     : max_value_lead17_31
-    late      : max_value_lead32_46
+the usable accumulated ending leads are 17-46 and the raw S2S variables are:
+    all leads : tp24_max
+    early     : tp24_max_lead17_31
+    late      : tp24_max_lead32_46
+
+Bias-corrected compact files preserve the same maximum-variable names. The
+bias-correction method and reference dataset are encoded in the filename.
 
 
 Panel (a): Independence
@@ -56,8 +65,7 @@ Panel (c): Fidelity of the standard deviation
 ---------------------------------------------
 Uses the same bootstrap procedure, but for sample standard deviation.
 
-This tests whether the observed spread of monthly extremes is consistent with
-the spread expected from the S2S distribution.
+This tests whether the observed spread of monthly extremes is consistent with the spread expected from the S2S distribution.
 
 
 Panel (d): Fidelity of the skewness
@@ -98,8 +106,9 @@ the equal-distribution null hypothesis is rejected.
 Data used by each panel
 -----------------------
 Panel (a):
-    complete all-lead S2S sample + forecast_date + hdate + ensemble_member
-    + model_type from the shared S2S extreme-sample file.
+    complete all-lead S2S sample + i_date + number + model_type from the
+    shared compact S2S extreme-sample file. hdate is retained as provenance
+    but is not required because every hindcast row already has a unique i_date.
 
 Panels (b)-(e):
     complete all-lead S2S sample + ERA5 + SeNorge.
@@ -129,7 +138,7 @@ from Dunnsigouin_etal_2026 import config
 # =============================================================================
 
 # Calendar month to plot: 1=January, ..., 12=December.
-selected_month = 3
+selected_month = 12
 
 # Accumulation period.
 x_days = 2
@@ -137,9 +146,9 @@ x_days = 2
 # Catchment used consistently for all input datasets and figure labels.
 catchment = "regine_drammen"
 
-forecast_date_range = ("2020-01-02","2022-12-29")
+forecast_date_range = ("2020-01-02", "2023-12-28")
 
-reference_years = ("1957","2022")
+reference_years = ("1957", "2025")
 
 era5_grid = "0.5x0.5"
 
@@ -148,9 +157,23 @@ first_input_lead = 16
 last_input_lead = 46
 number_of_lead_bins = 2
 
+# Model-data / bias-correction method.
+#
+# Options:
+#     "raw"   : uncorrected compact monthly-maximum sample
+#     "mm"    : monthly-mean multiplicative correction from script 2
+#     "q"     : quantile-corrected compact sample from script 3
+#     "ld"    : lead-day-corrected compact sample from script 3
+#     "doy"   : day-of-year-corrected compact sample from script 3
+#     "q_doy" : quantile/day-of-year-corrected compact sample from script 3
+#
+# For any method other than "raw", the selected corrected model is compared
+# with the raw model in panels (b)-(f). For "raw", only the raw model is shown.
+BIAS_CORRECTION_METHOD = "mm"
+
 # Reference dataset used for BOTH:
 #   1. the vertical reference line in panels (b)-(e); and
-#   2. selecting the corresponding bias-corrected model file.
+#   2. selecting the corresponding corrected model file.
 #
 # Options:
 #     "era5"
@@ -161,10 +184,6 @@ REFERENCE_DATASET = "senorge"
 # Minimum number of paired initialization values required for one
 # ensemble-member Spearman correlation.
 minimum_samples = 10
-
-# Expected ensemble sizes.
-n_forecast_members = 51
-n_hindcast_members = 11
 
 # Bootstrap settings.
 number_of_bootstrap_samples = 10000
@@ -186,7 +205,7 @@ figure_width = 13.0
 figure_height = 8.0
 figure_dpi = 300
 
-write2file = False
+write2file = True
 show_figure = True
 
 
@@ -196,7 +215,8 @@ show_figure = True
 
 MODEL_VARIABLE = "tp24"
 # S2S maximum-variable names are built automatically from lead ranges.
-MODEL_MONTH_COORDINATE = "month_of_year"
+# Scripts 2 and 3 both store sample_month(i_date) as YYYYMM.
+MODEL_MONTH_COORDINATE = "sample_month"
 
 ERA5_VARIABLE = "tp24"
 
@@ -298,11 +318,52 @@ def readable_catchment_name(catchment_name: str) -> str:
     return name.replace("_", " ").title()
 
 
+def get_file_id(catchment_name: str) -> str:
+    """Return the short catchment name used in compact sample filenames."""
+
+    if catchment_name.startswith("regine_"):
+        return catchment_name.replace("regine_", "", 1)
+
+    return catchment_name
+
+
 def remove_missing_values(values: np.ndarray) -> np.ndarray:
     """Flatten an array and retain only finite values."""
 
     values = np.asarray(values).ravel()
     return values[np.isfinite(values)]
+
+
+def get_model_calendar_month(model_ds: xr.Dataset) -> xr.DataArray:
+    """Return calendar month 1-12 from sample_month(i_date) stored as YYYYMM."""
+
+    if MODEL_MONTH_COORDINATE not in model_ds:
+        raise KeyError(
+            f"Model dataset is missing '{MODEL_MONTH_COORDINATE}'. "
+            f"Available variables: {list(model_ds.variables)}"
+        )
+
+    sample_month = model_ds[MODEL_MONTH_COORDINATE]
+    if sample_month.dims != ("i_date",):
+        raise ValueError(
+            f"{MODEL_MONTH_COORDINATE} must have dimension ('i_date',), "
+            f"but has {sample_month.dims}."
+        )
+
+    values = np.asarray(sample_month.values)
+    finite = np.isfinite(values)
+    calendar_month = np.full(values.shape, -1, dtype="int16")
+    calendar_month[finite] = values[finite].astype("int64") % 100
+
+    if np.any(finite & ~np.isin(calendar_month, np.arange(1, 13))):
+        raise ValueError(f"{MODEL_MONTH_COORDINATE} contains invalid YYYYMM values.")
+
+    return xr.DataArray(
+        calendar_month,
+        dims=("i_date",),
+        coords={"i_date": model_ds["i_date"]},
+        name="calendar_month",
+    )
 
 
 def validate_user_settings() -> None:
@@ -377,6 +438,22 @@ def validate_user_settings() -> None:
         )
 
 
+    valid_methods = {
+        "raw",
+        "mm",
+        "q",
+        "ld",
+        "doy",
+        "q_doy",
+    }
+
+    if BIAS_CORRECTION_METHOD not in valid_methods:
+        raise ValueError(
+            f"BIAS_CORRECTION_METHOD must be one of "
+            f"{sorted(valid_methods)}. "
+            f"Got '{BIAS_CORRECTION_METHOD}'."
+        )
+
     valid_references = {
         "era5",
         "senorge",
@@ -441,83 +518,58 @@ def get_stability_lead_ranges() -> tuple[
     return full_range, split_ranges[0], split_ranges[1]
 
 
-def get_stability_variable_names(
-    bias_corrected: bool,
-) -> tuple[str, str, str]:
-    """Return complete, early, and late model-variable names."""
+def get_stability_variable_names() -> tuple[str, str, str]:
+    """Return compact complete, early, and late model-variable names.
 
-    full_range, early_range, late_range = get_stability_lead_ranges()
+    Scripts 2 and 3 preserve the compact variable names in their output files;
+    the correction method and reference dataset are encoded in the filename.
+    """
 
-    all_variable = f"max_value_lead{full_range[0]}_{full_range[1]}"
-    early_variable = f"max_value_lead{early_range[0]}_{early_range[1]}"
-    late_variable = f"max_value_lead{late_range[0]}_{late_range[1]}"
+    _, early_range, late_range = get_stability_lead_ranges()
 
-    if bias_corrected:
-        suffix = f"_bc_{REFERENCE_DATASET}"
-        all_variable += suffix
-        early_variable += suffix
-        late_variable += suffix
+    all_variable = "tp24_max"
+    early_variable = (
+        f"tp24_max_lead{early_range[0]}_{early_range[1]}"
+    )
+    late_variable = (
+        f"tp24_max_lead{late_range[0]}_{late_range[1]}"
+    )
 
     return all_variable, early_variable, late_variable
 
 
-def build_model_filename(
-    bias_corrected: bool,
-) -> str:
-    """Build the raw or bias-corrected S2S sample filename."""
+def build_model_filename(method: str) -> str:
+    """Build a compact S2S filename produced by script 2 or script 3."""
 
     full_range, early_range, late_range = get_stability_lead_ranges()
-
     lead_label = (
-        f"lead{full_range[0]}-{full_range[1]}_"
-        f"split{number_of_lead_bins}_"
-        f"{early_range[0]}-{early_range[1]}_"
-        f"{late_range[0]}-{late_range[1]}"
+        f"lead{full_range[0]}-{full_range[1]}_split{number_of_lead_bins}_"
+        f"{early_range[0]}-{early_range[1]}_{late_range[0]}-{late_range[1]}"
+    )
+    stem = (
+        f"test-monthly_max_samples_{MODEL_VARIABLE}_{x_days}dayacc_"
+        f"{get_file_id(catchment)}_{lead_label}_"
+        f"{forecast_date_range[0]}_{forecast_date_range[1]}"
     )
 
-    filename = os.path.join(
-        config.dirs["s2s_processed"],
-        (
-            f"unseen_sample_monthly_catchment_precipitation_extremes_"
-            f"{MODEL_VARIABLE}_{x_days}dayacc_"
-            f"{catchment}_"
-            f"{lead_label}_"
-            f"forecast_hindcast_"
-            f"{forecast_date_range[0]}_"
-            f"{forecast_date_range[1]}.nc"
-        ),
-    )
-
-    if bias_corrected:
-        stem, extension = os.path.splitext(filename)
-        filename = (
-            f"{stem}_bc_{REFERENCE_DATASET}{extension}"
-        )
-
-    return filename
-
+    filename = os.path.join(config.dirs["s2s_processed"], stem)
+    suffix = "" if method == "raw" else f"_bc_{method}_{REFERENCE_DATASET}"
+    return f"{filename}{suffix}.nc"
 
 def resolve_model_input_filenames() -> tuple[str, str]:
-    """Construct raw and bias-corrected S2S sample filenames."""
+    """Return raw and selected corrected compact S2S input filenames."""
 
-    raw_filename = build_model_filename(
-        bias_corrected=False,
-    )
-
-    bias_corrected_filename = build_model_filename(
-        bias_corrected=True,
-    )
-
-    return raw_filename, bias_corrected_filename
-
+    raw_filename = build_model_filename("raw")
+    selected_filename = build_model_filename(BIAS_CORRECTION_METHOD)
+    return raw_filename, selected_filename
 
 def build_era5_filename() -> str:
     """Build the ERA5 filename exactly as in script 2."""
 
     return (
         f"{config.dirs['era5_processed']}"
-        f"distribution_monthly_extremes_{ERA5_VARIABLE}_{x_days}dayacc_"
-        f"{catchment}_era5_{era5_grid}_"
+        f"monthly_max_samples_{ERA5_VARIABLE}_{x_days}dayacc_"
+        f"{catchment}_"
         f"{reference_years[0]}-{reference_years[1]}.nc"
     )
 
@@ -527,8 +579,8 @@ def build_senorge_filename() -> str:
 
     return (
         f"{config.dirs['senorge_processed']}"
-        f"distribution_monthly_extremes_{SENORGE_VARIABLE}_{x_days}dayacc_"
-        f"{catchment}_senorge_"
+        f"monthly_max_samples_{SENORGE_VARIABLE}_{x_days}dayacc_"
+        f"{catchment}_"
         f"{reference_years[0]}-{reference_years[1]}.nc"
     )
 
@@ -561,7 +613,7 @@ def build_output_filename() -> str:
             f"UNSEEN_independence_fidelity_stability_tests_"
             f"{month_name}_{x_days}dayacc_{catchment}_"
             f"{forecast_date_range[0]}_{forecast_date_range[1]}_"
-            f"raw_bc_{REFERENCE_DATASET}.png"
+            f"raw_{BIAS_CORRECTION_METHOD}_{REFERENCE_DATASET}_{reference_years[0]}-{reference_years[-1]}.png"
         ),
     )
 
@@ -656,141 +708,52 @@ def get_independence_month_samples(
     all_variable: str,
     model_type: str,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """
-    Extract the selected-month all-lead samples needed for independence.
-
-    Forecast initialization key:
-        forecast_date
-
-    Hindcast initialization key:
-        (forecast_date, hdate)
-    """
+    """Extract finite selected-month samples for the independence calculation."""
 
     required_variables = {
         all_variable,
-        "forecast_date",
-        "hdate",
-        "ensemble_member",
+        MODEL_MONTH_COORDINATE,
         "model_type",
+        "number",
+        "i_date",
     }
-
-    missing = required_variables.difference(
-        model_ds.data_vars
-    )
-
+    missing = required_variables.difference(model_ds.variables)
     if missing:
         raise KeyError(
-            "Model dataset is missing variables needed for the "
-            f"independence calculation: {sorted(missing)}"
+            "Model dataset is missing variables needed for the independence "
+            f"calculation: {sorted(missing)}"
         )
 
-    values = (
+    if model_type not in {"forecast", "hindcast"}:
+        raise ValueError("model_type must be 'forecast' or 'hindcast'.")
+
+    calendar_month = get_model_calendar_month(model_ds).values
+    normalized_types = normalize_model_type(model_ds["model_type"].values)
+    initialization_mask = (
+        (calendar_month == selected_month) & (normalized_types == model_type)
+    )
+
+    selected_i_dates = model_ds["i_date"].values[initialization_mask]
+    selected_values = (
         model_ds[all_variable]
-        .sel(
-            month_of_year=selected_month
-        )
-        .values
-        .ravel()
-        .astype("float64")
+        .isel(i_date=initialization_mask)
+        .transpose("i_date", "number")
+        .values.astype("float64")
     )
 
-    model_types = normalize_model_type(
-        model_ds["model_type"]
-        .sel(
-            month_of_year=selected_month
-        )
-        .values
-    )
+    member_labels = model_ds["number"].values.astype("int64")
 
-    members = (
-        model_ds["ensemble_member"]
-        .sel(
-            month_of_year=selected_month
-        )
-        .values
-        .ravel()
-        .astype("int64")
-    )
+    values = selected_values.ravel()
+    initialization_keys = np.repeat(selected_i_dates, member_labels.size)
+    members = np.tile(member_labels, selected_i_dates.size)
 
-    forecast_date_keys = datetime_values_to_key(
-        model_ds["forecast_date"]
-        .sel(
-            month_of_year=selected_month
-        )
-        .values
-    )
-
-    if model_type == "forecast":
-
-        initialization_keys = forecast_date_keys
-
-        valid_initialization = (
-            ~np.isnat(
-                forecast_date_keys
-            )
-        )
-
-    elif model_type == "hindcast":
-
-        hdate_keys = hdate_values_to_key(
-            model_ds["hdate"]
-            .sel(
-                month_of_year=selected_month
-            )
-            .values
-        )
-
-        initialization_keys = np.empty(
-            hdate_keys.size,
-            dtype=object,
-        )
-
-        for index in range(
-            hdate_keys.size
-        ):
-            initialization_keys[index] = (
-                forecast_date_keys[index],
-                int(
-                    hdate_keys[index]
-                ),
-            )
-
-        valid_initialization = (
-            ~np.isnat(
-                forecast_date_keys
-            )
-            & (
-                hdate_keys
-                != -99999999
-            )
-        )
-
-    else:
-        raise ValueError(
-            "model_type must be 'forecast' or 'hindcast'."
-        )
-
-    valid = (
-        np.isfinite(
-            values
-        )
-        & (
-            model_types
-            == model_type
-        )
-        & valid_initialization
-        & (
-            members
-            >= 0
-        )
-    )
+    valid = np.isfinite(values)
 
     return (
         values[valid],
         initialization_keys[valid],
         members[valid],
     )
-
 
 def reconstruct_member_matrix(
     values: np.ndarray,
@@ -827,30 +790,16 @@ def reconstruct_member_matrix(
                 initialization
             )
 
-    unique_members = np.unique(
-        member_labels
-    )
+    unique_members = np.unique(member_labels)
 
-    expected_members = (
-        n_forecast_members
-        if model_type == "forecast"
-        else n_hindcast_members
-    )
-
-    if unique_members.size != expected_members:
+    if unique_members.size < 2:
         raise ValueError(
-            f"{model_type.capitalize()} data contain "
-            f"{unique_members.size} unique ensemble-member labels, "
-            f"but {expected_members} were expected. "
-            f"Found labels: {unique_members.tolist()}"
+            f"{model_type.capitalize()} data contain fewer than two ensemble members."
         )
 
     member_lookup = {
         member: index
-        for index, member
-        in enumerate(
-            unique_members
-        )
+        for index, member in enumerate(unique_members)
     }
 
     matrix = np.full(
@@ -1105,28 +1054,21 @@ def get_model_values_for_selected_month(
     model_ds: xr.Dataset,
     variable_name: str,
 ) -> np.ndarray:
-    """Extract one model lead-group sample for the selected month."""
+    """Extract one compact model sample for the selected calendar month."""
 
-    check_variable_exists(
-        model_ds,
-        variable_name,
-        "model dataset",
-    )
-
+    check_variable_exists(model_ds, variable_name, "model dataset")
     data = model_ds[variable_name]
 
-    check_coordinate_exists(
-        data,
-        MODEL_MONTH_COORDINATE,
-        "model dataset",
-    )
+    required_dimensions = {"number", "i_date"}
+    if set(data.dims) != required_dimensions:
+        raise ValueError(
+            f"Variable '{variable_name}' must contain dimensions "
+            f"{sorted(required_dimensions)}, but has {data.dims}."
+        )
 
-    values = data.sel(
-        {MODEL_MONTH_COORDINATE: selected_month}
-    ).values
-
-    return remove_missing_values(values)
-
+    calendar_month = get_model_calendar_month(model_ds)
+    selected = data.where(calendar_month == selected_month, drop=True)
+    return remove_missing_values(selected.values)
 
 def get_reference_values_for_selected_month(
     ds: xr.Dataset,
@@ -1151,7 +1093,7 @@ def get_reference_values_for_selected_month(
 
 def load_model_and_reference_values(
     raw_model_filename: str,
-    bias_corrected_model_filename: str,
+    selected_model_filename: str,
     reference_filename: str,
     reference_variable: str,
     reference_label: str,
@@ -1181,7 +1123,7 @@ def load_model_and_reference_values(
 
     for dataset_name, filename in (
         ("raw model", raw_model_filename),
-        ("bias-corrected model", bias_corrected_model_filename),
+        ("selected model", selected_model_filename),
         (reference_label, reference_filename),
     ):
         if not os.path.exists(filename):
@@ -1193,21 +1135,23 @@ def load_model_and_reference_values(
         raw_all_variable,
         raw_early_variable,
         raw_late_variable,
-    ) = get_stability_variable_names(
-        bias_corrected=False,
-    )
+    ) = get_stability_variable_names()
 
     (
         bc_all_variable,
         bc_early_variable,
         bc_late_variable,
-    ) = get_stability_variable_names(
-        bias_corrected=True,
-    )
+    ) = get_stability_variable_names()
 
     with (
-        xr.open_dataset(raw_model_filename) as raw_model_ds,
-        xr.open_dataset(bias_corrected_model_filename) as bc_model_ds,
+        xr.open_dataset(
+            raw_model_filename,
+            decode_timedelta=False,
+        ) as raw_model_ds,
+        xr.open_dataset(
+            selected_model_filename,
+            decode_timedelta=False,
+        ) as bc_model_ds,
         xr.open_dataset(reference_filename) as reference_ds,
     ):
         independence_values = calculate_independence_values(
@@ -1715,21 +1659,12 @@ def add_failure_text(
     ax: plt.Axes,
     result: dict[str, object],
 ) -> None:
+    """Mark raw and bias-corrected fidelity failures.
+
+    A model fails when the selected reference statistic lies outside that
+    model's bootstrap confidence interval. Failure labels are drawn in the
+    selected reference-dataset color (ERA5 blue or SeNorge red).
     """
-    Mark failure of the RAW model fidelity test.
-
-    If the selected reference statistic falls outside the raw-model
-    bootstrap confidence interval, show:
-
-        Model
-        raw
-        fail
-
-    in the selected reference-dataset color.
-    """
-
-    if result["raw_passes"]:
-        return
 
     reference_color = (
         ERA5_COLOR
@@ -1737,16 +1672,34 @@ def add_failure_text(
         else SENORGE_COLOR
     )
 
-    ax.text(
-        0.97,
-        0.96,
-        "Model\nraw\nfail",
-        transform=ax.transAxes,
-        ha="center",
-        va="top",
-        fontsize=LEGEND_FONTSIZE,
-        color=reference_color,
-    )
+    if not result["raw_passes"]:
+        ax.text(
+            0.97,
+            0.96,
+            "raw\nfail",
+            transform=ax.transAxes,
+            ha="center",
+            va="top",
+            fontsize=LEGEND_FONTSIZE,
+            color=reference_color,
+        )
+
+    if (
+        BIAS_CORRECTION_METHOD != "raw"
+        and not result["bc_passes"]
+    ):
+        ax.text(
+            0.97,
+            0.8,
+            (
+                f"BC\nfail"
+            ),
+            transform=ax.transAxes,
+            ha="center",
+            va="top",
+            fontsize=LEGEND_FONTSIZE,
+            color=reference_color,
+        )
 
 
 def plot_moment_panel(
@@ -1781,19 +1734,22 @@ def plot_moment_panel(
         zorder=1,
     )
 
-    bc_counts, _, _ = ax.hist(
-        result[
-            "bc_bootstrap_values"
-        ],
-        bins=bin_edges,
-        density=plot_probability_density,
-        histtype="stepfilled",
-        color=BIAS_CORRECTED_COLOR,
-        edgecolor=BIAS_CORRECTED_COLOR,
-        alpha=BOOTSTRAP_ALPHA,
-        linewidth=HISTOGRAM_LINEWIDTH,
-        zorder=2,
-    )
+    bc_counts = np.array([])
+
+    if BIAS_CORRECTION_METHOD != "raw":
+        bc_counts, _, _ = ax.hist(
+            result[
+                "bc_bootstrap_values"
+            ],
+            bins=bin_edges,
+            density=plot_probability_density,
+            histtype="stepfilled",
+            color=BIAS_CORRECTED_COLOR,
+            edgecolor=BIAS_CORRECTED_COLOR,
+            alpha=BOOTSTRAP_ALPHA,
+            linewidth=HISTOGRAM_LINEWIDTH,
+            zorder=2,
+        )
 
     for confidence_limit in result[
         "raw_confidence_interval"
@@ -1806,16 +1762,17 @@ def plot_moment_panel(
             zorder=3,
         )
 
-    for confidence_limit in result[
-        "bc_confidence_interval"
-    ]:
-        ax.axvline(
-            confidence_limit,
-            color=BIAS_CORRECTED_COLOR,
-            linewidth=CONFIDENCE_LINEWIDTH,
-            linestyle="--",
-            zorder=4,
-        )
+    if BIAS_CORRECTION_METHOD != "raw":
+        for confidence_limit in result[
+            "bc_confidence_interval"
+        ]:
+            ax.axvline(
+                confidence_limit,
+                color=BIAS_CORRECTED_COLOR,
+                linewidth=CONFIDENCE_LINEWIDTH,
+                linestyle="--",
+                zorder=4,
+            )
 
     reference_color = (
         ERA5_COLOR
@@ -1910,23 +1867,16 @@ def make_shared_legend_handles(
 
     reference_color = (
         ERA5_COLOR
-        if REFERENCE_DATASET
-        == "era5"
+        if REFERENCE_DATASET == "era5"
         else SENORGE_COLOR
     )
 
-    return [
+    handles = [
         Patch(
             facecolor=RAW_MODEL_COLOR,
             edgecolor=RAW_MODEL_COLOR,
             alpha=BOOTSTRAP_ALPHA,
             label="Model raw",
-        ),
-        Patch(
-            facecolor=BIAS_CORRECTED_COLOR,
-            edgecolor=BIAS_CORRECTED_COLOR,
-            alpha=BOOTSTRAP_ALPHA,
-            label="Model BC",
         ),
         Line2D(
             [0],
@@ -1939,40 +1889,65 @@ def make_shared_legend_handles(
                 f"{confidence_level_percent:g}% interval"
             ),
         ),
-        Line2D(
-            [0],
-            [0],
-            color=BIAS_CORRECTED_COLOR,
-            linewidth=CONFIDENCE_LINEWIDTH,
-            linestyle="--",
-            label=(
-                f"Model BC "
-                f"{confidence_level_percent:g}% interval"
-            ),
-        ),
-        Line2D(
-            [0],
-            [0],
-            color=EARLY_COLOR,
-            linewidth=HISTOGRAM_LINEWIDTH,
-            label="Model BC early lead days (17-31)",
-        ),
-        Line2D(
-            [0],
-            [0],
-            color=LATE_COLOR,
-            linewidth=HISTOGRAM_LINEWIDTH,
-            label="Model BC late lead days (32-46)",
-        ),
-        Line2D(
-            [0],
-            [0],
-            color=reference_color,
-            linewidth=REFERENCE_LINEWIDTH,
-            label=reference_label,
-        ),
-
     ]
+
+    if BIAS_CORRECTION_METHOD != "raw":
+        method_label = BIAS_CORRECTION_METHOD
+        handles.extend(
+            [
+                Patch(
+                    facecolor=BIAS_CORRECTED_COLOR,
+                    edgecolor=BIAS_CORRECTED_COLOR,
+                    alpha=BOOTSTRAP_ALPHA,
+                    label=f"Model BC {method_label}",
+                ),
+                Line2D(
+                    [0],
+                    [0],
+                    color=BIAS_CORRECTED_COLOR,
+                    linewidth=CONFIDENCE_LINEWIDTH,
+                    linestyle="--",
+                    label=(
+                        f"Model BC {method_label} "
+                        f"{confidence_level_percent:g}% interval"
+                    ),
+                ),
+            ]
+        )
+
+    stability_prefix = (
+        "Model raw"
+        if BIAS_CORRECTION_METHOD == "raw"
+        else f"Model BC {BIAS_CORRECTION_METHOD}"
+    )
+
+    handles.extend(
+        [
+            Line2D(
+                [0],
+                [0],
+                color=EARLY_COLOR,
+                linewidth=HISTOGRAM_LINEWIDTH,
+                label=f"{stability_prefix} early lead days (17-31)",
+            ),
+            Line2D(
+                [0],
+                [0],
+                color=LATE_COLOR,
+                linewidth=HISTOGRAM_LINEWIDTH,
+                label=f"{stability_prefix} late lead days (32-46)",
+            ),
+            Line2D(
+                [0],
+                [0],
+                color=reference_color,
+                linewidth=REFERENCE_LINEWIDTH,
+                label=reference_label,
+            ),
+        ]
+    )
+
+    return handles
 
 
 def calculate_stability_bin_edges(
@@ -2092,9 +2067,17 @@ def plot_stability_panel(
         else SENORGE_COLOR
     )
 
+    ks_p_threshold = get_ks_significance_threshold()
+
     raw_text_color = (
         reference_color
-        if raw_stability_ks["p_value"] < 0.05
+        if raw_stability_ks["p_value"] < ks_p_threshold
+        else "black"
+    )
+
+    bc_text_color = (
+        reference_color
+        if bc_stability_ks["p_value"] < ks_p_threshold
         else "black"
     )
 
@@ -2113,12 +2096,13 @@ def plot_stability_panel(
         color="black",
     )
 
-    # Raw stability result is colored like the reference dataset when p < 0.05.
+    # Color a KS result like the reference dataset when p is below the
+    # user-selected significance threshold.
     ax.text(
         0.4,
         0.82,
         (
-            f"Model raw: D={raw_stability_ks['statistic']:.3f}, "
+            f"raw D={raw_stability_ks['statistic']:.3f}, "
             f"p={format_ks_p_value(raw_stability_ks['p_value'])}"
         ),
         transform=ax.transAxes,
@@ -2128,20 +2112,21 @@ def plot_stability_panel(
         color=raw_text_color,
     )
 
-    # Bias-corrected stability result remains black.
-    ax.text(
-        0.4,
-        0.75,
-        (
-            f"Model BC: D={bc_stability_ks['statistic']:.3f}, "
-            f"p={format_ks_p_value(bc_stability_ks['p_value'])}"
-        ),
-        transform=ax.transAxes,
-        ha="left",
-        va="top",
-        fontsize=9,
-        color="black",
-    )
+    if BIAS_CORRECTION_METHOD != "raw":
+        ax.text(
+            0.4,
+            0.75,
+            (
+                f"BC "
+                f"D={bc_stability_ks['statistic']:.3f}, "
+                f"p={format_ks_p_value(bc_stability_ks['p_value'])}"
+            ),
+            transform=ax.transAxes,
+            ha="left",
+            va="top",
+            fontsize=9,
+            color=bc_text_color,
+        )
 
     format_axis(
         ax
@@ -2471,7 +2456,7 @@ if __name__ == "__main__":
     )
 
     print(
-        f"Bias-corrected S2S:     "
+        f"Selected S2S ({BIAS_CORRECTION_METHOD}): "
         f"{bc_model_filename}"
     )
 
@@ -2484,7 +2469,7 @@ if __name__ == "__main__":
 
     print()
     print(
-        f"Bias-correction reference: "
+        f"Reference dataset: "
         f"{reference_label}"
     )
 
@@ -2492,17 +2477,13 @@ if __name__ == "__main__":
         raw_all_variable,
         raw_early_variable,
         raw_late_variable,
-    ) = get_stability_variable_names(
-        bias_corrected=False,
-    )
+    ) = get_stability_variable_names()
 
     (
         bc_all_variable,
         bc_early_variable,
         bc_late_variable,
-    ) = get_stability_variable_names(
-        bias_corrected=True,
-    )
+    ) = get_stability_variable_names()
 
     print()
     print(
@@ -2526,7 +2507,7 @@ if __name__ == "__main__":
 
     print()
     print(
-        "Bias-corrected variables"
+        "Selected-model variables"
     )
     print(
         "------------------------"
@@ -2555,7 +2536,7 @@ if __name__ == "__main__":
         reference_values,
     ) = load_model_and_reference_values(
         raw_model_filename=raw_model_filename,
-        bias_corrected_model_filename=bc_model_filename,
+        selected_model_filename=bc_model_filename,
         reference_filename=reference_filename,
         reference_variable=reference_variable,
         reference_label=reference_label,
