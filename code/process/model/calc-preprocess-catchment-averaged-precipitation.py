@@ -7,13 +7,15 @@ This script is a structured rewrite of the original preprocess_s2s.py.
 For each selected forecast and hindcast file, it:
 
 1. Reads daily S2S precipitation.
-2. Relabels the raw time index 0-30 as lead days 16-46.
-3. Sets negative precipitation values to zero.
-4. Calculates a catchment-weighted and latitude-weighted spatial mean.
-5. Converts precipitation from metres to millimetres.
-6. Combines all forecast initializations.
-7. Combines all selected hindcast initializations.
-8. Writes forecast-only, hindcast-only, and combined NetCDF files.
+2. Keeps all 31 time steps in older files or the last 31 of 46 in newer files.
+3. Relabels the retained time positions as lead days 16-46.
+4. Assigns unique positional ensemble-member IDs while retaining all members.
+5. Sets negative precipitation values to zero.
+6. Calculates a catchment-weighted and latitude-weighted spatial mean.
+7. Converts precipitation from metres to millimetres.
+8. Combines all forecast initializations.
+9. Combines all selected hindcast initializations.
+10. Writes forecast-only, hindcast-only, and combined NetCDF files.
 
 No X-day accumulation is calculated here. The output contains daily
 catchment-average precipitation for lead days 16 through 46, indexed by
@@ -55,7 +57,7 @@ variable = "tp24"
 catchment = "regine_drammen"
 
 # Inclusive forecast initialization-date range.
-forecast_date_range = ["2020-01-02","2022-12-29"]
+forecast_date_range = ["2020-01-02", "2022-12-29"]
 
 # Inclusive lead-day range written to every output file.
 #
@@ -65,9 +67,7 @@ first_lead_day = 16
 last_lead_day = 46
 
 # Input files must start with this text.
-input_filename_prefix = (
-    f"{variable}_0.5x0.5"
-)
+input_filename_prefix = f"{variable}_0.5x0.5"
 
 # Write the forecast-only and hindcast-only files in addition to the
 # combined output file.
@@ -476,44 +476,53 @@ def catchment_weighted_mean(
 # Forecast/hindcast preprocessing
 # =============================================================================
 
-def calculate_lead_days(
-    time_coordinate,
-):
+def normalize_time_dimension(ds):
     """
-    Map the input time positions directly to lead days 16 through 46.
+    Return the lead-day subset expected by the downstream processing.
 
-    The actual date values stored in the input time coordinate are not used
-    to create the lead_day labels. Only the number and order of positions are
-    used here. The original dates are retained separately as f_date.
-
-    Position mapping:
-        first time position  -> lead day 16
-        second time position -> lead day 17
-        ...
-        final time position  -> lead day 46
+    Older forecast and hindcast files contain 31 time steps corresponding to
+    lead days 16-46. Newer files contain 46 time steps corresponding to lead
+    days 1-46; for these files, the first 15 steps are discarded.
     """
 
-    expected_number_of_times = (
-        last_lead_day
-        - first_lead_day
-        + 1
+    expected_times = last_lead_day - first_lead_day + 1
+    number_of_times = ds.sizes.get("time", 0)
+
+    if number_of_times == expected_times:
+        return ds
+
+    if number_of_times == last_lead_day:
+        return ds.isel(time=slice(first_lead_day - 1, None))
+
+    raise ValueError(
+        f"Expected either {expected_times} time positions for lead days "
+        f"{first_lead_day}-{last_lead_day} or {last_lead_day} positions for "
+        f"lead days 1-{last_lead_day}, but found {number_of_times}."
     )
 
-    number_of_times = time_coordinate.size
 
-    if number_of_times != expected_number_of_times:
+def normalize_ensemble_members(ds):
+    """Assign unique positional ensemble-member IDs while preserving all members."""
+
+    if "number" not in ds.dims:
+        raise ValueError("The input dataset does not contain a 'number' dimension.")
+
+    return ds.assign_coords(number=np.arange(ds.sizes["number"], dtype="int32"))
+
+
+def calculate_lead_days(time_coordinate):
+    """Map the retained time positions directly to lead days 16 through 46."""
+
+    expected_times = last_lead_day - first_lead_day + 1
+
+    if time_coordinate.size != expected_times:
         raise ValueError(
-            f"Expected {expected_number_of_times} time positions "
-            f"for lead days {first_lead_day}-{last_lead_day}, "
-            f"but found {number_of_times}."
+            f"Expected {expected_times} retained time positions for lead days "
+            f"{first_lead_day}-{last_lead_day}, but found {time_coordinate.size}."
         )
 
     return xr.DataArray(
-        np.arange(
-            first_lead_day,
-            last_lead_day + 1,
-            dtype="int64",
-        ),
+        np.arange(first_lead_day, last_lead_day + 1, dtype="int64"),
         dims=time_coordinate.dims,
     )
 
@@ -528,214 +537,72 @@ def preprocess_one_dataset(
     """
     Preprocess one forecast or hindcast dataset.
 
-    Every output initialization has three provenance fields:
+    Files with 31 time steps are used unchanged. Files with 46 time steps are
+    reduced to their final 31 steps so that every output contains lead days
+    16-46. Raw valid dates are retained as f_date.
 
-        i_date
-            A unique coordinate used to combine forecasts and hindcasts.
-
-        model_type
-            Either "forecast" or "hindcast".
-
-        hdate
-            The original hindcast initialization date. It is NaT for forecasts.
-
-    The 31 ordered time positions are relabelled as lead days 16 to 46.
-    The decoded raw time values are retained as f_date. This preserves the
-    original valid dates exactly and avoids a one-day shift.
+    i_date is the unique coordinate used to combine forecast and hindcast
+    initializations. model_type identifies the source. hdate stores the
+    original hindcast date as YYYYMMDD and is 0 for forecast rows.
     """
 
     if "time" not in ds.coords:
-        raise KeyError(
-            "The input dataset does not contain a 'time' coordinate."
-        )
+        raise KeyError("The input dataset does not contain a 'time' coordinate.")
 
-    initialization_date = np.datetime64(
-        initialization_date,
-        "ns",
-    )
+    ds = normalize_time_dimension(ds)
+    ds = normalize_ensemble_members(ds)
+    initialization_date = np.datetime64(initialization_date, "ns")
+    lead_days = calculate_lead_days(ds["time"])
 
-    lead_days = calculate_lead_days(
-        ds[
-            "time"
-        ]
-    )
-
-    # Preserve the actual valid dates decoded from the raw NetCDF file.
-    #
-    # Example:
-    #     raw time index 0 -> 2020-01-17
-    #     lead-day label   -> 16
-    #
-    # The valid date must come from ds["time"], not from
-    # initialization_date + lead_day, because those differ by one day in
-    # these daily S2S input files.
-    forecast_dates = ds[
-        "time"
-    ].values.astype(
-        "datetime64[ns]"
-    )
-
-    working = ds.assign_coords(
-        f_date=(
-            "time",
-            forecast_dates,
-        ),
-        time=lead_days,
-    )
+    # Preserve decoded valid dates from the retained raw time positions.
+    forecast_dates = ds["time"].values.astype("datetime64[ns]")
+    working = ds.assign_coords(f_date=("time", forecast_dates), time=lead_days)
 
     spatial_mean = catchment_weighted_mean(
         ds=working,
         catchment_weight=catchment_weight,
-    )
-
-    spatial_mean = spatial_mean.rename(
-        {
-            "time": "lead_day",
-        }
-    )
+    ).rename({"time": "lead_day"})
 
     if hindcast:
-
         if "hdate" not in spatial_mean.dims:
-            raise ValueError(
-                "The hindcast dataset does not contain an 'hdate' dimension."
-            )
+            raise ValueError("The hindcast dataset does not contain an 'hdate' dimension.")
 
-        original_hdates = spatial_mean[
-            "hdate"
-        ].values.astype(
-            "datetime64[ns]"
-        )
+        original_hdates = spatial_mean["hdate"].values.astype("int32")
+        number_of_hdates = spatial_mean.sizes["hdate"]
 
-        number_of_hdates = spatial_mean.sizes[
-            "hdate"
-        ]
-
-        file_offset = np.timedelta64(
-            hindcast_file_index,
-            "ns",
-        )
-
-        row_offsets = np.arange(
-            1,
-            number_of_hdates + 1,
-            dtype="timedelta64[us]",
-        )
-
-        synthetic_initialization_dates = (
-            initialization_date
-            + file_offset
-            + row_offsets
-        )
+        # Preserve the existing synthetic i_date scheme used for concatenation.
+        file_offset = np.timedelta64(hindcast_file_index, "ns")
+        row_offsets = np.arange(1, number_of_hdates + 1, dtype="timedelta64[us]")
+        synthetic_initialization_dates = initialization_date + file_offset + row_offsets
 
         spatial_mean = (
-            spatial_mean
-            .assign_coords(
-                hdate=synthetic_initialization_dates
-            )
-            .rename(
-                {
-                    "hdate": "i_date",
-                }
-            )
+            spatial_mean.assign_coords(hdate=synthetic_initialization_dates)
+            .rename({"hdate": "i_date"})
         )
 
-        spatial_mean[
-            "model_type"
-        ] = xr.DataArray(
-            np.full(
-                number_of_hdates,
-                "hindcast",
-                dtype="U8",
-            ),
-            dims=(
-                "i_date",
-            ),
-            coords={
-                "i_date": spatial_mean[
-                    "i_date"
-                ],
-            },
+        spatial_mean["model_type"] = xr.DataArray(
+            np.full(number_of_hdates, "hindcast", dtype="U8"),
+            dims=("i_date",),
+            coords={"i_date": spatial_mean["i_date"]},
         )
-
-        spatial_mean[
-            "hdate"
-        ] = xr.DataArray(
+        spatial_mean["hdate"] = xr.DataArray(
             original_hdates,
-            dims=(
-                "i_date",
-            ),
-            coords={
-                "i_date": spatial_mean[
-                    "i_date"
-                ],
-            },
+            dims=("i_date",),
+            coords={"i_date": spatial_mean["i_date"]},
         )
 
     else:
-
-        spatial_mean = spatial_mean.expand_dims(
-            i_date=[
-                initialization_date,
-            ]
+        spatial_mean = spatial_mean.expand_dims(i_date=[initialization_date])
+        spatial_mean["model_type"] = xr.DataArray(
+            np.array(["forecast"], dtype="U8"),
+            dims=("i_date",),
+            coords={"i_date": spatial_mean["i_date"]},
         )
-
-        spatial_mean[
-            "model_type"
-        ] = xr.DataArray(
-            np.array(
-                [
-                    "forecast",
-                ],
-                dtype="U8",
-            ),
-            dims=(
-                "i_date",
-            ),
-            coords={
-                "i_date": spatial_mean[
-                    "i_date"
-                ],
-            },
+        spatial_mean["hdate"] = xr.DataArray(
+            np.array([0], dtype="int32"),
+            dims=("i_date",),
+            coords={"i_date": spatial_mean["i_date"]},
         )
-
-        spatial_mean[
-            "hdate"
-        ] = xr.DataArray(
-            np.array(
-                [
-                    np.datetime64(
-                        "NaT",
-                        "ns",
-                    ),
-                ],
-                dtype="datetime64[ns]",
-            ),
-            dims=(
-                "i_date",
-            ),
-            coords={
-                "i_date": spatial_mean[
-                    "i_date"
-                ],
-            },
-        )
-
-    spatial_mean[
-        "model_type"
-    ].attrs[
-        "description"
-    ] = (
-        "Source type for each initialization: forecast or hindcast"
-    )
-
-    spatial_mean[
-        "hdate"
-    ].attrs[
-        "description"
-    ] = (
-        "Original hindcast initialization date; NaT for forecast rows"
-    )
 
     return spatial_mean
 
@@ -872,6 +739,7 @@ def concatenate_initializations(
     return xr.concat(
         datasets,
         dim="i_date",
+        join="outer",
     )
 
 
@@ -921,17 +789,12 @@ def build_output_datasets(
     )
 
 
-def add_output_metadata(
-    ds,
-    dataset_type,
-):
-    """Add descriptive global metadata without changing the data structure."""
+def add_output_metadata(ds, dataset_type):
+    """Add concise global and variable metadata without changing data values."""
 
     ds.attrs.update(
         {
-            "description": (
-                "Preprocessed ECMWF S2S daily catchment-average precipitation"
-            ),
+            "description": "Preprocessed ECMWF S2S daily catchment-average precipitation",
             "dataset_type": dataset_type,
             "variable": variable,
             "catchment": catchment,
@@ -941,6 +804,20 @@ def add_output_metadata(
             "last_lead_day": last_lead_day,
         }
     )
+
+    variable_descriptions = {
+        variable: "Daily catchment- and latitude-weighted mean precipitation.",
+        "f_date": "Forecast valid date for each initialization and lead day.",
+        "number": "Ensemble member identifier.",
+        "lead_day": "Forecast lead time in days.",
+        "i_date": "Unique initialization coordinate used to combine forecast and hindcast rows.",
+        "model_type": "Source type for each initialization: forecast or hindcast.",
+        "hdate": "Original hindcast initialization date as YYYYMMDD; 0 for forecast rows.",
+    }
+
+    for name, description in variable_descriptions.items():
+        if name in ds.variables:
+            ds[name].attrs["description"] = description
 
 
 # =============================================================================
@@ -1035,11 +912,7 @@ def write_output(
         },
     }
 
-    encoding[
-        "hdate"
-    ] = {
-        "dtype": "int64",
-    }
+    encoding["hdate"] = {"dtype": "int32"}
 
     if write_separate_files:
 

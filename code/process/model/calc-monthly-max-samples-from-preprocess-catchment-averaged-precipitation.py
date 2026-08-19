@@ -29,9 +29,9 @@ accumulation.
 
 Forecast rows use f_date directly. Hindcast rows first reconstruct their true
 valid dates from the original hindcast initialization date stored in hdate.
-hdate uses an unusual encoding in which the intended YYYYMMDD integer is stored
-as nanoseconds after 1970-01-01. For example, an encoded nanosecond value of
-20000102 represents the true initialization date 2000-01-02.
+hdate stores the original hindcast initialization directly as an integer YYYYMMDD
+value. Forecast rows use hdate = 0. For example, hdate = 20000102 represents
+the true hindcast initialization date 2000-01-02.
 
 For each i_date:
 
@@ -103,7 +103,7 @@ catchment = "regine_drammen"
 
 forecast_date_range = [
     "2020-01-02",
-    "2022-12-29",
+    "2023-12-28",
 ]
 
 # Number of consecutive daily values included in each trailing accumulation.
@@ -675,28 +675,17 @@ def calculate_accumulation(
 # =============================================================================
 
 def decode_hdate_yyyymmdd(hdate_values):
-    """Decode hdate values whose nanosecond integer stores YYYYMMDD."""
-
+    """Decode integer YYYYMMDD hdate values; 0 denotes forecast rows."""
     values = np.asarray(hdate_values)
 
-    if np.issubdtype(values.dtype, np.datetime64):
-        encoded = values.astype("datetime64[ns]").astype("int64")
-        missing_value = np.datetime64("NaT", "ns").astype("int64")
-        finite = encoded != missing_value
-    elif np.issubdtype(values.dtype, np.integer):
-        encoded = values.astype("int64")
-        finite = encoded != np.iinfo("int64").min
-    else:
-        raise TypeError("hdate must be datetime64 or integer encoded values.")
+    if not np.issubdtype(values.dtype, np.integer):
+        raise TypeError("hdate must contain integer YYYYMMDD values.")
 
+    encoded = values.astype("int64")
     decoded = np.full(encoded.shape, np.datetime64("NaT", "ns"), dtype="datetime64[ns]")
 
-    for index in np.flatnonzero(finite):
+    for index in np.flatnonzero(encoded != 0):
         date_code = f"{encoded[index]:08d}"
-
-        if len(date_code) != 8:
-            raise ValueError(f"Cannot decode hdate value {encoded[index]} as YYYYMMDD.")
-
         year = int(date_code[:4])
         month = int(date_code[4:6])
         day = int(date_code[6:8])
@@ -1089,7 +1078,7 @@ def build_output_dataset(
     ].attrs.update(
         {
             "description": (
-                "Original hindcast initialization date; NaT for forecast rows"
+                "Original hindcast initialization as YYYYMMDD; 0 for forecast rows"
             ),
         }
     )
@@ -1269,11 +1258,7 @@ def write_output(
 
     encoding["sample_month"] = {"dtype": "int32"}
 
-    encoding[
-        "hdate"
-    ] = {
-        "dtype": "int64",
-    }
+    encoding["hdate"] = {"dtype": "int32"}
 
     output.to_netcdf(
         filename,
@@ -1460,3 +1445,4 @@ if __name__ == "__main__":
                 lead_bin_variables
             ),
         )
+
