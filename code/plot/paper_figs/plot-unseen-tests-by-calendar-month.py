@@ -23,7 +23,9 @@ as sample_month % 100.
 
 Panel (a) calculates independence from the raw all-lead sample.
 Panels (b)-(e) overlay raw and bias-corrected bootstrap distributions and their
-95% intervals, with one vertical line for the selected reference dataset.
+95% intervals, with one vertical line for the selected reference dataset. An
+optional user setting can exclude the August 2023 Storm Hans value from the
+reference sample before the fidelity calculations are performed.
 Panel (f) plots the bias-corrected Early/Late distributions and reports both
 raw and bias-corrected KS statistics.
 
@@ -138,7 +140,7 @@ from Dunnsigouin_etal_2026 import config
 # =============================================================================
 
 # Calendar month to plot: 1=January, ..., 12=December.
-selected_month = 12
+selected_month = 3
 
 # Accumulation period.
 x_days = 2
@@ -148,7 +150,7 @@ catchment = "regine_drammen"
 
 forecast_date_range = ("2020-01-02", "2023-12-28")
 
-reference_years = ("1957", "2025")
+reference_years = ("1957", "2022")
 
 era5_grid = "0.5x0.5"
 
@@ -180,6 +182,9 @@ BIAS_CORRECTION_METHOD = "mm"
 #     "senorge"
 REFERENCE_DATASET = "senorge"
 
+# Exclude the August 2023 Storm Hans reference value before fidelity calculations.
+EXCLUDE_STORM_HANS_FROM_REFERENCE = True
+
 # Independence-test settings.
 # Minimum number of paired initialization values required for one
 # ensemble-member Spearman correlation.
@@ -205,7 +210,7 @@ figure_width = 13.0
 figure_height = 8.0
 figure_dpi = 300
 
-write2file = True
+write2file = False
 show_figure = True
 
 
@@ -243,12 +248,7 @@ MONTH_LABELS = {
     12: "December",
 }
 
-STATISTICS = (
-    "mean",
-    "std",
-    "skewness",
-    "kurtosis",
-)
+STATISTICS = ("mean", "std", "skewness", "kurtosis")
 
 STATISTIC_LABELS = {
     "mean": "Mean",
@@ -257,12 +257,6 @@ STATISTIC_LABELS = {
     "kurtosis": "Kurtosis",
 }
 
-#STATISTIC_AXIS_LABELS = {
-#    "mean": "Mean precipitation [mm]",
-#    "std": "Precipitation standard deviation [mm]",
-#    "skewness": "Precipitation skewness",
-#    "kurtosis": "Precipitation excess kurtosis",
-#}
 
 STATISTIC_AXIS_LABELS = {
     "mean": f"Maximum monthly {x_days}-day precipitation [mm]",
@@ -305,12 +299,7 @@ def readable_catchment_name(catchment_name: str) -> str:
     """Convert a technical catchment identifier into a readable name."""
 
     name = catchment_name
-
-    for prefix in (
-        "nve_catchment_regine_",
-        "nve_catchment_",
-        "regine_",
-    ):
+    for prefix in ("nve_catchment_regine_", "nve_catchment_", "regine_"):
         if name.startswith(prefix):
             name = name[len(prefix):]
             break
@@ -321,10 +310,7 @@ def readable_catchment_name(catchment_name: str) -> str:
 def get_file_id(catchment_name: str) -> str:
     """Return the short catchment name used in compact sample filenames."""
 
-    if catchment_name.startswith("regine_"):
-        return catchment_name.replace("regine_", "", 1)
-
-    return catchment_name
+    return catchment_name.removeprefix("regine_")
 
 
 def remove_missing_values(values: np.ndarray) -> np.ndarray:
@@ -371,6 +357,9 @@ def validate_user_settings() -> None:
 
     if selected_month not in MONTH_LABELS:
         raise ValueError("selected_month must be an integer from 1 to 12.")
+
+    if not isinstance(EXCLUDE_STORM_HANS_FROM_REFERENCE, bool):
+        raise TypeError("EXCLUDE_STORM_HANS_FROM_REFERENCE must be True or False.")
 
     if x_days < 1:
         raise ValueError("x_days must be at least 1.")
@@ -1075,20 +1064,26 @@ def get_reference_values_for_selected_month(
     variable: str,
     dataset_name: str,
 ) -> np.ndarray:
-    """Extract ERA5 or SeNorge monthly maxima for the selected month."""
+    """Extract reference monthly maxima, optionally excluding Storm Hans."""
 
     check_variable_exists(ds, variable, dataset_name)
-
     data = ds[variable]
 
-    check_coordinate_exists(
-        data,
-        "month",
-        dataset_name,
-    )
+    check_coordinate_exists(data, "month", dataset_name)
+    selected = data.sel(month=selected_month)
 
-    values = data.sel(month=selected_month).values
-    return remove_missing_values(values)
+    if EXCLUDE_STORM_HANS_FROM_REFERENCE and selected_month == 8:
+        check_coordinate_exists(selected, "year", dataset_name)
+
+        if 2023 not in np.asarray(selected["year"].values):
+            raise ValueError(
+                f"Cannot exclude Storm Hans because August 2023 is not present "
+                f"in the {dataset_name} reference sample."
+            )
+
+        selected = selected.sel(year=selected["year"] != 2023)
+
+    return remove_missing_values(selected.values)
 
 
 def load_model_and_reference_values(

@@ -18,11 +18,11 @@ compact structure:
     number(number)
     i_date(i_date)
 
-The calendar month is stored as a label on i_date. Monthly statistics are
-therefore calculated by:
+The sample month is stored as sample_month(i_date) in YYYYMM format. Monthly
+statistics are therefore calculated by:
 
-1. selecting all i_date values for which month(i_date) equals the requested
-   calendar month;
+1. deriving calendar month as sample_month % 100 and selecting all i_date values
+   for the requested calendar month;
 2. pooling all finite ensemble-member values across number and i_date;
 3. calculating the mean of that pooled monthly sample.
 
@@ -31,7 +31,7 @@ Bias-correction method
 The correction follows the same two-stage procedure as the old script.
 
 Stage 1: lead-time correction
-~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~
 For every lead-location split and calendar month:
 
     lead_time_ratio
@@ -46,7 +46,7 @@ full sample. Every finite full-sample value must correspond to exactly one
 finite split value at the same (number, i_date).
 
 Stage 2: reference correction
-~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~
 For every calendar month:
 
     reference_ratio
@@ -70,7 +70,8 @@ The output also stores:
     bias_correction_ratio(month_of_year)
     lead_time_bias_correction_ratio_lead<start>_<end>(month_of_year)
 
-The input variable month(i_date) is retained unchanged. The separate
+The input variable sample_month(i_date), stored as YYYYMM, is retained unchanged.
+Calendar month 1-12 is derived internally as sample_month % 100. The separate
 month_of_year coordinate is used only for the 12 monthly correction ratios.
 
 where <reference> is either "era5" or "senorge".
@@ -94,12 +95,12 @@ accumulation_days = 2
 
 forecast_date_range = [
     "2020-01-02",
-    "2022-12-29",
+    "2023-12-28",
 ]
 
 observation_years = [
     "1957",
-    "2022",
+    "2025",
 ]
 
 era5_grid = "0.5x0.5"
@@ -113,7 +114,7 @@ number_of_lead_bins = 2
 #
 #     "era5"
 #     "senorge"
-REFERENCE_DATASET = "era5"
+REFERENCE_DATASET = "senorge"
 
 # Optional explicit paths.
 #
@@ -312,7 +313,7 @@ def make_model_filename():
             ]
         )
         / (
-            f"monthly_max_samples_"
+            f"test-monthly_max_samples_"
             f"{MODEL_VARIABLE}_"
             f"{accumulation_days}dayacc_"
             f"{get_file_id(catchment)}_"
@@ -329,9 +330,9 @@ def make_era5_filename():
     return Path(
         (
             f"{config.dirs['era5_processed']}"
-            f"distribution_monthly_extremes_"
+            f"monthly_max_samples_"
             f"{ERA5_VARIABLE}_{accumulation_days}dayacc_"
-            f"{catchment}_era5_{era5_grid}_"
+            f"{catchment}_"
             f"{observation_years[0]}-"
             f"{observation_years[1]}.nc"
         )
@@ -344,9 +345,9 @@ def make_senorge_filename():
     return Path(
         (
             f"{config.dirs['senorge_processed']}"
-            f"distribution_monthly_extremes_"
+            f"monthly_max_samples_"
             f"{SENORGE_VARIABLE}_{accumulation_days}dayacc_"
-            f"{catchment}_senorge_"
+            f"{catchment}_"
             f"{observation_years[0]}-"
             f"{observation_years[1]}.nc"
         )
@@ -465,7 +466,7 @@ def validate_model_dataset(
         )
 
     required_variables = {
-        "month",
+        "sample_month",
         "model_type",
         "hdate",
         "date_of_max",
@@ -495,28 +496,19 @@ def validate_model_dataset(
             f"{sorted(missing_variables)}"
         )
 
-    month_values = (
-        model_ds[
-            "month"
-        ]
-        .values
-    )
+    sample_month_values = np.asarray(model_ds["sample_month"].values)
 
-    finite_month_values = month_values[
-        np.isfinite(
-            month_values
-        )
-    ]
-
-    if not np.all(
-        np.isin(
-            finite_month_values,
-            MONTHS,
-        )
-    ):
+    if model_ds["sample_month"].dims != ("i_date",):
         raise ValueError(
-            "month(i_date) contains values outside 1-12."
+            "sample_month must have dimension ('i_date',), "
+            f"but has {model_ds['sample_month'].dims}."
         )
+
+    finite_sample_months = sample_month_values[np.isfinite(sample_month_values)]
+    calendar_months = finite_sample_months.astype("int64") % 100
+
+    if not np.all(np.isin(calendar_months, MONTHS)):
+        raise ValueError("sample_month(i_date) contains invalid YYYYMM values.")
 
     expected_sample_dims = {
         "number",
@@ -580,6 +572,12 @@ def validate_model_dataset(
                 f"Model attribute '{attribute}' is {actual_value}, "
                 f"but the script expects {expected_value}."
             )
+
+
+def get_calendar_month(model_ds):
+    """Return calendar month 1-12 derived from sample_month(i_date) YYYYMM."""
+    calendar_month = (model_ds["sample_month"].astype("int64") % 100).rename("calendar_month")
+    return calendar_month
 
 
 # =============================================================================
@@ -859,9 +857,7 @@ def calculate_lead_time_correction_ratios(
               / original split-sample mean(month)
     """
 
-    month_coordinate = model_ds[
-        "month"
-    ]
+    month_coordinate = get_calendar_month(model_ds)
 
     full_monthly_mean = (
         calculate_model_monthly_mean(
@@ -942,9 +938,7 @@ def apply_lead_time_correction(
     Apply monthly lead-time ratios without changing split membership masks.
     """
 
-    month_coordinate = model_ds[
-        "month"
-    ]
+    month_coordinate = get_calendar_month(model_ds)
 
     corrected_splits = {}
 
@@ -1132,9 +1126,7 @@ def calculate_reference_bias_correction_ratio(
     rebuilt_monthly_mean = (
         calculate_model_monthly_mean(
             values=rebuilt_full_sample,
-            month_coordinate=model_ds[
-                "month"
-            ],
+            month_coordinate=get_calendar_month(model_ds),
         )
     )
 
@@ -1258,9 +1250,7 @@ def build_final_bias_corrected_dataset(
     reference_ratio_by_i_date = (
         expand_monthly_ratio_to_i_date(
             ratio=reference_ratio,
-            month_coordinate=model_ds[
-                "month"
-            ],
+            month_coordinate=get_calendar_month(model_ds),
         )
     )
 
@@ -1351,9 +1341,8 @@ def build_final_bias_corrected_dataset(
             "float32"
         )
 
-    # The compact input already contains month(i_date). The correction ratios
-    # also use a 12-value calendar-month axis, so that axis must have a different
-    # name when stored in the same Dataset.
+    # The compact input contains sample_month(i_date) as YYYYMM. Correction
+    # ratios use a separate 12-value calendar-month axis in the output dataset.
     reference_ratio_for_output = (
         reference_ratio
         .rename(
@@ -1425,9 +1414,9 @@ def build_final_bias_corrected_dataset(
                 ]
             ),
             "sample_alignment": (
-                "Preserved exactly in (number, i_date). The original month, "
-                "date_of_max, lead_of_max, model_type, hdate, number, and "
-                "i_date information is retained unchanged."
+                "Preserved exactly in (number, i_date). The original sample_month, "
+                "date_of_max, lead_of_max, model_type, hdate, number, and i_date "
+                "information is retained unchanged."
             ),
         }
     )
@@ -1451,9 +1440,7 @@ def print_lead_time_correction_table(
         values=model_ds[
             full_model_variable
         ],
-        month_coordinate=model_ds[
-            "month"
-        ],
+        month_coordinate=get_calendar_month(model_ds),
     )
 
     print()
@@ -1470,9 +1457,7 @@ def print_lead_time_correction_table(
             values=model_ds[
                 variable_name
             ],
-            month_coordinate=model_ds[
-                "month"
-            ],
+            month_coordinate=get_calendar_month(model_ds),
         )
 
         ratio = lead_time_ratios[
@@ -1515,9 +1500,7 @@ def print_reference_correction_table(
 
     rebuilt_mean = calculate_model_monthly_mean(
         values=rebuilt_full_sample,
-        month_coordinate=model_ds[
-            "month"
-        ],
+        month_coordinate=get_calendar_month(model_ds),
     )
 
     print()
@@ -1588,15 +1571,9 @@ def print_output_summary(
 
     for month_number in MONTHS:
 
+        calendar_month = output_ds["sample_month"].astype("int64") % 100
         count = np.isfinite(
-            output_ds[
-                corrected_full_variable
-            ].where(
-                output_ds[
-                    "month"
-                ]
-                == month_number
-            )
+            output_ds[corrected_full_variable].where(calendar_month == month_number)
         ).sum().item()
 
         print(
