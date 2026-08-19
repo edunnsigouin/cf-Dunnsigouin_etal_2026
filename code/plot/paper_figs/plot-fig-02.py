@@ -22,7 +22,7 @@ catchment = "regine_drammen"
 x_days = 2
 
 forecast_date_range = ["2020-01-02", "2023-12-28"]
-observation_years = ["1957", "2023"]
+observation_years = ["1957", "2025"]
 
 # Daily lead range used when creating the S2S model sample.
 first_input_lead = 16
@@ -40,7 +40,7 @@ MODEL_DATA_METHOD = "raw"
 
 # Reference dataset used both in the figure and for bias correction.
 # Options: "era5" or "senorge".
-REFERENCE_DATASET = "senorge"
+REFERENCE_DATASET = "era5"
 
 # ERA5 grid used when REFERENCE_DATASET == "era5".
 era5_grid = "0.5x0.5"
@@ -70,7 +70,7 @@ FIG_WIDTH_IN = 7.2
 FIG_HEIGHT_IN = 4.4
 AXIS_LABELSIZE = 11
 TICK_LABELSIZE = 11
-LEGEND_FONTSIZE = 7
+LEGEND_FONTSIZE = 9
 YMIN = 0
 YMAX = 135
 BOX_WIDTH = 0.58
@@ -236,14 +236,9 @@ def make_reference_filename():
     directory = config.dirs[settings["directory"]]
     variable = settings["variable"]
 
-    if REFERENCE_DATASET == "era5":
-        dataset_suffix = f"era5_{era5_grid}"
-    else:
-        dataset_suffix = "senorge"
-
     return (
-        f"{directory}distribution_monthly_extremes_{variable}_{x_days}dayacc_"
-        f"{catchment}_{dataset_suffix}_{observation_years[0]}-"
+        f"{directory}monthly_max_samples_{variable}_{x_days}dayacc_"
+        f"{catchment}_{observation_years[0]}-"
         f"{observation_years[1]}.nc"
     )
 
@@ -351,7 +346,7 @@ def make_legend_handles():
         Line2D(
             [0], [0], marker="o", linestyle="none",
             markerfacecolor=REFERENCE_COLOR, markeredgecolor=REFERENCE_COLOR,
-            markersize=6, label=f"{reference_label} record 1957–2022",
+            markersize=6, label=f"{reference_label} record without Storm Hans {observation_years[0]}–{observation_years[-1]}",
         ),
         Line2D(
             [0], [0], marker="^", linestyle="none",

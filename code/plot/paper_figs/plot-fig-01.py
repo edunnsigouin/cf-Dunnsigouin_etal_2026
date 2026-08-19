@@ -79,7 +79,7 @@ YEAR = 2023
 CATCHMENT_NAME = "drammen"
 
 # Precipitation reference for panels a-d: "senorge" or "era5".
-REFERENCE_DATASET = "senorge"
+REFERENCE_DATASET = "era5"
 
 # Historical period used for the panel-e climatology, inclusive.
 STREAMFLOW_CLIMATOLOGY_YEARS = [1921, 2025]

@@ -1,6 +1,6 @@
 """
-Create an X-day accumulated, catchment-weighted mean time series
-for SeNorge, regridded SeNorge, ERA5, or ERA5-Land.
+Create a daily catchment-weighted mean time series for SeNorge,
+regridded SeNorge, ERA5, or ERA5-Land.
 
 Supported variables:
 - SeNorge precipitation:          rr
@@ -15,24 +15,23 @@ Supported variables:
 
 Output:
 - One NetCDF variable named after the selected variable.
-- Units: mm
-- Values are X-day accumulated catchment-mean values.
+- Units: mm.
+- Values are one-day accumulated catchment-mean values.
 """
 
 import numpy as np
 import xarray as xr
-from Dunnsigouin_etal_2026 import config, misc
+from Dunnsigouin_etal_2026 import config
 
 
 # =============================================================================
 # User settings
 # =============================================================================
 
-dataset    = "era5"      # "senorge", "senorge_regrid", "era5", or "era5_land"
-variable   = "tp24"                  # "rr", "gwb_q", "tp24", "ro", "sro"
-years      = np.arange(1957, 2024)
-x_days     = 1
-catchment  = "regine_drammen"
+dataset = "era5"  # "senorge", "senorge_regrid", "era5", or "era5_land"
+variable = "tp24"  # "rr", "gwb_q", "tp24", "ro", "sro"
+years = np.arange(1957, 2026)
+catchment = "regine_drammen"
 write2file = True
 
 # Optional spatial subset for ERA5 / ERA5-Land only.
@@ -175,6 +174,7 @@ DATASETS = {
 # Configuration helpers
 # =============================================================================
 
+
 def get_config(dataset: str, variable: str) -> dict:
     """Return combined dataset and variable configuration."""
 
@@ -191,27 +191,24 @@ def get_config(dataset: str, variable: str) -> dict:
             f"Valid options are: {valid}."
         )
 
-    cfg = {}
-    cfg.update(DATASETS[dataset])
-    cfg.update(VARIABLES[dataset][variable])
-    cfg["dataset"] = dataset
-    cfg["variable"] = variable
-
-    return cfg
+    return {
+        **DATASETS[dataset],
+        **VARIABLES[dataset][variable],
+        "dataset": dataset,
+        "variable": variable,
+    }
 
 
 def make_input_filename(cfg: dict, year: int) -> str:
     """Create input filename for one year."""
 
-    return cfg["path_in"] + cfg["file_pattern"].format(
-        grid=cfg["grid"],
-        year=int(year),
-    )
+    return cfg["path_in"] + cfg["file_pattern"].format(grid=cfg["grid"], year=int(year))
 
 
 # =============================================================================
 # Unit handling
 # =============================================================================
+
 
 def standardize_units(da: xr.DataArray, variable: str) -> xr.DataArray:
     """
@@ -226,30 +223,17 @@ def standardize_units(da: xr.DataArray, variable: str) -> xr.DataArray:
         ro and sro are assumed to already be in mm/day in these files.
     """
 
-    units = str(da.attrs.get("units", "")).strip().lower()
-
     if variable == "tp24":
         da = da * 1000.0
-        da.attrs["units"] = "mm/day"
 
-    elif variable == "rr":
-        da.attrs["units"] = "mm/day"
-
-    elif variable == "gwb_q":
-        da.attrs["units"] = "mm/day"
-
-    elif variable == "ro":
-        da.attrs["units"] = "mm/day"
-
-    elif variable == "sro":
-        da.attrs["units"] = "mm/day"
-
+    da.attrs["units"] = "mm/day"
     return da
 
 
 # =============================================================================
 # General helpers
 # =============================================================================
+
 
 def check_dims(
     da: xr.DataArray,
@@ -276,6 +260,7 @@ def preprocess_era5(ds: xr.Dataset) -> xr.Dataset:
 # =============================================================================
 # Weight loading and alignment
 # =============================================================================
+
 
 def get_domain_latlon(domain: str):
     """Return latitude and longitude slices for predefined domains."""
@@ -374,6 +359,7 @@ def align_weights(da: xr.DataArray, w: xr.DataArray) -> xr.DataArray:
 # Data loading
 # =============================================================================
 
+
 def load_yearly_data(cfg: dict, year: int) -> xr.DataArray:
     """Load one yearly file for SeNorge or regridded SeNorge."""
 
@@ -450,8 +436,9 @@ def load_era5_like(
 
 
 # =============================================================================
-# Catchment averaging and accumulation
+# Catchment averaging
 # =============================================================================
+
 
 def catchment_mean(
     da: xr.DataArray,
@@ -493,30 +480,6 @@ def catchment_mean(
     return ts
 
 
-def xday_accumulation(
-    ts: xr.DataArray,
-    x_days: int,
-    output_name: str,
-    description: str,
-) -> xr.DataArray:
-    """Compute trailing X-day accumulated catchment-mean values."""
-
-    out = (
-        ts
-        .rolling(time=x_days, min_periods=x_days)
-        .sum()
-        .dropna("time", how="any")
-    )
-
-    out.name = output_name
-    out.attrs["description"] = (
-        f"{x_days}-day accumulated catchment-weighted mean {description}"
-    )
-    out.attrs["units"] = "mm"
-
-    return out
-
-
 def build_daily_catchment_mean(
     dataset: str,
     variable: str,
@@ -542,7 +505,6 @@ def build_daily_catchment_mean(
     )
 
     if cfg["read_mode"] == "yearly":
-
         yearly_series = []
 
         for year in years:
@@ -563,12 +525,7 @@ def build_daily_catchment_mean(
         ts_daily = xr.concat(yearly_series, dim="time").sortby("time")
 
     elif cfg["read_mode"] == "mfdataset":
-
-        da = load_era5_like(
-            cfg=cfg,
-            years=years,
-            domain=domain,
-        )
+        da = load_era5_like(cfg=cfg, years=years, domain=domain)
 
         ts_daily = catchment_mean(
             da=da,
@@ -588,29 +545,24 @@ def build_daily_catchment_mean(
 # Output
 # =============================================================================
 
+
 def make_output_filename(
     cfg: dict,
     dataset: str,
     variable: str,
     catchment: str,
     years: np.ndarray,
-    x_days: int,
 ) -> str:
-    """Create standardized output filename."""
+    """Create standardized output filename for one-day accumulations."""
 
-    # Only include the grid in filenames for ERA5 datasets.
     if dataset in {"era5", "era5_land"}:
         return (
-            f"{cfg['path_out']}"
-            f"t_{variable}_{x_days}dayacc_"
-            f"{catchment}_{dataset}_{cfg['grid']}_"
+            f"{cfg['path_out']}t_{variable}_1dayacc_{catchment}_{dataset}_{cfg['grid']}_"
             f"{years[0]}-{years[-1]}.nc"
         )
 
     return (
-        f"{cfg['path_out']}"
-        f"t_{variable}_{x_days}dayacc_"
-        f"{catchment}_{dataset}_"
+        f"{cfg['path_out']}t_{variable}_1dayacc_{catchment}_{dataset}_"
         f"{years[0]}-{years[-1]}.nc"
     )
 
@@ -622,7 +574,6 @@ def write_output(
     variable: str,
     catchment: str,
     years: np.ndarray,
-    x_days: int,
     write2file: bool = True,
 ) -> xr.Dataset:
     """Create output dataset and optionally write it to NetCDF."""
@@ -630,15 +581,7 @@ def write_output(
     out = xr.Dataset({da_out.name: da_out})
 
     if write2file:
-        filename_out = make_output_filename(
-            cfg=cfg,
-            dataset=dataset,
-            variable=variable,
-            catchment=catchment,
-            years=years,
-            x_days=x_days,
-        )
-
+        filename_out = make_output_filename(cfg, dataset, variable, catchment, years)
         out.to_netcdf(filename_out)
         print("Wrote:", filename_out)
 
@@ -650,9 +593,6 @@ def write_output(
 # =============================================================================
 
 if __name__ == "__main__":
-
-    cfg_preview = get_config(dataset, variable)
-
     use_domain = domain if dataset in {"era5", "era5_land"} else None
 
     ts_daily, cfg = build_daily_catchment_mean(
@@ -663,20 +603,18 @@ if __name__ == "__main__":
         domain=use_domain,
     )
 
-    da_acc = xday_accumulation(
-        ts=ts_daily,
-        x_days=x_days,
-        output_name=cfg["output_name"],
-        description=cfg["description"],
+    ts_daily.name = cfg["output_name"]
+    ts_daily.attrs["description"] = (
+        f"1-day accumulated catchment-weighted mean {cfg['description']}"
     )
+    ts_daily.attrs["units"] = "mm"
 
-    out = write_output(
-        da_out=da_acc,
+    write_output(
+        da_out=ts_daily,
         cfg=cfg,
         dataset=dataset,
         variable=variable,
         catchment=catchment,
         years=years,
-        x_days=x_days,
         write2file=write2file,
     )

@@ -1,0 +1,197 @@
+#!/usr/bin/env python3
+"""
+Calculate monthly maxima of X-day accumulated catchment-mean values.
+
+Input:
+- Daily catchment-mean NetCDF files produced by script 2.
+
+Output:
+- Monthly maxima arranged as (year, month).
+"""
+
+import numpy as np
+import xarray as xr
+from Dunnsigouin_etal_2026 import config
+
+
+# =============================================================================
+# User settings
+# =============================================================================
+
+dataset = "senorge"  # "senorge", "senorge_regrid", "era5", or "era5_land"
+variable = "rr"  # "rr", "gwb_q", "tp24", "ro", "sro"
+years = np.arange(1957, 2026)
+x_days = 2
+catchment = "regine_drammen"
+write2file = True
+
+
+# =============================================================================
+# Paths and dataset settings
+# =============================================================================
+
+path_in = config.dirs[f"{dataset}_processed"]
+path_out = config.dirs[f"{dataset}_processed"]
+
+GRIDS = {
+    "era5": "0.5x0.5",
+    "era5_land": "0.1x0.1",
+}
+
+
+# =============================================================================
+# Input
+# =============================================================================
+
+def make_input_filename(
+    path_in: str,
+    dataset: str,
+    variable: str,
+    catchment: str,
+    years: np.ndarray,
+) -> str:
+    """Create the daily catchment-mean filename produced by script 2."""
+
+    if dataset in GRIDS:
+        return (
+            f"{path_in}t_{variable}_1dayacc_{catchment}_{dataset}_{GRIDS[dataset]}_"
+            f"{years[0]}-{years[-1]}.nc"
+        )
+
+    return (
+        f"{path_in}t_{variable}_1dayacc_{catchment}_{dataset}_"
+        f"{years[0]}-{years[-1]}.nc"
+    )
+
+
+def load_data(
+    path_in: str,
+    dataset: str,
+    variable: str,
+    catchment: str,
+    years: np.ndarray,
+) -> xr.DataArray:
+    """Load daily catchment-mean data from script 2."""
+
+    filename = make_input_filename(path_in, dataset, variable, catchment, years)
+    ds = xr.open_dataset(filename)
+
+    if variable not in ds:
+        raise KeyError(
+            f"Variable '{variable}' not found in {filename}. "
+            f"Available variables: {list(ds.data_vars)}"
+        )
+
+    return ds[variable]
+
+
+# =============================================================================
+# Accumulation and monthly maxima
+# =============================================================================
+
+def accumulate_days(da: xr.DataArray, x_days: int) -> xr.DataArray:
+    """Calculate trailing X-day accumulated values."""
+
+    if x_days < 1:
+        raise ValueError("x_days must be at least 1.")
+
+    accumulated = da.copy() if x_days == 1 else da.rolling(
+        time=x_days,
+        min_periods=x_days,
+    ).sum()
+
+    accumulated.name = da.name
+    accumulated.attrs["description"] = (
+        f"{x_days}-day accumulated catchment-mean values"
+    )
+    accumulated.attrs["units"] = da.attrs.get("units", "mm")
+
+    return accumulated
+
+
+def calc_monthly_maximum_samples(da: xr.DataArray) -> xr.DataArray:
+    """Calculate one monthly maximum for each year and month."""
+
+    monthly_max = da.resample(time="1MS").max(skipna=True)
+
+    samples = (
+        monthly_max.assign_coords(
+            year=monthly_max.time.dt.year,
+            month=monthly_max.time.dt.month,
+        )
+        .set_index(time=["year", "month"])
+        .unstack("time")
+    )
+
+    samples.name = da.name
+    samples.attrs["description"] = "Monthly maxima of accumulated catchment-mean values"
+    samples.attrs["units"] = da.attrs.get("units", "")
+
+    return samples
+
+
+# =============================================================================
+# Output
+# =============================================================================
+
+def make_output_filename(
+    path_out: str,
+    variable: str,
+    x_days: int,
+    catchment: str,
+    years: np.ndarray,
+) -> str:
+    """Create the monthly-maximum output filename."""
+
+    return (
+        f"{path_out}monthly_max_samples_{variable}_{x_days}dayacc_"
+        f"{catchment}_{years[0]}-{years[-1]}.nc"
+    )
+
+
+def write_output(
+    da: xr.DataArray,
+    path_out: str,
+    variable: str,
+    x_days: int,
+    catchment: str,
+    years: np.ndarray,
+    write2file: bool = True,
+) -> xr.Dataset:
+    """Create output dataset and optionally write it to NetCDF."""
+
+    out = xr.Dataset({variable: da})
+
+    if write2file:
+        filename = make_output_filename(path_out, variable, x_days, catchment, years)
+        out.to_netcdf(filename)
+        print("Wrote:", filename)
+
+    return out
+
+
+# =============================================================================
+# Main
+# =============================================================================
+
+if __name__ == "__main__":
+    da = load_data(
+        path_in=path_in,
+        dataset=dataset,
+        variable=variable,
+        catchment=catchment,
+        years=years,
+    )
+
+    accumulated = accumulate_days(da, x_days)
+    monthly_max_samples = calc_monthly_maximum_samples(accumulated)
+
+    out = write_output(
+        da=monthly_max_samples,
+        path_out=path_out,
+        variable=variable,
+        x_days=x_days,
+        catchment=catchment,
+        years=years,
+        write2file=write2file,
+    )

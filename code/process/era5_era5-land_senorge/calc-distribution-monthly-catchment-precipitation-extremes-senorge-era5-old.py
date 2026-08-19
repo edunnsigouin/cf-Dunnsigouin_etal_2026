@@ -1,3 +1,4 @@
+#!/usr/bin/env python3  
 """
 Calculate the distribution of monthly precipitation/runoff extremes for a catchment.
 
