@@ -41,7 +41,7 @@ REFERENCE_DATASET = "senorge"  # "senorge" or "era5"
 CATCHMENT = "regine_drammen"
 X_DAYS = 2
 
-OBSERVATION_YEARS = [1957, 2025]
+OBSERVATION_YEARS = [1957, 2022]
 FORECAST_DATE_RANGE = ["2020-01-02", "2023-12-28"]
 
 MODEL_DATA_METHOD = "raw"  # "raw", "mm", "q", "ld", "doy", or "q_doy"
@@ -83,7 +83,7 @@ PRECIPITATION_YMIN = 0.0
 PRECIPITATION_YMAX = 200.0
 
 SHOW_GRID = True
-WRITE_TO_FILE = True
+WRITE_TO_FILE = False
 SHOW_FIGURE = True
 
 # =============================================================================
