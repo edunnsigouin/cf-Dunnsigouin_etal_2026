@@ -130,7 +130,7 @@ from Dunnsigouin_etal_2026 import config
 # =============================================================================
 
 # Calendar month to plot: 1=January, ..., 12=December.
-selected_month = 12
+selected_month = 8
 
 # Accumulation period.
 x_days = 2
@@ -174,7 +174,7 @@ BIAS_CORRECTION_METHOD = "mm"
 REFERENCE_DATASET = "senorge"
 
 # Exclude the August 2023 Storm Hans reference value before fidelity calculations.
-EXCLUDE_STORM_HANS_FROM_REFERENCE = True
+EXCLUDE_STORM_HANS_FROM_REFERENCE = False
 
 # Independence-test settings.
 # Minimum number of paired initialization values required for one
@@ -201,7 +201,7 @@ figure_width = 13.0
 figure_height = 8.0
 figure_dpi = 300
 
-write2file = True
+write2file = False
 show_figure = True
 
 
