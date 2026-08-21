@@ -59,8 +59,8 @@ TOP_DISTRIBUTION = "Gumbel"
 PLOT_METRIC = "return_period"
 AEP_YEARS = 1
 
-BOOTSTRAP_METHOD = "parametric"  # "nonparametric" or "parametric"
-NUMBER_OF_BOOTSTRAPS = 50
+BOOTSTRAP_METHOD = "nonparametric"  # "nonparametric" or "parametric"
+NUMBER_OF_BOOTSTRAPS = 20
 CONFIDENCE_LEVEL = 0.95
 MIN_SUCCESSFUL_BOOTSTRAP_FRACTION = 0.90
 RANDOM_SEED = 42

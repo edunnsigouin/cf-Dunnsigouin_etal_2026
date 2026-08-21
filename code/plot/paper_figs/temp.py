@@ -84,7 +84,7 @@ PRECIPITATION_YMIN = 0.0
 PRECIPITATION_YMAX = 200.0
 
 SHOW_GRID = True
-WRITE_TO_FILE = False
+WRITE_TO_FILE = True
 SHOW_FIGURE = True
 
 # =============================================================================
