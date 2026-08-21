@@ -140,7 +140,7 @@ catchment = "regine_drammen"
 
 forecast_date_range = ("2020-01-02", "2023-12-28")
 
-reference_years = ("1957", "2022")
+reference_years = ("1957", "2025")
 REFERENCE_FILE_YEARS = ("1957", "2025")
 
 era5_grid = "0.5x0.5"
@@ -174,7 +174,7 @@ BIAS_CORRECTION_METHOD = "mm"
 REFERENCE_DATASET = "senorge"
 
 # Exclude the August 2023 Storm Hans reference value before fidelity calculations.
-EXCLUDE_STORM_HANS_FROM_REFERENCE = False
+EXCLUDE_STORM_HANS_FROM_REFERENCE = True
 
 # Independence-test settings.
 # Minimum number of paired initialization values required for one
@@ -1771,59 +1771,55 @@ def plot_moment_panel(
 
 
 def make_shared_legend_handles(reference_label: str) -> list:
-    """Create the shared legend used by the six-panel figure."""
+    """Create legend handles arranged as model, interval, and reference columns."""
 
     reference_color = ERA5_COLOR if REFERENCE_DATASET == "era5" else SENORGE_COLOR
-    handles = [
-        Patch(
-            facecolor=RAW_MODEL_COLOR,
-            edgecolor=RAW_MODEL_COLOR,
-            alpha=BOOTSTRAP_ALPHA,
-            label="Model raw",
-        ),
-        Line2D(
-            [0],
-            [0],
-            color=RAW_MODEL_COLOR,
-            linewidth=CONFIDENCE_LINEWIDTH,
-            linestyle="--",
-            label=f"Model raw {confidence_level_percent:g}% interval",
-        ),
-    ]
-
-    if BIAS_CORRECTION_METHOD != "raw":
-        handles.extend(
-            [
-                Patch(
-                    facecolor=BIAS_CORRECTED_COLOR,
-                    edgecolor=BIAS_CORRECTED_COLOR,
-                    alpha=BOOTSTRAP_ALPHA,
-                    label=f"Model BC {BIAS_CORRECTION_METHOD}",
-                ),
-                Line2D(
-                    [0],
-                    [0],
-                    color=BIAS_CORRECTED_COLOR,
-                    linewidth=CONFIDENCE_LINEWIDTH,
-                    linestyle="--",
-                    label=(
-                        f"Model BC {BIAS_CORRECTION_METHOD} "
-                        f"{confidence_level_percent:g}% interval"
-                    ),
-                ),
-            ]
-        )
-
-    handles.append(
-        Line2D(
-            [0],
-            [0],
-            color=reference_color,
-            linewidth=REFERENCE_LINEWIDTH,
-            label=reference_label,
-        )
+    raw_model = Patch(
+        facecolor=RAW_MODEL_COLOR,
+        edgecolor=RAW_MODEL_COLOR,
+        alpha=BOOTSTRAP_ALPHA,
+        label="Model raw",
     )
-    return handles
+    raw_interval = Line2D(
+        [0],
+        [0],
+        color=RAW_MODEL_COLOR,
+        linewidth=CONFIDENCE_LINEWIDTH,
+        linestyle="--",
+        label=f"Model raw {confidence_level_percent:g}% interval",
+    )
+    reference = Line2D(
+        [0],
+        [0],
+        color=reference_color,
+        linewidth=REFERENCE_LINEWIDTH,
+        label=reference_label,
+    )
+
+    if BIAS_CORRECTION_METHOD == "raw":
+        return [raw_model, raw_interval, reference]
+
+    bc_model = Patch(
+        facecolor=BIAS_CORRECTED_COLOR,
+        edgecolor=BIAS_CORRECTED_COLOR,
+        alpha=BOOTSTRAP_ALPHA,
+        label=f"Model BC {BIAS_CORRECTION_METHOD}",
+    )
+    bc_interval = Line2D(
+        [0],
+        [0],
+        color=BIAS_CORRECTED_COLOR,
+        linewidth=CONFIDENCE_LINEWIDTH,
+        linestyle="--",
+        label=f"Model BC {BIAS_CORRECTION_METHOD} {confidence_level_percent:g}% interval",
+    )
+    blank = Line2D([], [], linestyle="none", marker="", label="")
+
+    # Matplotlib fills legends by columns for ncol=3, so this ordering gives:
+    # column 1: model raw / model BC
+    # column 2: raw interval / BC interval
+    # column 3: reference / blank
+    return [raw_model, bc_model, raw_interval, bc_interval, reference, blank]
 
 
 def calculate_distribution_bin_edges(*samples: np.ndarray) -> np.ndarray:
@@ -1875,12 +1871,15 @@ def plot_distribution_fidelity_panel(
     distributions.append((reference_values, reference_color, reference_label, 3))
 
     for values, color, label, zorder in distributions:
+        is_reference = label == reference_label
         density, _, _ = ax.hist(
             values,
             bins=bin_edges,
             density=plot_probability_density,
-            histtype="step",
+            histtype="step" if is_reference else "stepfilled",
             color=color,
+            edgecolor=color,
+            alpha=1.0 if is_reference else BOOTSTRAP_ALPHA,
             linewidth=HISTOGRAM_LINEWIDTH,
             label=label,
             zorder=zorder,
@@ -2036,11 +2035,11 @@ def create_combined_figure(
         handles=make_shared_legend_handles(reference_label),
         loc="upper center",
         bbox_to_anchor=(0.5, 0.96),
-        ncol=4,
+        ncol=3,
         frameon=False,
         fontsize=LEGEND_FONTSIZE,
         handlelength=2.0,
-        columnspacing=1.2,
+        columnspacing=1.8,
     )
 
     fig.subplots_adjust(

@@ -53,14 +53,14 @@ LAST_INPUT_LEAD = 46
 NUMBER_OF_LEAD_BINS = 2
 
 # Used for panels a-b. Options: "GEV", "Gumbel", "GenEx".
-TOP_DISTRIBUTION = "GEV"
+TOP_DISTRIBUTION = "Gumbel"
 
 # Used by all panels. Options: "return_period" or "aep".
 PLOT_METRIC = "return_period"
 AEP_YEARS = 1
 
 BOOTSTRAP_METHOD = "nonparametric"  # "nonparametric" or "parametric"
-NUMBER_OF_BOOTSTRAPS = 50
+NUMBER_OF_BOOTSTRAPS = 1000
 CONFIDENCE_LEVEL = 0.95
 MIN_SUCCESSFUL_BOOTSTRAP_FRACTION = 0.90
 RANDOM_SEED = 42
@@ -85,7 +85,7 @@ PRECIPITATION_YMAX = 200.0
 
 SHOW_GRID = True
 WRITE_TO_FILE = True
-SHOW_FIGURE = True
+SHOW_FIGURE = False
 
 # =============================================================================
 # Plot constants
