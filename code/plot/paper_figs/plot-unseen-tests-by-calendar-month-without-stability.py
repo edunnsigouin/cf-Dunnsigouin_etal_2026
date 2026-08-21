@@ -130,7 +130,7 @@ from Dunnsigouin_etal_2026 import config
 # =============================================================================
 
 # Calendar month to plot: 1=January, ..., 12=December.
-selected_month = 8
+selected_month = 12
 
 # Accumulation period.
 x_days = 2
@@ -140,7 +140,7 @@ catchment = "regine_drammen"
 
 forecast_date_range = ("2020-01-02", "2023-12-28")
 
-reference_years = ("1957", "2025")
+reference_years = ("1957", "2022")
 REFERENCE_FILE_YEARS = ("1957", "2025")
 
 era5_grid = "0.5x0.5"
@@ -201,7 +201,7 @@ figure_width = 13.0
 figure_height = 8.0
 figure_dpi = 300
 
-write2file = False
+write2file = True
 show_figure = True
 
 
@@ -601,7 +601,7 @@ def build_output_filename() -> str:
     return os.path.join(
         config.dirs["fig"],
         (
-            f"UNSEEN_independence_fidelity_tests_"
+            f"UNSEEN_independence_fidelity_no_stability_tests_"
             f"{month_name}_{x_days}dayacc_{catchment}_"
             f"{forecast_date_range[0]}_{forecast_date_range[1]}_"
             f"raw_{BIAS_CORRECTION_METHOD}_{REFERENCE_DATASET}_{reference_years[0]}-{reference_years[-1]}.png"
@@ -1813,14 +1813,14 @@ def make_shared_legend_handles(reference_label: str) -> list:
         linestyle="--",
         label=f"Model BC {BIAS_CORRECTION_METHOD} {confidence_level_percent:g}% interval",
     )
-    blank = Line2D([], [], linestyle="none", marker="", label="")
+    #blank = Line2D([], [], linestyle="none", marker="", label="")
 
     # Matplotlib fills legends by columns for ncol=3, so this ordering gives:
     # column 1: model raw / model BC
     # column 2: raw interval / BC interval
     # column 3: reference / blank
-    return [raw_model, bc_model, raw_interval, bc_interval, reference, blank]
-
+    #return [raw_model, bc_model, raw_interval, bc_interval, reference, blank]
+    return [raw_model, bc_model, raw_interval, bc_interval, reference]
 
 def calculate_distribution_bin_edges(*samples: np.ndarray) -> np.ndarray:
     """Create common bins for the model and reference distributions."""
@@ -2035,7 +2035,7 @@ def create_combined_figure(
         handles=make_shared_legend_handles(reference_label),
         loc="upper center",
         bbox_to_anchor=(0.5, 0.96),
-        ncol=3,
+        ncol=5,
         frameon=False,
         fontsize=LEGEND_FONTSIZE,
         handlelength=2.0,
