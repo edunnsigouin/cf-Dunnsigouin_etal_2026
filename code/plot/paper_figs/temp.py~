@@ -49,7 +49,7 @@ REFERENCE_DATASET = "era5"
 # ERA5 grid used when REFERENCE_DATASET == "era5".
 era5_grid = "0.5x0.5"
 
-write2file = True
+write2file = False
 
 
 # =============================================================================

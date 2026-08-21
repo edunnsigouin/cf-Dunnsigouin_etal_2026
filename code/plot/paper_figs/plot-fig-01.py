@@ -82,7 +82,7 @@ CATCHMENT_NAME = "drammen"
 REFERENCE_DATASET = "era5"
 
 # Historical period used for the panel-e climatology, inclusive.
-STREAMFLOW_CLIMATOLOGY_YEARS = [1921, 2025]
+STREAMFLOW_CLIMATOLOGY_YEARS = [1921, 2022]
 
 # Red climatology line in panel e: "median" or "mean".
 STREAMFLOW_CENTER_STATISTIC = "median"
