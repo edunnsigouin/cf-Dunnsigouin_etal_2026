@@ -53,20 +53,21 @@ LAST_INPUT_LEAD = 46
 NUMBER_OF_LEAD_BINS = 2
 
 # Used for panels a-b. Options: "GEV", "Gumbel", "GenEx".
-TOP_DISTRIBUTION = "Gumbel"
+TOP_DISTRIBUTION = "GEV"
 
 # Used by all panels. Options: "return_period" or "aep".
 PLOT_METRIC = "return_period"
 AEP_YEARS = 1
 
 BOOTSTRAP_METHOD = "nonparametric"  # "nonparametric" or "parametric"
-NUMBER_OF_BOOTSTRAPS = 20
+NUMBER_OF_BOOTSTRAPS = 50
 CONFIDENCE_LEVEL = 0.95
 MIN_SUCCESSFUL_BOOTSTRAP_FRACTION = 0.90
 RANDOM_SEED = 42
 
 SUBSAMPLE_MODEL_TO_REFERENCE_LENGTH = False
 
+REFERENCE_FILE_YEARS = [1957, 2025]
 REFERENCE_FILENAME_OVERRIDE = None
 MODEL_FILENAME_OVERRIDE = None
 
@@ -83,7 +84,7 @@ PRECIPITATION_YMIN = 0.0
 PRECIPITATION_YMAX = 200.0
 
 SHOW_GRID = True
-WRITE_TO_FILE = False
+WRITE_TO_FILE = True
 SHOW_FIGURE = True
 
 # =============================================================================
@@ -179,7 +180,7 @@ def validate_settings():
 
 def get_reference_name():
     """Return the display name of the selected reference dataset."""
-    return {"senorge": "SeNorge", "era5": "ERA5"}[REFERENCE_DATASET]
+    return {"senorge": "seNorge", "era5": "ERA5"}[REFERENCE_DATASET]
 
 
 def get_reference_variable():
@@ -197,6 +198,15 @@ def get_model_label():
     if MODEL_DATA_METHOD == "raw":
         return "Model raw"
     return f"Model BC ({MODEL_DATA_METHOD})"
+
+
+def get_record_label():
+    """Return the calendar-record label for the configured observation range."""
+    if OBSERVATION_YEARS[0] <= STORM_HANS_YEAR <= OBSERVATION_YEARS[1]:
+        return f"{REFERENCE_DATASET} monthly record excluding Storm Hans {OBSERVATION_YEARS[0]}-{OBSERVATION_YEARS[1]}"
+    return (
+        f"{REFERENCE_DATASET} monthly record {OBSERVATION_YEARS[0]}-{OBSERVATION_YEARS[1]}"
+    )
 
 
 def get_model_file_id(catchment_name):
@@ -252,16 +262,18 @@ def make_reference_filename():
     if REFERENCE_FILENAME_OVERRIDE is not None:
         return Path(REFERENCE_FILENAME_OVERRIDE)
 
+    first_year, last_year = REFERENCE_FILE_YEARS
+
     if REFERENCE_DATASET == "senorge":
         filename = (
             f"monthly_max_samples_{SENORGE_VARIABLE}_{X_DAYS}dayacc_"
-            f"{CATCHMENT}_{OBSERVATION_YEARS[0]}-{OBSERVATION_YEARS[1]}.nc"
+            f"{CATCHMENT}_{first_year}-{last_year}.nc"
         )
         return Path(config.dirs["senorge_processed"]) / filename
 
     filename = (
         f"monthly_max_samples_{ERA5_VARIABLE}_{X_DAYS}dayacc_{CATCHMENT}_"
-        f"{OBSERVATION_YEARS[0]}-{OBSERVATION_YEARS[1]}.nc"
+        f"{first_year}-{last_year}.nc"
     )
     return Path(config.dirs["era5_processed"]) / filename
 
@@ -320,10 +332,10 @@ def read_reference_month(month):
     if values.size < 10:
         raise ValueError(f"Fewer than 10 finite {MONTH_NAMES[month - 1]} values remain.")
 
-    # The fit uses the full requested time series. Only the August record threshold
-    # excludes August 2023 so Storm Hans does not define its own record threshold.
+    # The fit uses exactly OBSERVATION_YEARS. The August record excludes Storm Hans
+    # only when 2023 is part of that requested observation range.
     record_mask = np.ones(values.size, dtype=bool)
-    if month == AUGUST:
+    if month == AUGUST and OBSERVATION_YEARS[0] <= STORM_HANS_YEAR <= OBSERVATION_YEARS[1]:
         record_mask &= years != STORM_HANS_YEAR
 
     record_values = values[record_mask]
@@ -881,7 +893,7 @@ def plot_top_panel(axis, panel_label, month, result, return_periods, show_legend
                 color=RECORD_COLOR,
                 linestyle=RECORD_LINESTYLE,
                 linewidth=REFERENCE_LINEWIDTH,
-                label="Monthly record excluding Storm Hans",
+                label=get_record_label(),
             ),
         ]
         axis.legend(
@@ -957,7 +969,7 @@ def plot_metric_panel(axis, panel_label, panel_output, show_legend=False):
     title = (
         f"{MONTH_NAMES[month - 1]}: Storm Hans threshold"
         if panel_output["threshold_type"] == "storm_hans"
-        else f"{MONTH_NAMES[month - 1]}: Monthly record excluding Storm Hans threshold"
+        else f"{MONTH_NAMES[month - 1]}: {get_record_label()} threshold"
     )
     axis.set_title(
         f"{panel_label}) {title}",
@@ -994,10 +1006,13 @@ def print_summary(top_results, metric_results):
 
     for month in PANEL_MONTHS:
         reference = top_results[month]["reference"]
+        hans_in_observation_range = (
+            OBSERVATION_YEARS[0] <= STORM_HANS_YEAR <= OBSERVATION_YEARS[1]
+        )
         record_range = (
-            f"{OBSERVATION_YEARS[0]}-{OBSERVATION_YEARS[1]}"
-            if month != AUGUST
-            else f"{OBSERVATION_YEARS[0]}-{STORM_HANS_YEAR - 1}"
+            f"{OBSERVATION_YEARS[0]}-{STORM_HANS_YEAR - 1}"
+            if month == AUGUST and hans_in_observation_range
+            else f"{OBSERVATION_YEARS[0]}-{OBSERVATION_YEARS[1]}"
         )
         print()
         print(f"{MONTH_NAMES[month - 1]} reference fit: {reference['fit_values'].size} values")
