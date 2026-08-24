@@ -314,7 +314,7 @@ def make_output_filename(
     model_filename,
     method,
 ):
-    """Return the output filename including the analysis accumulation."""
+    """Return the output filename including accumulation and reference years."""
 
     stem = model_filename.stem
 
@@ -327,7 +327,8 @@ def make_output_filename(
             f"{stem}_"
             f"{analysis_x_days}dayacc_"
             f"bc_{method}_"
-            f"{reference_dataset}"
+            f"{reference_dataset}_"
+            f"{reference_years[0]}-{reference_years[1]}"
             f"{model_filename.suffix}"
         )
     )

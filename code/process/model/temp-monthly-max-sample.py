@@ -91,7 +91,7 @@ def make_input_filename():
 
     return path_s2s / (
         f"{stem}_{accumulation_days}dayacc_bc_{bias_correction_method}_"
-        f"{bias_correction_reference}.nc"
+        f"{bias_correction_reference}_{observation_years[0]}-{observation_years[1]}.nc"
     )
 
 
@@ -108,7 +108,7 @@ def make_output_filename():
     return path_s2s / (
         f"test2-monthly_max_samples_{variable}_{accumulation_days}dayacc_"
         f"{get_file_id(catchment)}_{forecast_date_range[0]}_{forecast_date_range[1]}_"
-        f"{correction_label}.nc"
+        f"{correction_label}_{observation_years[0]}-{observation_years[1]}.nc"
     )
 
 

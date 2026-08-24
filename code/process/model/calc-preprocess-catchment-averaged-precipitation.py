@@ -57,7 +57,7 @@ variable = "tp24"
 catchment = "regine_drammen"
 
 # Inclusive forecast initialization-date range.
-forecast_date_range = ["2020-01-02", "2022-12-29"]
+forecast_date_range = ["2020-01-02", "2023-12-28"]
 
 # Inclusive lead-day range written to every output file.
 #
