@@ -130,7 +130,7 @@ from Dunnsigouin_etal_2026 import config
 # Options:
 #     "era5"
 #     "senorge"
-reference_dataset = "era5"
+reference_dataset = "senorge"
 
 reference_years = [
     "1957",
@@ -141,7 +141,7 @@ era5_grid = "0.5x0.5"
 
 model_forecast_date_range = [
     "2020-01-02",
-    "2022-12-29",
+    "2023-12-28",
 ]
 
 catchment = "regine_drammen"

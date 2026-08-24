@@ -162,7 +162,7 @@ number_of_lead_bins = 2
 #
 # For any method other than "raw", the selected corrected model is compared
 # with the raw model in panels (b)-(f). For "raw", only the raw model is shown.
-BIAS_CORRECTION_METHOD = "mm"
+BIAS_CORRECTION_METHOD = "mm_2step"
 
 # Reference dataset used for BOTH:
 #   1. the vertical reference line in panels (b)-(e); and
