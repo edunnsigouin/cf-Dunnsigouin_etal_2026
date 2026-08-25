@@ -9,8 +9,8 @@ The figure combines two checks:
 Inputs
 ------
 The script reads three NetCDF files:
-    - the raw compact S2S monthly extreme-sample file;
-    - the bias-corrected compact S2S monthly extreme-sample file;
+    - the raw compact S2S monthly extreme-sample file from script 2;
+    - the selected bias-corrected compact S2S monthly extreme-sample file from script 2;
     - ONE selected reference dataset: ERA5 or SeNorge.
 
 The compact S2S files organize samples as (number, i_date). Sample-month
@@ -39,8 +39,9 @@ the usable accumulated ending leads are 17-46 and the raw S2S variables are:
     early     : tp24_max_lead17_31
     late      : tp24_max_lead32_46
 
-Bias-corrected compact files preserve the same maximum-variable names. The
-bias-correction method and reference dataset are encoded in the filename.
+Script 2 preserves the same maximum-variable names for all methods. Its compact
+filenames end in `_raw.nc` for uncorrected samples and
+`_bc_<method>_<reference>.nc` for corrected samples.
 
 
 Panel (a): Independence
@@ -130,7 +131,7 @@ from Dunnsigouin_etal_2026 import config
 # =============================================================================
 
 # Calendar month to plot: 1=January, ..., 12=December.
-selected_month = 8
+selected_month = 12
 
 # Accumulation period.
 x_days = 2
@@ -153,16 +154,17 @@ number_of_lead_bins = 2
 # Model-data / bias-correction method.
 #
 # Options:
-#     "raw"   : uncorrected compact monthly-maximum sample
-#     "mm"    : monthly-mean multiplicative correction from script 2
-#     "q"     : quantile-corrected compact sample from script 3
-#     "ld"    : lead-day-corrected compact sample from script 3
-#     "doy"   : day-of-year-corrected compact sample from script 3
-#     "q_doy" : quantile/day-of-year-corrected compact sample from script 3
+#     "raw"      : uncorrected compact monthly-maximum sample
+#     "mm_1step" : monthly reference correction only
+#     "mm_2step" : lead-time correction followed by monthly reference correction
+#     "q"        : quantile-corrected compact sample
+#     "ld"       : lead-day-corrected compact sample
+#     "doy"      : day-of-year-corrected compact sample
+#     "q_doy"    : quantile/day-of-year-corrected compact sample
 #
 # For any method other than "raw", the selected corrected model is compared
 # with the raw model in panels (b)-(f). For "raw", only the raw model is shown.
-BIAS_CORRECTION_METHOD = "mm"
+BIAS_CORRECTION_METHOD = "mm_1step"
 
 # Reference dataset used for BOTH:
 #   1. the vertical reference line in panels (b)-(e); and
@@ -201,7 +203,7 @@ figure_width = 13.0
 figure_height = 8.0
 figure_dpi = 300
 
-write2file = False
+write2file = True
 show_figure = True
 
 
@@ -211,7 +213,7 @@ show_figure = True
 
 MODEL_VARIABLE = "tp24"
 # S2S maximum-variable names are built automatically from lead ranges.
-# Scripts 2 and 3 both store sample_month(i_date) as YYYYMM.
+# Script 2 stores sample_month(i_date) as YYYYMM.
 MODEL_MONTH_COORDINATE = "sample_month"
 
 ERA5_VARIABLE = "tp24"
@@ -431,7 +433,8 @@ def validate_user_settings() -> None:
 
     valid_methods = {
         "raw",
-        "mm",
+        "mm_1step",
+        "mm_2step",
         "q",
         "ld",
         "doy",
@@ -512,8 +515,8 @@ def get_stability_lead_ranges() -> tuple[
 def get_stability_variable_names() -> tuple[str, str, str]:
     """Return compact complete, early, and late model-variable names.
 
-    Scripts 2 and 3 preserve the compact variable names in their output files;
-    the correction method and reference dataset are encoded in the filename.
+    Script 2 preserves these variable names for every correction method; only
+    the filename identifies the selected method and reference dataset.
     """
 
     _, early_range, late_range = get_stability_lead_ranges()
@@ -530,22 +533,15 @@ def get_stability_variable_names() -> tuple[str, str, str]:
 
 
 def build_model_filename(method: str) -> str:
-    """Build a compact S2S filename produced by script 2 or script 3."""
+    """Build the compact monthly-sample filename written by script 2."""
 
-    full_range, early_range, late_range = get_stability_lead_ranges()
-    lead_label = (
-        f"lead{full_range[0]}-{full_range[1]}_split{number_of_lead_bins}_"
-        f"{early_range[0]}-{early_range[1]}_{late_range[0]}-{late_range[1]}"
-    )
     stem = (
-        f"test-monthly_max_samples_{MODEL_VARIABLE}_{x_days}dayacc_"
-        f"{get_file_id(catchment)}_{lead_label}_"
-        f"{forecast_date_range[0]}_{forecast_date_range[1]}"
+        f"monthly_max_samples_{MODEL_VARIABLE}_{x_days}dayacc_"
+        f"{get_file_id(catchment)}_{forecast_date_range[0]}_{forecast_date_range[1]}"
     )
 
-    filename = os.path.join(config.dirs["s2s_processed"], stem)
-    suffix = "" if method == "raw" else f"_bc_{method}_{REFERENCE_DATASET}"
-    return f"{filename}{suffix}.nc"
+    correction_label = "raw" if method == "raw" else f"bc_{method}_{REFERENCE_DATASET}_{reference_years[0]}-{reference_years[-1]}"
+    return os.path.join(config.dirs["s2s_processed"], f"{stem}_{correction_label}.nc")
 
 def resolve_model_input_filenames() -> tuple[str, str]:
     """Return raw and selected corrected compact S2S input filenames."""
@@ -601,7 +597,7 @@ def build_output_filename() -> str:
     return os.path.join(
         config.dirs["fig"],
         (
-            f"UNSEEN_independence_fidelity_no_stability_tests_"
+            f"UNSEEN_tests_no-stability_"
             f"{month_name}_{x_days}dayacc_{catchment}_"
             f"{forecast_date_range[0]}_{forecast_date_range[1]}_"
             f"raw_{BIAS_CORRECTION_METHOD}_{REFERENCE_DATASET}_{reference_years[0]}-{reference_years[-1]}.png"
