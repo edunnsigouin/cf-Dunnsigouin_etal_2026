@@ -55,7 +55,7 @@ from Dunnsigouin_etal_2026 import config
 # =============================================================================
 
 # Calendar month to plot: 1=January, ..., 12=December.
-selected_month = 5
+selected_month = 12
 
 # Accumulation period.
 x_days = 2
@@ -134,7 +134,7 @@ figure_width = 13.0
 figure_height = 8.0
 figure_dpi = 300
 
-write2file = False
+write2file = True
 show_figure = True
 
 
@@ -530,18 +530,17 @@ def get_reference_configuration() -> tuple[str, str, str]:
 def build_output_filename() -> str:
     """Create a descriptive filename for the six-panel figure."""
 
-    month_name = MONTH_LABELS[selected_month].lower()
-
     return os.path.join(
         config.dirs["fig"],
         (
-            f"UNSEEN_tests_{PANEL_F_TEST}_"
-            f"{month_name}_{x_days}dayacc_{catchment}_"
+            f"UNSEEN_tests_with_{PANEL_F_TEST}_"
+            f"{selected_month:02d}_{x_days}dayacc_{catchment}_"
             f"{forecast_date_range[0]}_{forecast_date_range[1]}_"
             f"raw_{BIAS_CORRECTION_METHOD}_{REFERENCE_DATASET}_"
             f"{reference_years[0]}-{reference_years[-1]}.png"
         ),
     )
+
 
 # =============================================================================
 # Independence calculation from the shared S2S sample
@@ -2314,11 +2313,13 @@ def create_combined_figure(
 
     add_panel_label(axes[1, 2], "(f)")
 
+    legend_columns = 4 if PANEL_F_TEST == "stability_test" else 3
+    
     fig.legend(
         handles=make_shared_legend_handles(reference_label),
         loc="upper center",
         bbox_to_anchor=(0.5, 0.96),
-        ncol=5,
+        ncol=legend_columns,
         frameon=False,
         fontsize=LEGEND_FONTSIZE,
         handlelength=2.0,
