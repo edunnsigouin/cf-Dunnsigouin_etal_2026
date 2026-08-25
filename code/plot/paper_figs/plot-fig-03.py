@@ -42,9 +42,10 @@ CATCHMENT = "regine_drammen"
 X_DAYS = 2
 
 OBSERVATION_YEARS = [1957, 2022]
+REFERENCE_FILE_YEARS = [1957, 2025]
 FORECAST_DATE_RANGE = ["2020-01-02", "2023-12-28"]
 
-MODEL_DATA_METHOD = "raw"  # "raw", "mm", "q", "ld", "doy", or "q_doy"
+MODEL_DATA_METHOD = "mm_1step"  # "raw", "mm_1step", "mm_2step", "q", "ld", "doy", or "q_doy"
 MODEL_SAMPLING_GROUP = "full"  # "full", "split1", "split2", ...
 MODEL_VARIABLE = "tp24"
 
@@ -60,14 +61,14 @@ PLOT_METRIC = "return_period"
 AEP_YEARS = 1
 
 BOOTSTRAP_METHOD = "nonparametric"  # "nonparametric" or "parametric"
-NUMBER_OF_BOOTSTRAPS = 1000
+NUMBER_OF_BOOTSTRAPS = 50
 CONFIDENCE_LEVEL = 0.95
 MIN_SUCCESSFUL_BOOTSTRAP_FRACTION = 0.90
 RANDOM_SEED = 42
 
 SUBSAMPLE_MODEL_TO_REFERENCE_LENGTH = False
 
-REFERENCE_FILE_YEARS = [1957, 2025]
+
 REFERENCE_FILENAME_OVERRIDE = None
 MODEL_FILENAME_OVERRIDE = None
 
@@ -85,7 +86,7 @@ PRECIPITATION_YMAX = 200.0
 
 SHOW_GRID = True
 WRITE_TO_FILE = True
-SHOW_FIGURE = False
+SHOW_FIGURE = True
 
 # =============================================================================
 # Plot constants
@@ -141,7 +142,7 @@ def validate_settings():
     """Validate user-configurable settings."""
     if REFERENCE_DATASET not in {"senorge", "era5"}:
         raise ValueError("REFERENCE_DATASET must be 'senorge' or 'era5'.")
-    if MODEL_DATA_METHOD not in {"raw", "mm", "q", "ld", "doy", "q_doy"}:
+    if MODEL_DATA_METHOD not in {"raw", "mm_1step", "mm_2step", "q", "ld", "doy", "q_doy"}:
         raise ValueError("Unsupported MODEL_DATA_METHOD.")
     if TOP_DISTRIBUTION not in METHODS:
         raise ValueError(f"TOP_DISTRIBUTION must be one of {METHODS}.")
@@ -279,25 +280,31 @@ def make_reference_filename():
 
 
 def make_model_filename():
-    """Construct the selected raw or bias-corrected compact model filename."""
+    """Construct the compact model filename written by the sample-building script."""
     if MODEL_FILENAME_OVERRIDE is not None:
         return Path(MODEL_FILENAME_OVERRIDE)
 
-    filename = (
-        f"test-monthly_max_samples_{MODEL_VARIABLE}_{X_DAYS}dayacc_"
-        f"{get_model_file_id(CATCHMENT)}_{lead_split_filename_label()}_"
-        f"{FORECAST_DATE_RANGE[0]}_{FORECAST_DATE_RANGE[1]}"
+    stem = (
+        f"monthly_max_samples_{MODEL_VARIABLE}_{X_DAYS}dayacc_"
+        f"{get_model_file_id(CATCHMENT)}_{FORECAST_DATE_RANGE[0]}_{FORECAST_DATE_RANGE[1]}"
     )
-    if MODEL_DATA_METHOD != "raw":
-        filename += f"_bc_{MODEL_DATA_METHOD}_{REFERENCE_DATASET}"
-    return Path(config.dirs["s2s_processed"]) / f"{filename}.nc"
+
+    if MODEL_DATA_METHOD == "raw":
+        correction_label = "raw"
+    else:
+        correction_label = (
+            f"bc_{MODEL_DATA_METHOD}_{REFERENCE_DATASET}_"
+            f"{OBSERVATION_YEARS[0]}-{OBSERVATION_YEARS[-1]}"
+        )
+
+    return Path(config.dirs["s2s_processed"]) / f"{stem}_{correction_label}.nc"
 
 
 def make_figure_filename():
     """Construct the six-panel output figure filename."""
     model_label = "raw" if MODEL_DATA_METHOD == "raw" else f"bc-{MODEL_DATA_METHOD}"
     return Path(config.dirs["fig"]) / (
-        f"fig-03-{PLOT_METRIC}-{model_label}-{REFERENCE_DATASET}-{TOP_DISTRIBUTION}.png"
+        f"fig-03-{PLOT_METRIC}-{TOP_DISTRIBUTION}-{model_label}-{FORECAST_DATE_RANGE[0]}-{FORECAST_DATE_RANGE[-1]}-{REFERENCE_DATASET}-{OBSERVATION_YEARS[0]}-{OBSERVATION_YEARS[-1]}.png"
     )
 
 
