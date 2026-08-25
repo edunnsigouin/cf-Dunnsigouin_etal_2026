@@ -131,7 +131,7 @@ from Dunnsigouin_etal_2026 import config
 # =============================================================================
 
 # Calendar month to plot: 1=January, ..., 12=December.
-selected_month = 8
+selected_month = 1
 
 # Accumulation period.
 x_days = 2
@@ -164,7 +164,7 @@ number_of_lead_bins = 2
 #
 # For any method other than "raw", the selected corrected model is compared
 # with the raw model in panels (b)-(f). For "raw", only the raw model is shown.
-BIAS_CORRECTION_METHOD = "mm_2step"
+BIAS_CORRECTION_METHOD = "mm_1step"
 
 # Reference dataset used for BOTH:
 #   1. the vertical reference line in panels (b)-(e); and
@@ -203,7 +203,7 @@ figure_width = 13.0
 figure_height = 8.0
 figure_dpi = 300
 
-write2file = False
+write2file = True
 show_figure = True
 
 
@@ -536,11 +536,11 @@ def build_model_filename(method: str) -> str:
     """Build the compact monthly-sample filename written by script 2."""
 
     stem = (
-        f"test2-monthly_max_samples_{MODEL_VARIABLE}_{x_days}dayacc_"
+        f"monthly_max_samples_{MODEL_VARIABLE}_{x_days}dayacc_"
         f"{get_file_id(catchment)}_{forecast_date_range[0]}_{forecast_date_range[1]}"
     )
 
-    correction_label = "raw" if method == "raw" else f"bc_{method}_{REFERENCE_DATASET}"
+    correction_label = "raw" if method == "raw" else f"bc_{method}_{REFERENCE_DATASET}_{reference_years[0]}-{reference_years[-1]}"
     return os.path.join(config.dirs["s2s_processed"], f"{stem}_{correction_label}.nc")
 
 def resolve_model_input_filenames() -> tuple[str, str]:
@@ -597,7 +597,7 @@ def build_output_filename() -> str:
     return os.path.join(
         config.dirs["fig"],
         (
-            f"UNSEEN_independence_fidelity_no_stability_tests_"
+            f"UNSEEN_tests_no-stability_"
             f"{month_name}_{x_days}dayacc_{catchment}_"
             f"{forecast_date_range[0]}_{forecast_date_range[1]}_"
             f"raw_{BIAS_CORRECTION_METHOD}_{REFERENCE_DATASET}_{reference_years[0]}-{reference_years[-1]}.png"

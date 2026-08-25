@@ -31,7 +31,7 @@ accumulation_days = 2
 number_of_lead_bins = 2
 
 # Options: "raw", "q", "doy", "ld", "q_doy", "mm_1step", "mm_2step"
-bias_correction_method = "mm_2step"
+bias_correction_method = "mm_1step"
 
 # Options: "senorge", "era5"
 bias_correction_reference = "senorge"
@@ -103,12 +103,12 @@ def make_output_filename():
     if bias_correction_method == "raw":
         correction_label = "raw"
     else:
-        correction_label = f"bc_{bias_correction_method}_{bias_correction_reference}"
+        correction_label = f"bc_{bias_correction_method}_{bias_correction_reference}_{observation_years[0]}-{observation_years[1]}"
 
     return path_s2s / (
-        f"test2-monthly_max_samples_{variable}_{accumulation_days}dayacc_"
+        f"monthly_max_samples_{variable}_{accumulation_days}dayacc_"
         f"{get_file_id(catchment)}_{forecast_date_range[0]}_{forecast_date_range[1]}_"
-        f"{correction_label}_{observation_years[0]}-{observation_years[1]}.nc"
+        f"{correction_label}.nc"
     )
 
 
