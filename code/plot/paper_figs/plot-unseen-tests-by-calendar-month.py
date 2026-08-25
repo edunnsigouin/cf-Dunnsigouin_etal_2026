@@ -55,7 +55,7 @@ from Dunnsigouin_etal_2026 import config
 # =============================================================================
 
 # Calendar month to plot: 1=January, ..., 12=December.
-selected_month = 12
+selected_month = 5
 
 # Accumulation period.
 x_days = 2
@@ -88,7 +88,7 @@ number_of_lead_bins = 2
 #
 # For any method other than "raw", the selected corrected model is compared
 # with the raw model in panels (b)-(f). For "raw", only the raw model is shown.
-BIAS_CORRECTION_METHOD = "mm_2step"
+BIAS_CORRECTION_METHOD = "mm_1step"
 
 # Reference dataset used for BOTH:
 #   1. the vertical reference line in panels (b)-(e); and
@@ -104,7 +104,7 @@ REFERENCE_DATASET = "senorge"
 # Options:
 #     "ks_test"        : model/reference distribution fidelity KS test
 #     "stability_test" : Early-vs-Late lead-time stability KS test
-PANEL_F_TEST = "stability_test"
+PANEL_F_TEST = "ks_test"
 
 # Exclude the August 2023 Storm Hans reference value before fidelity calculations.
 EXCLUDE_STORM_HANS_FROM_REFERENCE = False
@@ -134,7 +134,7 @@ figure_width = 13.0
 figure_height = 8.0
 figure_dpi = 300
 
-write2file = True
+write2file = False
 show_figure = True
 
 
