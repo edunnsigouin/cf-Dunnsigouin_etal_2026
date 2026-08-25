@@ -1,123 +1,38 @@
 """
 Create a six-panel UNSEEN diagnostic figure for one selected calendar month.
 
-The figure combines three checks:
-    1. ensemble-member independence;
-    2. fidelity of raw and bias-corrected S2S distributions relative to one
-       selected reference dataset;
-    3. stability of raw and bias-corrected S2S distributions across lead-time
-       subgroups.
+Panels (a)-(e) are fixed:
+    (a) ensemble-member independence from the raw complete-lead sample;
+    (b)-(e) fidelity of the mean, standard deviation, skewness, and kurtosis for
+    raw and selected bias-corrected S2S samples relative to one reference dataset.
 
-Inputs
-------
-The script reads three NetCDF files:
-    - the raw compact S2S monthly extreme-sample file;
-    - the bias-corrected compact S2S monthly extreme-sample file;
-    - ONE selected reference dataset: ERA5 or SeNorge.
+Panel (f) is selected with PANEL_F_TEST:
+    "ks_test"
+        Plot the complete selected-month raw model, selected bias-corrected model,
+        and reference distributions. Two-sample Kolmogorov-Smirnov tests compare
+        each model distribution directly with the reference distribution.
 
-The compact S2S files organize samples as (number, i_date). Sample-month
-membership is stored as sample_month(i_date) in YYYYMM format, model source is
-stored in model_type(i_date), and the unique i_date coordinate identifies each
-forecast or hindcast initialization row. Calendar month is derived internally
-as sample_month % 100.
+    "stability_test"
+        Plot the lead-time stability test used in the companion stability script.
+        The Early and Late variables contain the same complete-window maxima,
+        classified by the ending lead day on which each maximum occurred; maxima
+        are not recalculated within shorter lead windows. Panel (f) plots the
+        selected-model Early/Late distributions and reports Early-vs-Late KS
+        statistics for both raw and selected bias-corrected samples.
 
-Panel (a) calculates independence from the raw all-lead sample.
-Panels (b)-(e) overlay raw and bias-corrected bootstrap distributions and their
-95% intervals, with one vertical line for the selected reference dataset. The reference files are always read for 1957-2025, while `reference_years` selects
-the subset used in the fidelity calculations. An optional user setting can exclude
-August 2023 Storm Hans when 2023 is included in `reference_years`.
-Panel (f) plots the bias-corrected Early/Late distributions and reports both
-raw and bias-corrected KS statistics.
+The script reads the raw compact S2S monthly-maximum file, the selected corrected
+compact S2S file, and one ERA5 or SeNorge monthly-maximum reference file. Compact
+S2S samples use dimensions (number, i_date), with sample_month(i_date) stored as
+YYYYMM. Calendar month is derived internally as sample_month % 100.
 
-For the default settings
-    first_input_lead = 16
-    last_input_lead = 46
-    x_days = 2
-    number_of_lead_bins = 2
-
-the usable accumulated ending leads are 17-46 and the raw S2S variables are:
+For the default lead settings first_input_lead=16, last_input_lead=46, x_days=2,
+and number_of_lead_bins=2, usable ending leads are 17-46 and the model variables
+are:
     all leads : tp24_max
     early     : tp24_max_lead17_31
     late      : tp24_max_lead32_46
-
-Bias-corrected compact files preserve the same maximum-variable names. The
-bias-correction method and reference dataset are encoded in the filename.
-
-
-Panel (a): Independence
------------------------
-Shows one boxplot of pairwise Spearman rank correlations between ensemble
-members for the selected month. Forecast and hindcast correlations are pooled.
-
-Correlations near zero indicate weak dependence between ensemble members.
-Larger positive or negative correlations indicate stronger dependence.
-
-
-Panel (b): Fidelity of the mean
--------------------------------
-Uses the complete all-lead S2S sample.
-
-The model sample is repeatedly resampled with replacement using the same sample
-size as the observational datasets. The resulting bootstrap distribution of
-the mean is shown together with the central model confidence interval and the
-ERA5 and SeNorge means.
-
-
-Panel (c): Fidelity of the standard deviation
----------------------------------------------
-Uses the same bootstrap procedure, but for sample standard deviation.
-
-This tests whether the observed spread of monthly extremes is consistent with the spread expected from the S2S distribution.
-
-
-Panel (d): Fidelity of the skewness
------------------------------------
-Uses the same bootstrap procedure for skewness.
-
-This tests whether the asymmetry of the observed extreme-precipitation
-distribution is consistent with the S2S distribution.
-
-
-Panel (e): Fidelity of the kurtosis
------------------------------------
-Uses the same bootstrap procedure for excess kurtosis.
-
-This tests whether the tail-heaviness / peakedness of the observed extreme
-distribution is consistent with the S2S distribution.
-
-
-Panel (f): Lead-time stability
-------------------------------
-Compares the complete all-lead S2S distribution with the lead-location
-subgroups.
-
-The subgroup values are not maxima recalculated over shorter lead windows.
-They are the SAME full-window maxima, classified by the lead time at which each
-maximum occurred.
-
-For the default two-bin setup:
-    early = maxima occurring at ending leads 17-31
-    late  = maxima occurring at ending leads 32-46
-
-The panel shows probability-density distributions for all leads, early leads,
-and late leads. A two-sample Kolmogorov-Smirnov test compares the early and
-late subgroups and reports sample counts, KS statistic, p-value, and whether
-the equal-distribution null hypothesis is rejected.
-
-
-Data used by each panel
------------------------
-Panel (a):
-    complete all-lead S2S sample + i_date + number + model_type from the
-    shared compact S2S extreme-sample file. hdate is retained as provenance
-    but is not required because every hindcast row already has a unique i_date.
-
-Panels (b)-(e):
-    complete all-lead S2S sample + ERA5 + SeNorge.
-
-Panel (f):
-    complete, early, and late samples from the same S2S extreme-sample file.
 """
+
 
 
 import os
@@ -140,7 +55,7 @@ from Dunnsigouin_etal_2026 import config
 # =============================================================================
 
 # Calendar month to plot: 1=January, ..., 12=December.
-selected_month = 8
+selected_month = 5
 
 # Accumulation period.
 x_days = 2
@@ -163,16 +78,17 @@ number_of_lead_bins = 2
 # Model-data / bias-correction method.
 #
 # Options:
-#     "raw"   : uncorrected compact monthly-maximum sample
-#     "mm"    : monthly-mean multiplicative correction from script 2
-#     "q"     : quantile-corrected compact sample from script 3
-#     "ld"    : lead-day-corrected compact sample from script 3
-#     "doy"   : day-of-year-corrected compact sample from script 3
-#     "q_doy" : quantile/day-of-year-corrected compact sample from script 3
+#     "raw"      : uncorrected compact monthly-maximum sample
+#     "mm_1step" : monthly reference correction only
+#     "mm_2step" : lead-time correction followed by monthly reference correction
+#     "q"        : quantile-corrected compact sample
+#     "ld"       : lead-day-corrected compact sample
+#     "doy"      : day-of-year-corrected compact sample
+#     "q_doy"    : quantile/day-of-year-corrected compact sample
 #
 # For any method other than "raw", the selected corrected model is compared
 # with the raw model in panels (b)-(f). For "raw", only the raw model is shown.
-BIAS_CORRECTION_METHOD = "mm"
+BIAS_CORRECTION_METHOD = "mm_2step"
 
 # Reference dataset used for BOTH:
 #   1. the vertical reference line in panels (b)-(e); and
@@ -182,6 +98,13 @@ BIAS_CORRECTION_METHOD = "mm"
 #     "era5"
 #     "senorge"
 REFERENCE_DATASET = "senorge"
+
+# Panel (f) diagnostic.
+#
+# Options:
+#     "ks_test"        : model/reference distribution fidelity KS test
+#     "stability_test" : Early-vs-Late lead-time stability KS test
+PANEL_F_TEST = "stability_test"
 
 # Exclude the August 2023 Storm Hans reference value before fidelity calculations.
 EXCLUDE_STORM_HANS_FROM_REFERENCE = False
@@ -221,7 +144,7 @@ show_figure = True
 
 MODEL_VARIABLE = "tp24"
 # S2S maximum-variable names are built automatically from lead ranges.
-# Scripts 2 and 3 both store sample_month(i_date) as YYYYMM.
+# Script 2 stores sample_month(i_date) as YYYYMM.
 MODEL_MONTH_COORDINATE = "sample_month"
 
 ERA5_VARIABLE = "tp24"
@@ -441,7 +364,8 @@ def validate_user_settings() -> None:
 
     valid_methods = {
         "raw",
-        "mm",
+        "mm_1step",
+        "mm_2step",
         "q",
         "ld",
         "doy",
@@ -465,6 +389,13 @@ def validate_user_settings() -> None:
             f"REFERENCE_DATASET must be one of "
             f"{sorted(valid_references)}. "
             f"Got '{REFERENCE_DATASET}'."
+        )
+
+    valid_panel_f_tests = {"ks_test", "stability_test"}
+    if PANEL_F_TEST not in valid_panel_f_tests:
+        raise ValueError(
+            f"PANEL_F_TEST must be one of {sorted(valid_panel_f_tests)}. "
+            f"Got '{PANEL_F_TEST}'."
         )
 
 
@@ -522,8 +453,8 @@ def get_stability_lead_ranges() -> tuple[
 def get_stability_variable_names() -> tuple[str, str, str]:
     """Return compact complete, early, and late model-variable names.
 
-    Scripts 2 and 3 preserve the compact variable names in their output files;
-    the correction method and reference dataset are encoded in the filename.
+    Script 2 preserves these variable names for every correction method; only
+    the filename identifies the selected method and reference dataset.
     """
 
     _, early_range, late_range = get_stability_lead_ranges()
@@ -540,22 +471,15 @@ def get_stability_variable_names() -> tuple[str, str, str]:
 
 
 def build_model_filename(method: str) -> str:
-    """Build a compact S2S filename produced by script 2 or script 3."""
+    """Build the compact monthly-sample filename written by script 2."""
 
-    full_range, early_range, late_range = get_stability_lead_ranges()
-    lead_label = (
-        f"lead{full_range[0]}-{full_range[1]}_split{number_of_lead_bins}_"
-        f"{early_range[0]}-{early_range[1]}_{late_range[0]}-{late_range[1]}"
-    )
     stem = (
-        f"test-monthly_max_samples_{MODEL_VARIABLE}_{x_days}dayacc_"
-        f"{get_file_id(catchment)}_{lead_label}_"
-        f"{forecast_date_range[0]}_{forecast_date_range[1]}"
+        f"monthly_max_samples_{MODEL_VARIABLE}_{x_days}dayacc_"
+        f"{get_file_id(catchment)}_{forecast_date_range[0]}_{forecast_date_range[1]}"
     )
 
-    filename = os.path.join(config.dirs["s2s_processed"], stem)
-    suffix = "" if method == "raw" else f"_bc_{method}_{REFERENCE_DATASET}"
-    return f"{filename}{suffix}.nc"
+    correction_label = "raw" if method == "raw" else f"bc_{method}_{REFERENCE_DATASET}_{reference_years[0]}-{reference_years[-1]}"
+    return os.path.join(config.dirs["s2s_processed"], f"{stem}_{correction_label}.nc")
 
 def resolve_model_input_filenames() -> tuple[str, str]:
     """Return raw and selected corrected compact S2S input filenames."""
@@ -611,10 +535,11 @@ def build_output_filename() -> str:
     return os.path.join(
         config.dirs["fig"],
         (
-            f"UNSEEN_independence_fidelity_stability_tests_"
+            f"UNSEEN_tests_{PANEL_F_TEST}_"
             f"{month_name}_{x_days}dayacc_{catchment}_"
             f"{forecast_date_range[0]}_{forecast_date_range[1]}_"
-            f"raw_{BIAS_CORRECTION_METHOD}_{REFERENCE_DATASET}_{reference_years[0]}-{reference_years[-1]}.png"
+            f"raw_{BIAS_CORRECTION_METHOD}_{REFERENCE_DATASET}_"
+            f"{reference_years[0]}-{reference_years[-1]}.png"
         ),
     )
 
@@ -1476,14 +1401,43 @@ def perform_all_moments_tests(
 
 
 # =============================================================================
-# Stability KS test
+# Distributional fidelity KS test
 # =============================================================================
 
 def get_ks_significance_threshold() -> float:
     """Convert the selected KS confidence level to a p-value threshold."""
-
     return 1.0 - ks_significance_level_percent / 100.0
 
+
+def perform_fidelity_ks_test(
+    model_values: np.ndarray,
+    reference_values: np.ndarray,
+) -> dict[str, object]:
+    """Compare model and reference samples with a two-sided two-sample KS test."""
+
+    result = ks_2samp(
+        model_values,
+        reference_values,
+        alternative="two-sided",
+        method=ks_method,
+    )
+    p_value = float(result.pvalue)
+
+    return {
+        "statistic": float(result.statistic),
+        "p_value": p_value,
+        "reject_null": p_value < get_ks_significance_threshold(),
+    }
+
+
+def format_ks_p_value(p_value: float) -> str:
+    """Format a KS p-value compactly."""
+    return f"{p_value:.1e}" if p_value < 0.001 else f"{p_value:.3f}"
+
+
+# =============================================================================
+# Stability KS test
+# =============================================================================
 
 def perform_stability_ks_test(
     early_values: np.ndarray,
@@ -1511,14 +1465,6 @@ def perform_stability_ks_test(
         "reject_null": p_value < get_ks_significance_threshold(),
     }
 
-
-def format_ks_p_value(p_value: float) -> str:
-    """Format a KS p-value compactly."""
-
-    if p_value < 0.001:
-        return f"{p_value:.1e}"
-
-    return f"{p_value:.3f}"
 
 
 # =============================================================================
@@ -1876,17 +1822,10 @@ def plot_moment_panel(
     )
 
 
-def make_shared_legend_handles(
-    reference_label: str,
-) -> list:
-    """Create the shared legend used by the six-panel figure."""
+def make_shared_legend_handles(reference_label: str) -> list:
+    """Create shared legend handles for panels (b)-(f)."""
 
-    reference_color = (
-        ERA5_COLOR
-        if REFERENCE_DATASET == "era5"
-        else SENORGE_COLOR
-    )
-
+    reference_color = ERA5_COLOR if REFERENCE_DATASET == "era5" else SENORGE_COLOR
     handles = [
         Patch(
             facecolor=RAW_MODEL_COLOR,
@@ -1900,22 +1839,18 @@ def make_shared_legend_handles(
             color=RAW_MODEL_COLOR,
             linewidth=CONFIDENCE_LINEWIDTH,
             linestyle="--",
-            label=(
-                f"Model raw "
-                f"{confidence_level_percent:g}% interval"
-            ),
+            label=f"Model raw {confidence_level_percent:g}% interval",
         ),
     ]
 
     if BIAS_CORRECTION_METHOD != "raw":
-        method_label = BIAS_CORRECTION_METHOD
         handles.extend(
             [
                 Patch(
                     facecolor=BIAS_CORRECTED_COLOR,
                     edgecolor=BIAS_CORRECTED_COLOR,
                     alpha=BOOTSTRAP_ALPHA,
-                    label=f"Model BC {method_label}",
+                    label=f"Model BC {BIAS_CORRECTION_METHOD}",
                 ),
                 Line2D(
                     [0],
@@ -1924,46 +1859,175 @@ def make_shared_legend_handles(
                     linewidth=CONFIDENCE_LINEWIDTH,
                     linestyle="--",
                     label=(
-                        f"Model BC {method_label} "
+                        f"Model BC {BIAS_CORRECTION_METHOD} "
                         f"{confidence_level_percent:g}% interval"
                     ),
                 ),
             ]
         )
 
-    stability_prefix = (
-        "Model raw"
-        if BIAS_CORRECTION_METHOD == "raw"
-        else f"Model BC {BIAS_CORRECTION_METHOD}"
+    handles.append(
+        Line2D(
+            [0],
+            [0],
+            color=reference_color,
+            linewidth=REFERENCE_LINEWIDTH,
+            label=reference_label,
+        )
     )
 
-    handles.extend(
-        [
-            Line2D(
-                [0],
-                [0],
-                color=EARLY_COLOR,
-                linewidth=HISTOGRAM_LINEWIDTH,
-                label=f"{stability_prefix} early lead days (17-31)",
-            ),
-            Line2D(
-                [0],
-                [0],
-                color=LATE_COLOR,
-                linewidth=HISTOGRAM_LINEWIDTH,
-                label=f"{stability_prefix} late lead days (32-46)",
-            ),
-            Line2D(
-                [0],
-                [0],
-                color=reference_color,
-                linewidth=REFERENCE_LINEWIDTH,
-                label=reference_label,
-            ),
-        ]
-    )
+    if PANEL_F_TEST == "stability_test":
+        stability_prefix = (
+            "Model raw"
+            if BIAS_CORRECTION_METHOD == "raw"
+            else f"Model BC {BIAS_CORRECTION_METHOD}"
+        )
+        _, early_range, late_range = get_stability_lead_ranges()
+        handles.extend(
+            [
+                Line2D(
+                    [0],
+                    [0],
+                    color=EARLY_COLOR,
+                    linewidth=HISTOGRAM_LINEWIDTH,
+                    label=(
+                        f"{stability_prefix} early lead days "
+                        f"({early_range[0]}-{early_range[1]})"
+                    ),
+                ),
+                Line2D(
+                    [0],
+                    [0],
+                    color=LATE_COLOR,
+                    linewidth=HISTOGRAM_LINEWIDTH,
+                    label=(
+                        f"{stability_prefix} late lead days "
+                        f"({late_range[0]}-{late_range[1]})"
+                    ),
+                ),
+            ]
+        )
 
     return handles
+
+
+def calculate_distribution_bin_edges(*samples: np.ndarray) -> np.ndarray:
+    """Create common bins for the model and reference distributions."""
+
+    combined = np.concatenate(samples)
+    x_min = float(np.min(combined))
+    x_max = float(np.max(combined))
+
+    if np.isclose(x_min, x_max):
+        padding = max(abs(x_min) * 0.05, 0.5)
+        x_min -= padding
+        x_max += padding
+
+    return np.linspace(x_min, x_max, number_of_bins + 1)
+
+
+def plot_distribution_fidelity_panel(
+    ax: plt.Axes,
+    raw_model_values: np.ndarray,
+    bias_corrected_model_values: np.ndarray,
+    reference_values: np.ndarray,
+    reference_label: str,
+    raw_ks: dict[str, object],
+    bc_ks: dict[str, object],
+) -> None:
+    """Plot selected-month model/reference distributions and KS-test results."""
+
+    reference_color = ERA5_COLOR if REFERENCE_DATASET == "era5" else SENORGE_COLOR
+    samples = [raw_model_values, reference_values]
+    if BIAS_CORRECTION_METHOD != "raw":
+        samples.append(bias_corrected_model_values)
+
+    bin_edges = calculate_distribution_bin_edges(*samples)
+    maximum_density = 0.0
+
+    distributions = [
+        (raw_model_values, RAW_MODEL_COLOR, "Model raw", 1),
+    ]
+    if BIAS_CORRECTION_METHOD != "raw":
+        distributions.append(
+            (
+                bias_corrected_model_values,
+                BIAS_CORRECTED_COLOR,
+                f"Model BC {BIAS_CORRECTION_METHOD}",
+                2,
+            )
+        )
+    distributions.append((reference_values, reference_color, reference_label, 3))
+
+    for values, color, label, zorder in distributions:
+        is_reference = label == reference_label
+        density, _, _ = ax.hist(
+            values,
+            bins=bin_edges,
+            density=plot_probability_density,
+            histtype="step" if is_reference else "stepfilled",
+            color=color,
+            edgecolor=color,
+            alpha=1.0 if is_reference else BOOTSTRAP_ALPHA,
+            linewidth=HISTOGRAM_LINEWIDTH,
+            label=label,
+            zorder=zorder,
+        )
+        if density.size:
+            maximum_density = max(maximum_density, float(np.nanmax(density)))
+
+    ax.set_xlim(bin_edges[0], bin_edges[-1])
+    if maximum_density > 0:
+        ax.set_ylim(0, maximum_density * (1.0 + y_axis_margin_fraction))
+
+    ax.set_xlabel(
+        f"Maximum monthly {x_days}-day precipitation [mm]",
+        fontsize=AXIS_LABELSIZE,
+    )
+    ax.set_ylabel(
+        "Probability density" if plot_probability_density else "Samples",
+        fontsize=AXIS_LABELSIZE,
+    )
+    ax.set_title(
+        "Fidelity: KS-test",
+        fontsize=TITLE_FONTSIZE,
+        fontweight="normal",
+    )
+
+    threshold = get_ks_significance_threshold()
+    raw_color = reference_color if raw_ks["p_value"] < threshold else "black"
+    bc_color = reference_color if bc_ks["p_value"] < threshold else "black"
+
+    ax.text(
+        0.97,
+        0.95,
+        (
+            f"raw: D={raw_ks['statistic']:.3f}, "
+            f"p={format_ks_p_value(raw_ks['p_value'])}"
+        ),
+        transform=ax.transAxes,
+        ha="right",
+        va="top",
+        fontsize=9,
+        color=raw_color,
+    )
+
+    if BIAS_CORRECTION_METHOD != "raw":
+        ax.text(
+            0.97,
+            0.87,
+            (
+                f"BC: D={bc_ks['statistic']:.3f}, "
+                f"p={format_ks_p_value(bc_ks['p_value'])}"
+            ),
+            transform=ax.transAxes,
+            ha="right",
+            va="top",
+            fontsize=9,
+            color=bc_color,
+        )
+
+    format_axis(ax)
 
 
 def calculate_stability_bin_edges(
@@ -2183,54 +2247,35 @@ def build_figure_title() -> str:
 def create_combined_figure(
     independence_values: np.ndarray,
     moments_results: dict[str, dict[str, object]],
+    raw_model_values: np.ndarray,
+    bias_corrected_model_values: np.ndarray,
+    reference_values: np.ndarray,
+    reference_label: str,
+    raw_fidelity_ks: dict[str, object] | None,
+    bc_fidelity_ks: dict[str, object] | None,
     bc_early_values: np.ndarray,
     bc_late_values: np.ndarray,
-    reference_label: str,
-    raw_stability_ks: dict[str, object],
-    bc_stability_ks: dict[str, object],
+    raw_stability_ks: dict[str, object] | None,
+    bc_stability_ks: dict[str, object] | None,
 ) -> plt.Figure:
-    """Create the publication-style 2 x 3 diagnostic figure."""
+    """Create the 2 x 3 figure with the selected panel-(f) diagnostic."""
 
     fig, axes = plt.subplots(
         nrows=2,
         ncols=3,
-        figsize=(
-            figure_width,
-            figure_height,
-        ),
+        figsize=(figure_width, figure_height),
         squeeze=False,
     )
 
-    # (a) Ensemble-member independence from raw all-lead data.
-    plot_independence_panel(
-        ax=axes[0, 0],
-        correlations=independence_values,
-    )
-
-    add_panel_label(
-        axes[0, 0],
-        "(a)",
-    )
+    plot_independence_panel(ax=axes[0, 0], correlations=independence_values)
+    add_panel_label(axes[0, 0], "(a)")
 
     panel_locations = {
-        "mean": (
-            0,
-            1,
-        ),
-        "std": (
-            0,
-            2,
-        ),
-        "skewness": (
-            1,
-            0,
-        ),
-        "kurtosis": (
-            1,
-            1,
-        ),
+        "mean": (0, 1),
+        "std": (0, 2),
+        "skewness": (1, 0),
+        "kurtosis": (1, 1),
     }
-
     panel_labels = {
         "mean": "(b)",
         "std": "(c)",
@@ -2239,61 +2284,45 @@ def create_combined_figure(
     }
 
     for statistic_name in STATISTICS:
-
-        row, column = panel_locations[
-            statistic_name
-        ]
-
+        row, column = panel_locations[statistic_name]
         plot_moment_panel(
-            ax=axes[
-                row,
-                column,
-            ],
+            ax=axes[row, column],
             statistic_name=statistic_name,
-            result=moments_results[
-                statistic_name
-            ],
+            result=moments_results[statistic_name],
             reference_label=reference_label,
         )
+        add_panel_label(axes[row, column], panel_labels[statistic_name])
 
-        add_panel_label(
-            axes[
-                row,
-                column,
-            ],
-            panel_labels[
-                statistic_name
-            ],
+    if PANEL_F_TEST == "ks_test":
+        plot_distribution_fidelity_panel(
+            ax=axes[1, 2],
+            raw_model_values=raw_model_values,
+            bias_corrected_model_values=bias_corrected_model_values,
+            reference_values=reference_values,
+            reference_label=reference_label,
+            raw_ks=raw_fidelity_ks,
+            bc_ks=bc_fidelity_ks,
+        )
+    else:
+        plot_stability_panel(
+            ax=axes[1, 2],
+            bc_early_values=bc_early_values,
+            bc_late_values=bc_late_values,
+            raw_stability_ks=raw_stability_ks,
+            bc_stability_ks=bc_stability_ks,
         )
 
-    # (f) Bias-corrected lead-time distributions, with raw and BC KS values.
-    plot_stability_panel(
-        ax=axes[1, 2],
-        bc_early_values=bc_early_values,
-        bc_late_values=bc_late_values,
-        raw_stability_ks=raw_stability_ks,
-        bc_stability_ks=bc_stability_ks,
-    )
-
-    add_panel_label(
-        axes[1, 2],
-        "(f)",
-    )
+    add_panel_label(axes[1, 2], "(f)")
 
     fig.legend(
-        handles=make_shared_legend_handles(
-            reference_label
-        ),
+        handles=make_shared_legend_handles(reference_label),
         loc="upper center",
-        bbox_to_anchor=(
-            0.5,
-            0.96,
-        ),
-        ncol=4,
+        bbox_to_anchor=(0.5, 0.96),
+        ncol=5,
         frameon=False,
         fontsize=LEGEND_FONTSIZE,
         handlelength=2.0,
-        columnspacing=1.2,
+        columnspacing=1.8,
     )
 
     fig.subplots_adjust(
@@ -2304,7 +2333,6 @@ def create_combined_figure(
         wspace=0.32,
         hspace=0.38,
     )
-
     return fig
 
 
@@ -2389,6 +2417,33 @@ def print_moments_results(
     )
 
 
+def print_distribution_ks_results(
+    raw_model_values: np.ndarray,
+    bias_corrected_model_values: np.ndarray,
+    reference_values: np.ndarray,
+    reference_label: str,
+    raw_ks: dict[str, object],
+    bc_ks: dict[str, object],
+) -> None:
+    """Print two-sided model-versus-reference KS-test results."""
+
+    print()
+    print(f"{MONTH_LABELS[selected_month]} distribution fidelity KS test")
+    print("-" * 55)
+    print(
+        f"Samples: raw={raw_model_values.size}, "
+        f"BC={bias_corrected_model_values.size}, "
+        f"{reference_label}={reference_values.size}"
+    )
+    print(f"Raw vs {reference_label}: D={raw_ks['statistic']:.3f}, p={raw_ks['p_value']:.4g}")
+
+    if BIAS_CORRECTION_METHOD != "raw":
+        print(
+            f"BC vs {reference_label}:  "
+            f"D={bc_ks['statistic']:.3f}, p={bc_ks['p_value']:.4g}"
+        )
+
+
 def print_stability_results(
     raw_early_values: np.ndarray,
     raw_late_values: np.ndarray,
@@ -2423,6 +2478,7 @@ def print_stability_results(
     )
 
 
+
 # =============================================================================
 # Main
 # =============================================================================
@@ -2431,115 +2487,38 @@ if __name__ == "__main__":
 
     validate_user_settings()
 
-    (
-        raw_model_filename,
-        bc_model_filename,
-    ) = resolve_model_input_filenames()
+    raw_model_filename, bc_model_filename = resolve_model_input_filenames()
+    reference_filename, reference_variable, reference_label = get_reference_configuration()
+    output_filename = build_output_filename()
 
-    (
-        reference_filename,
-        reference_variable,
-        reference_label,
-    ) = get_reference_configuration()
-
-    output_filename = (
-        build_output_filename()
-    )
-
-    print(
-        "Selected month"
-    )
-    print(
-        "--------------"
-    )
-    print(
-        MONTH_LABELS[
-            selected_month
-        ]
-    )
+    print("Selected month")
+    print("--------------")
+    print(MONTH_LABELS[selected_month])
 
     print()
-    print(
-        "Input files"
-    )
-    print(
-        "-----------"
-    )
-
-    print(
-        f"Raw S2S model:          "
-        f"{raw_model_filename}"
-    )
-
-    print(
-        f"Selected S2S ({BIAS_CORRECTION_METHOD}): "
-        f"{bc_model_filename}"
-    )
-
-    print(
-        f"{reference_label}:".ljust(
-            24
-        ),
-        reference_filename,
-    )
+    print("Panel (f)")
+    print("---------")
+    print(PANEL_F_TEST)
 
     print()
-    print(
-        f"Reference dataset: "
-        f"{reference_label}"
-    )
-
-    (
-        raw_all_variable,
-        raw_early_variable,
-        raw_late_variable,
-    ) = get_stability_variable_names()
-
-    (
-        bc_all_variable,
-        bc_early_variable,
-        bc_late_variable,
-    ) = get_stability_variable_names()
+    print("Input files")
+    print("-----------")
+    print(f"Raw S2S model:          {raw_model_filename}")
+    print(f"Selected S2S ({BIAS_CORRECTION_METHOD}): {bc_model_filename}")
+    print(f"{reference_label}:".ljust(24), reference_filename)
 
     print()
-    print(
-        "Raw variables"
-    )
-    print(
-        "-------------"
-    )
-    print(
-        f"All leads:   "
-        f"{raw_all_variable}"
-    )
-    print(
-        f"Early leads: "
-        f"{raw_early_variable}"
-    )
-    print(
-        f"Late leads:  "
-        f"{raw_late_variable}"
-    )
+    print(f"Reference dataset: {reference_label}")
+
+    all_variable, early_variable, late_variable = get_stability_variable_names()
 
     print()
-    print(
-        "Selected-model variables"
-    )
-    print(
-        "------------------------"
-    )
-    print(
-        f"All leads:   "
-        f"{bc_all_variable}"
-    )
-    print(
-        f"Early leads: "
-        f"{bc_early_variable}"
-    )
-    print(
-        f"Late leads:  "
-        f"{bc_late_variable}"
-    )
+    print("Model variables")
+    print("---------------")
+    print(f"All leads:   {all_variable}")
+    if PANEL_F_TEST == "stability_test":
+        print(f"Early leads: {early_variable}")
+        print(f"Late leads:  {late_variable}")
 
     (
         independence_values,
@@ -2558,18 +2537,6 @@ if __name__ == "__main__":
         reference_label=reference_label,
     )
 
-    validate_model_partition(
-        model_all_values=raw_all_values,
-        model_early_values=raw_early_values,
-        model_late_values=raw_late_values,
-    )
-
-    validate_model_partition(
-        model_all_values=bc_all_values,
-        model_early_values=bc_early_values,
-        model_late_values=bc_late_values,
-    )
-
     validate_moments_samples(
         raw_model_values=raw_all_values,
         bias_corrected_model_values=bc_all_values,
@@ -2577,10 +2544,11 @@ if __name__ == "__main__":
         reference_label=reference_label,
     )
 
-    rng = np.random.default_rng(
-        random_seed
-    )
+    if PANEL_F_TEST == "stability_test":
+        validate_model_partition(raw_all_values, raw_early_values, raw_late_values)
+        validate_model_partition(bc_all_values, bc_early_values, bc_late_values)
 
+    rng = np.random.default_rng(random_seed)
     moments_results = perform_all_moments_tests(
         raw_model_values=raw_all_values,
         bias_corrected_model_values=bc_all_values,
@@ -2588,59 +2556,76 @@ if __name__ == "__main__":
         rng=rng,
     )
 
-    raw_stability_ks = perform_stability_ks_test(
-        early_values=raw_early_values,
-        late_values=raw_late_values,
-    )
+    raw_fidelity_ks = None
+    bc_fidelity_ks = None
+    raw_stability_ks = None
+    bc_stability_ks = None
 
-    bc_stability_ks = perform_stability_ks_test(
-        early_values=bc_early_values,
-        late_values=bc_late_values,
-    )
+    if PANEL_F_TEST == "ks_test":
+        raw_fidelity_ks = perform_fidelity_ks_test(
+            model_values=raw_all_values,
+            reference_values=reference_values,
+        )
+        bc_fidelity_ks = perform_fidelity_ks_test(
+            model_values=bc_all_values,
+            reference_values=reference_values,
+        )
+    else:
+        raw_stability_ks = perform_stability_ks_test(
+            early_values=raw_early_values,
+            late_values=raw_late_values,
+        )
+        bc_stability_ks = perform_stability_ks_test(
+            early_values=bc_early_values,
+            late_values=bc_late_values,
+        )
 
     print()
     print(
-        f"Independence pairs: "
-        f"{independence_values.size} "
-        f"finite pooled correlations "
+        f"Independence pairs: {independence_values.size} finite pooled correlations "
         f"(raw all-lead sample)"
     )
 
-    print_moments_results(
-        results=moments_results,
-        reference_label=reference_label,
-    )
+    print_moments_results(results=moments_results, reference_label=reference_label)
 
-    print_stability_results(
-        raw_early_values=raw_early_values,
-        raw_late_values=raw_late_values,
-        bc_early_values=bc_early_values,
-        bc_late_values=bc_late_values,
-        raw_stability_ks=raw_stability_ks,
-        bc_stability_ks=bc_stability_ks,
-    )
+    if PANEL_F_TEST == "ks_test":
+        print_distribution_ks_results(
+            raw_model_values=raw_all_values,
+            bias_corrected_model_values=bc_all_values,
+            reference_values=reference_values,
+            reference_label=reference_label,
+            raw_ks=raw_fidelity_ks,
+            bc_ks=bc_fidelity_ks,
+        )
+    else:
+        print_stability_results(
+            raw_early_values=raw_early_values,
+            raw_late_values=raw_late_values,
+            bc_early_values=bc_early_values,
+            bc_late_values=bc_late_values,
+            raw_stability_ks=raw_stability_ks,
+            bc_stability_ks=bc_stability_ks,
+        )
 
     figure = create_combined_figure(
         independence_values=independence_values,
         moments_results=moments_results,
+        raw_model_values=raw_all_values,
+        bias_corrected_model_values=bc_all_values,
+        reference_values=reference_values,
+        reference_label=reference_label,
+        raw_fidelity_ks=raw_fidelity_ks,
+        bc_fidelity_ks=bc_fidelity_ks,
         bc_early_values=bc_early_values,
         bc_late_values=bc_late_values,
-        reference_label=reference_label,
         raw_stability_ks=raw_stability_ks,
         bc_stability_ks=bc_stability_ks,
     )
 
     if write2file:
-
-        output_directory = os.path.dirname(
-            output_filename
-        )
-
+        output_directory = os.path.dirname(output_filename)
         if output_directory:
-            os.makedirs(
-                output_directory,
-                exist_ok=True,
-            )
+            os.makedirs(output_directory, exist_ok=True)
 
         figure.savefig(
             output_filename,
@@ -2648,16 +2633,10 @@ if __name__ == "__main__":
             bbox_inches="tight",
             facecolor="white",
         )
-
         print()
-        print(
-            f"Wrote figure: "
-            f"{output_filename}"
-        )
+        print(f"Wrote figure: {output_filename}")
 
     if show_figure:
         plt.show()
     else:
-        plt.close(
-            figure
-        )
+        plt.close(figure)
