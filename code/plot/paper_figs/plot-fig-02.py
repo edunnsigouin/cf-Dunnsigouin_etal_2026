@@ -39,7 +39,7 @@ number_of_lead_bins = 2
 model_sampling_group = "full"
 
 # Model-data source / bias-correction method:
-# "raw", "mm", "q", "doy", "ld", or "q_doy".
+# "raw", "mm_1step", "mm_2step", "q", "doy", "ld", or "q_doy".
 MODEL_DATA_METHOD = "raw"
 
 # Reference dataset used both in the figure and for bias correction.
@@ -133,7 +133,7 @@ def validate_settings():
             f"Valid options are {sorted(valid_groups)}."
         )
 
-    valid_methods = {"raw", "mm", "q", "doy", "ld", "q_doy"}
+    valid_methods = {"raw", "mm_1step", "mm_2step", "q", "doy", "ld", "q_doy"}
     if MODEL_DATA_METHOD not in valid_methods:
         raise ValueError(
             f"MODEL_DATA_METHOD must be one of {sorted(valid_methods)}. "
@@ -230,21 +230,24 @@ def get_file_id(catchment_name):
 
 
 def make_model_filename():
-    """Create the raw or bias-corrected compact S2S sample filename."""
-    filename = os.path.join(
-        config.dirs["s2s_processed"],
-        (
-            f"test-monthly_max_samples_{MODEL_VARIABLE}_{x_days}dayacc_"
-            f"{get_file_id(catchment)}_{lead_split_filename_label()}_"
-            f"{forecast_date_range[0]}_{forecast_date_range[1]}.nc"
-        ),
+    """Create the compact S2S sample filename written by script 2."""
+    stem = (
+        f"monthly_max_samples_{MODEL_VARIABLE}_{x_days}dayacc_"
+        f"{get_file_id(catchment)}_{forecast_date_range[0]}_{forecast_date_range[1]}"
     )
 
     if MODEL_DATA_METHOD == "raw":
-        return filename
+        correction_label = "raw"
+    else:
+        correction_label = (
+            f"bc_{MODEL_DATA_METHOD}_{REFERENCE_DATASET}_"
+            f"{observation_years[0]}-{observation_years[-1]}"
+        )
 
-    stem, extension = os.path.splitext(filename)
-    return f"{stem}_bc_{MODEL_DATA_METHOD}_{REFERENCE_DATASET}{extension}"
+    return os.path.join(
+        config.dirs["s2s_processed"],
+        f"{stem}_{correction_label}.nc",
+    )
 
 
 def make_reference_filename():
@@ -272,7 +275,7 @@ def make_figure_filename():
     if model_sampling_group != "full":
         suffix += f"-{model_sampling_group}"
 
-    filename = f"fig-02-{catchment}-{suffix}-{REFERENCE_DATASET}-{forecast_date_range[0]}-{forecast_date_range[-1]}.png"
+    filename = f"fig-02-{catchment}-{forecast_date_range[0]}-{forecast_date_range[-1]}-{suffix}-{REFERENCE_DATASET}-{observation_years[0]}-{observation_years[-1]}.png"
 
     return os.path.join(config.dirs["fig"], filename)
 
@@ -391,7 +394,7 @@ def make_legend_handles():
 def apply_axis_formatting(ax):
     """Apply labels, limits, ticks, and simple panel styling."""
     ax.set_ylabel(
-        f"Monthly maximum {x_days}-day precipitation",
+        f"Monthly maximum {x_days}-day precipitation [mm]",
         fontsize=AXIS_LABELSIZE,
     )
     ax.set_xlabel("Month", fontsize=AXIS_LABELSIZE)
