@@ -73,7 +73,7 @@ PLOT_METRIC = "return_period"
 AEP_YEARS = 1
 
 BOOTSTRAP_METHOD = "nonparametric"  # "nonparametric" or "parametric"
-NUMBER_OF_BOOTSTRAPS = 100
+NUMBER_OF_BOOTSTRAPS = 50
 CONFIDENCE_LEVEL = 0.95
 MIN_SUCCESSFUL_BOOTSTRAP_FRACTION = 0.90
 RANDOM_SEED = 42
@@ -100,8 +100,8 @@ PRECIPITATION_YMIN = 0.0
 PRECIPITATION_YMAX = 200.0
 
 SHOW_GRID = True
-WRITE_TO_FILE = False
-SHOW_FIGURE = True
+WRITE_TO_FILE = True
+SHOW_FIGURE = False
 
 # =============================================================================
 # Plot constants

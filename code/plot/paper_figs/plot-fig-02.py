@@ -23,7 +23,7 @@ catchment = "regine_drammen"
 x_days = 2
 
 forecast_date_range = ["2020-01-02", "2023-12-28"]
-observation_years = ["1957", "2022"]
+observation_years = ["1957", "2025"]
 REFERENCE_FILE_YEARS = (1957, 2025)
 STORM_HANS_YEAR = 2023
 STORM_HANS_MONTH = 8
@@ -44,7 +44,7 @@ MODEL_DATA_METHOD = "raw"
 
 # Reference dataset used both in the figure and for bias correction.
 # Options: "era5" or "senorge".
-REFERENCE_DATASET = "era5"
+REFERENCE_DATASET = "senorge"
 
 # ERA5 grid used when REFERENCE_DATASET == "era5".
 era5_grid = "0.5x0.5"
