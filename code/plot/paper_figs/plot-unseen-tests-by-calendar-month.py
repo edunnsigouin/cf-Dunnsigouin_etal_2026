@@ -55,7 +55,7 @@ from Dunnsigouin_etal_2026 import config
 # =============================================================================
 
 # Calendar month to plot: 1=January, ..., 12=December.
-selected_month = 5
+selected_month = 12
 
 # Accumulation period.
 x_days = 2
@@ -65,7 +65,7 @@ catchment = "regine_drammen"
 
 forecast_date_range = ("2020-01-02", "2023-12-28")
 
-reference_years = ("1957", "2022")
+reference_years = ("1957", "2025")
 REFERENCE_FILE_YEARS = ("1957", "2025")
 
 era5_grid = "0.5x0.5"
@@ -107,7 +107,7 @@ REFERENCE_DATASET = "senorge"
 PANEL_F_TEST = "ks_test"
 
 # Exclude the August 2023 Storm Hans reference value before fidelity calculations.
-EXCLUDE_STORM_HANS_FROM_REFERENCE = False
+EXCLUDE_STORM_HANS_FROM_REFERENCE = True
 
 # Independence-test settings.
 # Minimum number of paired initialization values required for one
@@ -134,7 +134,7 @@ figure_width = 13.0
 figure_height = 8.0
 figure_dpi = 300
 
-write2file = False
+write2file = True
 show_figure = True
 
 
@@ -2313,7 +2313,7 @@ def create_combined_figure(
 
     add_panel_label(axes[1, 2], "(f)")
 
-    legend_columns = 4 if PANEL_F_TEST == "stability_test" else 3
+    legend_columns = 4 if PANEL_F_TEST == "stability_test" else 5
     
     fig.legend(
         handles=make_shared_legend_handles(reference_label),

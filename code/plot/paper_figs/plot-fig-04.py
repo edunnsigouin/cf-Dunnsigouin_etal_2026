@@ -73,7 +73,7 @@ PLOT_METRIC = "return_period"
 AEP_YEARS = 1
 
 BOOTSTRAP_METHOD = "nonparametric"  # "nonparametric" or "parametric"
-NUMBER_OF_BOOTSTRAPS = 50
+NUMBER_OF_BOOTSTRAPS = 1000
 CONFIDENCE_LEVEL = 0.95
 MIN_SUCCESSFUL_BOOTSTRAP_FRACTION = 0.90
 RANDOM_SEED = 42
@@ -907,7 +907,7 @@ def plot_top_panel(axis, panel_label, month, result, return_periods, show_legend
 
     format_top_axis(axis)
     axis.set_title(
-        f"{panel_label}) {MONTH_NAMES[month - 1]} {TOP_DISTRIBUTION} fit",
+        f"{panel_label}) {MONTH_NAMES[month - 1]}: {TOP_DISTRIBUTION} fit",
         loc="left",
         fontsize=TITLE_FONTSIZE,
         fontweight="normal",
@@ -1091,14 +1091,14 @@ def plot_metric_panel(axis, panel_label, panel_output, show_legend=False):
 
     #for position, upper, color in pending_limit_markers:
     #    plot_metric_limit_marker(axis, position, upper=upper, color=color)
-    month = panel_output["month"]
-    title = (
-        f"{MONTH_NAMES[month - 1]}: Storm Hans threshold"
-        if panel_output["threshold_type"] == "storm_hans"
-        else f"{MONTH_NAMES[month - 1]}: record excluding Storm Hans"
-    )
+    panel_titles = {
+        "c": "August: Storm Hans threshold",
+        "d": "May: Storm Hans threshold",
+        "e": "August: record threshold excluding Storm Hans",
+        "f": "May: record threshold",
+    }
     axis.set_title(
-        f"{panel_label}) {title}",
+        f"{panel_label}) {panel_titles[panel_label]}",
         loc="left",
         fontsize=TITLE_FONTSIZE,
         fontweight="normal",
