@@ -137,6 +137,10 @@ reference_years = [
     "2025",
 ]
 
+# Exclude August 2023 (Storm Hans) from the reference data used to calculate
+# all bias-correction factors.
+EXCLUDE_STORM_HANS_FROM_REFERENCE = True
+
 era5_grid = "0.5x0.5"
 
 model_forecast_date_range = [
@@ -349,6 +353,14 @@ def validate_user_settings():
         raise ValueError(
             f"reference_dataset must be one of "
             f"{sorted(valid_reference_datasets)}."
+        )
+
+    if not isinstance(
+        EXCLUDE_STORM_HANS_FROM_REFERENCE,
+        bool,
+    ):
+        raise TypeError(
+            "EXCLUDE_STORM_HANS_FROM_REFERENCE must be True or False."
         )
 
     if analysis_x_days < 1:
@@ -832,6 +844,15 @@ def load_reference(
             subset=[
                 MODEL_VARIABLE,
             ],
+        )
+
+    if EXCLUDE_STORM_HANS_FROM_REFERENCE:
+        storm_hans = (
+            (ds.date.dt.year == 2023)
+            & (ds.date.dt.month == 8)
+        )
+        ds = ds.sel(
+            date=~storm_hans
         )
 
     ds = ds.assign_coords(
@@ -1685,6 +1706,9 @@ def build_corrected_dataset(
             "bias_correction_reference_dataset": reference_dataset,
             "bias_correction_reference_year_start": reference_years[0],
             "bias_correction_reference_year_end": reference_years[1],
+            "storm_hans_august_2023_excluded_from_reference": int(
+                EXCLUDE_STORM_HANS_FROM_REFERENCE
+            ),
             "bias_correction_reference_file": str(
                 make_reference_filename()
             ),
@@ -1887,6 +1911,10 @@ if __name__ == "__main__":
     print(
         "Reference dataset:",
         reference_dataset,
+    )
+    print(
+        "Exclude Storm Hans from reference:",
+        EXCLUDE_STORM_HANS_FROM_REFERENCE,
     )
     print(
         "Analysis accumulation:",

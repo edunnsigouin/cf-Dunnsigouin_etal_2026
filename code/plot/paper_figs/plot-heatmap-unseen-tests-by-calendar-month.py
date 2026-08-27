@@ -60,7 +60,7 @@ x_days = 2
 catchment = "regine_drammen"
 forecast_date_range = ("2020-01-02", "2023-12-28")
 
-reference_years = ("1957", "2022")
+reference_years = ("1957", "2025")
 REFERENCE_FILE_YEARS = ("1957", "2025")
 era5_grid = "0.5x0.5"
 
@@ -76,7 +76,7 @@ REFERENCE_DATASET = "senorge"
 # Options:
 #     "ks_test"        : complete model vs reference KS test
 #     "stability_test" : Early vs Late lead-location KS test
-PANEL_F_TEST = "stability_test"
+PANEL_F_TEST = "ks_test"
 
 # Seven heatmap rows = raw + these six corrected methods.
 BIAS_CORRECTION_METHODS = [
@@ -89,9 +89,9 @@ BIAS_CORRECTION_METHODS = [
 ]
 
 # If True, apply each correction only to months that fail at least one raw test.
-BIAS_CORRECT_ONLY_FAILED_MONTHS = True
+BIAS_CORRECT_ONLY_FAILED_MONTHS = False
 
-EXCLUDE_STORM_HANS_FROM_REFERENCE = False
+EXCLUDE_STORM_HANS_FROM_REFERENCE = True
 
 # Independence passes when abs(median pairwise Spearman correlation) is below
 # this threshold. The six-panel figure itself shows the correlation distribution;
@@ -118,7 +118,7 @@ bias_corrected_model_filename_overrides = {
 }
 reference_filename_override = None
 
-write2file = True
+write2file = False
 show_figure = True
 
 

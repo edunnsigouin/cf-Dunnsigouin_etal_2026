@@ -26,15 +26,19 @@ from Dunnsigouin_etal_2026 import config
 variable = "tp24"
 catchment = "regine_drammen"
 forecast_date_range = ["2020-01-02", "2023-12-28"]
-observation_years = ["1957", "2022"]
+observation_years = ["1957", "2025"]
 accumulation_days = 2
 number_of_lead_bins = 2
 
 # Options: "raw", "q", "doy", "ld", "q_doy", "mm_1step", "mm_2step"
-bias_correction_method = "mm_1step"
+bias_correction_method = "q_doy"
 
 # Options: "senorge", "era5"
 bias_correction_reference = "senorge"
+
+# Exclude Storm Hans (August 2023) from the MM reference-data monthly means.
+# This option applies only to mm_1step and mm_2step.
+EXCLUDE_STORM_HANS_FROM_REFERENCE = True
 
 input_filename_override = None
 output_filename_override = None
@@ -479,19 +483,33 @@ def load_reference_dataset():
 
 
 def get_reference_monthly_mean(reference_ds, reference_variable):
-    """Calculate one reference mean for every calendar month."""
+    """Calculate one reference mean for every calendar month used by MM correction."""
     values = reference_ds[reference_variable]
     if not {"year", "month"}.issubset(values.dims):
         raise ValueError(
             f"Reference variable '{reference_variable}' must contain dimensions 'year' and 'month'."
         )
 
-    monthly_mean = values.mean(dim="year", skipna=True).sel(month=MONTHS)
+    if EXCLUDE_STORM_HANS_FROM_REFERENCE:
+        has_2023 = bool((values["year"] == 2023).any().values)
+        has_august = bool((values["month"] == 8).any().values)
+        if not (has_2023 and has_august):
+            raise ValueError(
+                "Cannot exclude Storm Hans from the MM reference data because August 2023 "
+                "is not present in the reference dataset."
+            )
+        storm_hans = (values["year"] == 2023) & (values["month"] == 8)
+        values_for_mean = values.where(~storm_hans)
+    else:
+        values_for_mean = values
+
+    monthly_mean = values_for_mean.mean(dim="year", skipna=True).sel(month=MONTHS)
     monthly_mean.name = "reference_monthly_mean"
     monthly_mean.attrs.update(
         {
             "reference_year_start": int(values["year"].min().values),
             "reference_year_end": int(values["year"].max().values),
+            "storm_hans_august_2023_excluded": int(EXCLUDE_STORM_HANS_FROM_REFERENCE),
         }
     )
     return monthly_mean
@@ -677,6 +695,9 @@ def apply_mm_correction(model_ds, reference_monthly_mean, split_variables):
             "bias_correction_reference_dataset": bias_correction_reference,
             "bias_correction_reference_year_start": reference_ratio.attrs["reference_year_start"],
             "bias_correction_reference_year_end": reference_ratio.attrs["reference_year_end"],
+            "storm_hans_august_2023_excluded_from_reference": int(
+                EXCLUDE_STORM_HANS_FROM_REFERENCE
+            ),
         }
     )
     return output
@@ -768,6 +789,7 @@ def main():
     if uses_mm_correction():
         reference_ds, reference_variable, filename_reference = load_reference_dataset()
         print("Reading reference:", filename_reference)
+        print("Exclude Storm Hans from MM reference:", EXCLUDE_STORM_HANS_FROM_REFERENCE)
         try:
             reference_monthly_mean = get_reference_monthly_mean(
                 reference_ds, reference_variable
