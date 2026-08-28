@@ -34,7 +34,7 @@ forecast_date_range = ["2020-01-02", "2023-12-28"]
 input_filename_override = None
 
 # First YYYYMM included when defining and applying the balanced sampling.
-BALANCE_START_MONTH = 200101
+BALANCE_START_MONTH = 200402
 
 # Optional final YYYYMM. None uses the last available sample month.
 BALANCE_END_MONTH = None
