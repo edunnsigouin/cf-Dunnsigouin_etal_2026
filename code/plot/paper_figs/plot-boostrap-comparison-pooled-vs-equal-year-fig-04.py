@@ -15,20 +15,24 @@ The two procedures are:
    the same number of values as the original pooled sample. This is the standard
    nonparametric bootstrap used for the model in the original script.
 
-2. Year-balanced repeated sampling
-   The same calendar month is kept separate by YYYYMM. The smallest finite sample
-   count among those YYYYMM groups defines a common target count. For every
-   replicate, exactly that many values are sampled without replacement from each
-   YYYYMM group, the equally represented years are pooled, and an extreme-value
-   distribution is fitted. Repeating this procedure quantifies sensitivity to
-   unequal realization counts across years. Strictly speaking, this is repeated
-   balanced subsampling rather than a classical bootstrap because sampling within
-   each year is without replacement.
+2. Equal year-weighted bootstrap
+   EQUAL_BOOTSTRAP_START_YEAR and EQUAL_BOOTSTRAP_END_YEAR define which years may contribute. For
+   the calendar month being analysed, values are kept separate by year. Each
+   bootstrap replicate draws EQUAL_YEAR_SAMPLES_PER_YEAR values with replacement
+   from every selected year, then pools those equally sized yearly samples before
+   fitting the extreme-value distribution. Thus every year has equal weight even
+   when the original number of model realizations differs between years.
 
-For the upper panels, the pooled method is fitted once to the complete pooled
-sample. The balanced method needs a representative central fit because it has no
-single natural original sample, so one reproducible balanced draw is used for its
-central curve. Confidence bands for both methods come from their repeated fits.
+   If EQUAL_BOOTSTRAP_START_YEAR and EQUAL_BOOTSTRAP_END_YEAR are both None, all available years are
+   used. Either bound may also be None independently to leave that side unrestricted.
+
+   POOLED_BOOTSTRAP_USE_EQUAL_BOOTSTRAP_YEARS controls whether the pooled bootstrap uses the same year
+   range. If False, the pooled bootstrap uses all available years in the model file.
+   If True, it uses the year limits above.
+
+For the upper panels, the pooled method is fitted once to its pooled sample. The
+equal year-weighted method uses one reproducible bootstrap draw as its representative
+central sample. Confidence bands for both methods come from their repeated fits.
 
 The observational dataset is not bootstrapped or fitted. It is read only to retain
 Storm Hans and calendar-record precipitation thresholds used by the lower panels
@@ -56,51 +60,62 @@ from Dunnsigouin_etal_2026 import config
 # User settings
 # =============================================================================
 
-REFERENCE_DATASET = "senorge"  # "senorge" or "era5"; thresholds only
+# Data
 CATCHMENT = "regine_drammen"
 X_DAYS = 2
-
-OBSERVATION_YEARS = [1957, 2025]
-REFERENCE_FILE_YEARS = [1957, 2025]
-FORECAST_DATE_RANGE = ["2020-01-02", "2023-12-28"]
-
 MODEL_DATA_METHOD = "raw"  # "raw", "mm_1step", "mm_2step", "q", "ld", "doy", "q_doy"
 MODEL_SAMPLING_GROUP = "full"  # "full", "split1", "split2", ...
 MODEL_VARIABLE = "tp24"
+FORECAST_DATE_RANGE = ["2020-01-02", "2023-12-28"]
 
+# Observations are used only for Storm Hans and record thresholds.
+REFERENCE_DATASET = "senorge"  # "senorge" or "era5"
+OBSERVATION_YEARS = [1957, 2025]
+REFERENCE_FILE_YEARS = [1957, 2025]
+
+# Sampling comparison
+# Equal year-weighted bootstrap year limits.
+# None leaves that side unrestricted; None/None uses the entire dataset.
+EQUAL_BOOTSTRAP_START_YEAR = None
+EQUAL_BOOTSTRAP_END_YEAR = None
+
+# Number drawn WITH replacement from each selected year in every bootstrap replicate.
+EQUAL_YEAR_SAMPLES_PER_YEAR = 400
+
+# False: pooled bootstrap uses every available year in the model file.
+# True: pooled bootstrap uses the same year limits as the equal year-weighted method.
+POOLED_BOOTSTRAP_USE_EQUAL_BOOTSTRAP_YEARS = False
+
+# Number of bootstrap replicates fitted for each distribution and sampling method.
+NUMBER_OF_BOOTSTRAPS = 100
+CONFIDENCE_LEVEL = 0.95
+RANDOM_SEED = 42
+
+# Lead-time sample
 FIRST_INPUT_LEAD = 16
 LAST_INPUT_LEAD = 46
 NUMBER_OF_LEAD_BINS = 2
 
-# Used for panels a-b. Options: "GEV", "Gumbel", "GenEx".
-TOP_DISTRIBUTION = "GEV"
-
-# Used by all panels. Options: "return_period" or "aep".
-PLOT_METRIC = "return_period"
+# Plot analysis
+TOP_DISTRIBUTION = "GEV"  # "GEV", "Gumbel", or "GenEx"
+PLOT_METRIC = "return_period"  # "return_period" or "aep"
 AEP_YEARS = 1
-
-NUMBER_OF_BOOTSTRAPS = 10
-CONFIDENCE_LEVEL = 0.95
-MIN_SUCCESSFUL_BOOTSTRAP_FRACTION = 0.90
-RANDOM_SEED = 42
-
-REFERENCE_FILENAME_OVERRIDE = None
-MODEL_FILENAME_OVERRIDE = None
-
-FIGURE_DPI = 300
-FIG_WIDTH_IN = 12
-FIG_HEIGHT_IN = 14
-
 RETURN_PERIOD_MIN = 1.0
 RETURN_PERIOD_MAX = 1.0e7
 NUMBER_OF_RETURN_PERIODS = 500
-
 PRECIPITATION_YMIN = 0.0
 PRECIPITATION_YMAX = 200.0
 
+# Output
+FIGURE_DPI = 300
+FIG_WIDTH_IN = 12
+FIG_HEIGHT_IN = 14
 SHOW_GRID = True
-WRITE_TO_FILE = False
-SHOW_FIGURE = False
+WRITE_TO_FILE = True
+SHOW_FIGURE = True
+
+# Internal fitting tolerance: require at least this fraction of repeated fits to succeed.
+MIN_SUCCESSFUL_BOOTSTRAP_FRACTION = 0.90
 
 
 # =============================================================================
@@ -127,12 +142,12 @@ METHOD_COLORS = {"GEV": "tab:pink", "Gumbel": "tab:green", "GenEx": "tab:purple"
 METHOD_OFFSETS = {"GEV": -0.18, "Gumbel": 0.0, "GenEx": 0.18}
 
 POOLED_GROUP = "pooled"
-BALANCED_GROUP = "balanced"
+BALANCED_GROUP = "equal_year"
 RESAMPLING_GROUPS = [POOLED_GROUP, BALANCED_GROUP]
 GROUP_COLORS = {POOLED_GROUP: "tab:blue", BALANCED_GROUP: "tab:orange"}
 GROUP_LABELS = {
     POOLED_GROUP: "Pooled bootstrap",
-    BALANCED_GROUP: "Year-balanced sampling",
+    BALANCED_GROUP: "Equal year-weighted bootstrap",
 }
 
 STORM_HANS_COLOR = "grey"
@@ -173,6 +188,20 @@ def validate_settings():
         raise ValueError("AEP_YEARS must be at least 1.")
     if OBSERVATION_YEARS[0] > OBSERVATION_YEARS[1]:
         raise ValueError("OBSERVATION_YEARS must be increasing.")
+    if EQUAL_BOOTSTRAP_START_YEAR is not None and EQUAL_BOOTSTRAP_START_YEAR < 1:
+        raise ValueError("EQUAL_BOOTSTRAP_START_YEAR must be None or a positive year.")
+    if EQUAL_BOOTSTRAP_END_YEAR is not None and EQUAL_BOOTSTRAP_END_YEAR < 1:
+        raise ValueError("EQUAL_BOOTSTRAP_END_YEAR must be None or a positive year.")
+    if (
+        EQUAL_BOOTSTRAP_START_YEAR is not None
+        and EQUAL_BOOTSTRAP_END_YEAR is not None
+        and EQUAL_BOOTSTRAP_END_YEAR < EQUAL_BOOTSTRAP_START_YEAR
+    ):
+        raise ValueError("EQUAL_BOOTSTRAP_END_YEAR must be >= EQUAL_BOOTSTRAP_START_YEAR.")
+    if EQUAL_YEAR_SAMPLES_PER_YEAR < 1:
+        raise ValueError("EQUAL_YEAR_SAMPLES_PER_YEAR must be at least 1.")
+    if not isinstance(POOLED_BOOTSTRAP_USE_EQUAL_BOOTSTRAP_YEARS, bool):
+        raise ValueError("POOLED_BOOTSTRAP_USE_EQUAL_BOOTSTRAP_YEARS must be True or False.")
     if RETURN_PERIOD_MIN < 1:
         raise ValueError("RETURN_PERIOD_MIN must be at least 1.")
     if RETURN_PERIOD_MAX <= RETURN_PERIOD_MIN:
@@ -249,9 +278,6 @@ def get_model_variable():
 
 def make_reference_filename():
     """Construct the observational filename used only for event thresholds."""
-    if REFERENCE_FILENAME_OVERRIDE is not None:
-        return Path(REFERENCE_FILENAME_OVERRIDE)
-
     first_year, last_year = REFERENCE_FILE_YEARS
     if REFERENCE_DATASET == "senorge":
         filename = (
@@ -269,9 +295,6 @@ def make_reference_filename():
 
 def make_model_filename():
     """Construct the compact model filename."""
-    if MODEL_FILENAME_OVERRIDE is not None:
-        return Path(MODEL_FILENAME_OVERRIDE)
-
     stem = (
         f"monthly_max_samples_{MODEL_VARIABLE}_{X_DAYS}dayacc_"
         f"{get_model_file_id(CATCHMENT)}_{FORECAST_DATE_RANGE[0]}_{FORECAST_DATE_RANGE[1]}"
@@ -288,7 +311,7 @@ def make_figure_filename():
     """Construct the six-panel output figure filename."""
     model_label = "model-raw" if MODEL_DATA_METHOD == "raw" else f"model-bc-{MODEL_DATA_METHOD}"
     return Path(config.dirs["fig"]) / (
-        f"bootstrap-comparison-{PLOT_METRIC}-{TOP_DISTRIBUTION}-{model_label}-"
+        f"bootstrap-comparison-pooled-vs-equal-year-{PLOT_METRIC}-{model_label}-"
         f"{FORECAST_DATE_RANGE[0]}-{FORECAST_DATE_RANGE[-1]}.png"
     )
 
@@ -341,7 +364,7 @@ def read_reference_thresholds(month):
 
 
 def read_model_month_by_year(month):
-    """Read one calendar month and retain separate finite samples for each YYYYMM."""
+    """Read pooled values and equal-year groups for one calendar month."""
     filename = make_model_filename()
     variable = get_model_variable()
 
@@ -358,7 +381,8 @@ def read_model_month_by_year(month):
             raise KeyError(f"Variable 'sample_month' was not found in {filename}.")
         if set(ds[variable].dims) != {"number", "i_date"}:
             raise ValueError(
-                f"'{variable}' must have dimensions ('number', 'i_date'); found {ds[variable].dims}."
+                f"'{variable}' must have dimensions ('number', 'i_date'); "
+                f"found {ds[variable].dims}."
             )
         if ds["sample_month"].dims != ("i_date",):
             raise ValueError("'sample_month' must have dimension ('i_date',).")
@@ -366,40 +390,57 @@ def read_model_month_by_year(month):
         sample_month = np.asarray(ds["sample_month"].values, dtype="int64")
         values = np.asarray(ds[variable].transpose("number", "i_date").values, dtype=float)
 
-    selected_months = np.unique(sample_month[sample_month % 100 == month])
-    if selected_months.size == 0:
-        raise ValueError(f"No model samples were found for calendar month {month}.")
+    calendar_month_mask = sample_month % 100 == month
+    sample_year = sample_month // 100
+
+    equal_year_mask = calendar_month_mask.copy()
+    if EQUAL_BOOTSTRAP_START_YEAR is not None:
+        equal_year_mask &= sample_year >= EQUAL_BOOTSTRAP_START_YEAR
+    if EQUAL_BOOTSTRAP_END_YEAR is not None:
+        equal_year_mask &= sample_year <= EQUAL_BOOTSTRAP_END_YEAR
+
+    equal_year_months = np.unique(sample_month[equal_year_mask])
+    if equal_year_months.size == 0:
+        start_label = "start of dataset" if EQUAL_BOOTSTRAP_START_YEAR is None else EQUAL_BOOTSTRAP_START_YEAR
+        end_label = "end of dataset" if EQUAL_BOOTSTRAP_END_YEAR is None else EQUAL_BOOTSTRAP_END_YEAR
+        raise ValueError(
+            f"No {MONTH_NAMES[month - 1]} model samples were found from "
+            f"{start_label} through {end_label}."
+        )
 
     values_by_yyyymm = {}
-    for yyyymm in selected_months:
+    for yyyymm in equal_year_months:
         month_values = values[:, sample_month == yyyymm].ravel()
         month_values = month_values[np.isfinite(month_values)]
         if month_values.size == 0:
             raise ValueError(f"No finite model values were found for {int(yyyymm)}.")
         values_by_yyyymm[int(yyyymm)] = month_values
 
-    pooled_values = np.concatenate(list(values_by_yyyymm.values()))
+    pooled_mask = equal_year_mask if POOLED_BOOTSTRAP_USE_EQUAL_BOOTSTRAP_YEARS else calendar_month_mask
+    pooled_values = values[:, pooled_mask].ravel()
+    pooled_values = pooled_values[np.isfinite(pooled_values)]
     if pooled_values.size < 10:
-        raise ValueError(f"Fewer than 10 finite model values were found for month {month}.")
+        raise ValueError(f"Fewer than 10 finite pooled model values were found for month {month}.")
 
-    target_count = min(values.size for values in values_by_yyyymm.values())
-    if target_count < 1:
-        raise ValueError(f"The year-balanced target count is zero for month {month}.")
-
+    pooled_months = np.unique(sample_month[pooled_mask])
     return {
         "values_by_yyyymm": values_by_yyyymm,
         "pooled_values": pooled_values,
-        "target_count": target_count,
+        "equal_year_start_year": int(equal_year_months.min() // 100),
+        "equal_year_end_year": int(equal_year_months.max() // 100),
+        "pooled_start_year": int(pooled_months.min() // 100),
+        "pooled_end_year": int(pooled_months.max() // 100),
     }
 
 
-def make_balanced_sample(values_by_yyyymm, target_count, rng):
-    """Sample the same number of realizations without replacement from each YYYYMM."""
+def make_equal_year_sample(values_by_yyyymm, rng):
+    """Draw the same number with replacement from every selected year."""
     selected = []
     for yyyymm in sorted(values_by_yyyymm):
         values = values_by_yyyymm[yyyymm]
-        indices = rng.choice(values.size, size=target_count, replace=False)
-        selected.append(values[indices])
+        selected.append(
+            rng.choice(values, size=EQUAL_YEAR_SAMPLES_PER_YEAR, replace=True)
+        )
     return np.concatenate(selected)
 
 
@@ -500,7 +541,7 @@ def horizon_aep(probability):
 
 
 # =============================================================================
-# Bootstrap and repeated balanced sampling
+# Bootstrap procedures
 # =============================================================================
 
 class ProgressTracker:
@@ -563,19 +604,17 @@ def fit_repeated_samples(sample_factory, central_values, method, random_seed, pr
 
 
 def build_month_analysis(month, month_index, progress=None):
-    """Create pooled-bootstrap and year-balanced fits for one calendar month."""
+    """Create pooled and equal year-weighted bootstrap fits for one calendar month."""
     thresholds = read_reference_thresholds(month)
     model = read_model_month_by_year(month)
     pooled_values = model["pooled_values"]
     values_by_yyyymm = model["values_by_yyyymm"]
-    target_count = model["target_count"]
-
     central_rng = np.random.default_rng(RANDOM_SEED + 100_000 + month_index)
-    balanced_values = make_balanced_sample(values_by_yyyymm, target_count, central_rng)
+    equal_year_values = make_equal_year_sample(values_by_yyyymm, central_rng)
 
     samples = {
         POOLED_GROUP: pooled_values,
-        BALANCED_GROUP: balanced_values,
+        BALANCED_GROUP: equal_year_values,
     }
     repeated_fits = {}
 
@@ -588,8 +627,8 @@ def build_month_analysis(month, month_index, progress=None):
                     values, size=values.size, replace=True
                 )
             else:
-                sample_factory = lambda rng: make_balanced_sample(
-                    values_by_yyyymm, target_count, rng
+                sample_factory = lambda rng: make_equal_year_sample(
+                    values_by_yyyymm, rng
                 )
 
             repeated_fits[(group, method)] = fit_repeated_samples(
@@ -628,7 +667,7 @@ def evaluate_return_levels(values, fit, return_periods, method):
 
 
 def analyse_top_month(month_analysis, return_periods):
-    """Prepare return-level analyses for the two model resampling procedures."""
+    """Prepare return-level analyses for the two model bootstrap procedures."""
     analyses = {}
     for group in RESAMPLING_GROUPS:
         analyses[group] = evaluate_return_levels(
@@ -773,7 +812,7 @@ def format_top_axis(axis):
 
 
 def plot_top_panel(axis, panel_label, month, result, return_periods, show_legend=False):
-    """Plot return-level curves for pooled and year-balanced model resampling."""
+    """Plot return-level curves for pooled and equal year-weighted bootstraps."""
     x_values = top_x_values(return_periods)
 
     for group in RESAMPLING_GROUPS:
@@ -980,7 +1019,7 @@ def plot_metric_panel(axis, panel_label, panel_output, show_legend=False):
 # =============================================================================
 
 def print_summary(month_analyses):
-    """Print model sample sizes, balancing targets, and event thresholds."""
+    """Print bootstrap sample sizes, selected years, and event thresholds."""
     print("Selected settings")
     print("-----------------")
     print(f"Model data:       {MODEL_DATA_METHOD}")
@@ -989,6 +1028,11 @@ def print_summary(month_analyses):
     print(f"Top distribution: {TOP_DISTRIBUTION}")
     print(f"Metric:           {PLOT_METRIC}")
     print(f"Repeated fits:    {NUMBER_OF_BOOTSTRAPS}")
+    start_label = "start of dataset" if EQUAL_BOOTSTRAP_START_YEAR is None else EQUAL_BOOTSTRAP_START_YEAR
+    end_label = "end of dataset" if EQUAL_BOOTSTRAP_END_YEAR is None else EQUAL_BOOTSTRAP_END_YEAR
+    print(f"Equal bootstrap years: {start_label}-{end_label}")
+    print(f"Draws per year:   {EQUAL_YEAR_SAMPLES_PER_YEAR}")
+    print(f"Pooled bootstrap same years:  {POOLED_BOOTSTRAP_USE_EQUAL_BOOTSTRAP_YEARS}")
 
     for month in PANEL_MONTHS:
         analysis = month_analyses[month]
@@ -998,13 +1042,18 @@ def print_summary(month_analyses):
 
         print()
         print(MONTH_NAMES[month - 1])
-        print(f"  YYYYMM groups:                 {len(counts)}")
-        print(f"  Pooled model realizations:     {model['pooled_values'].size}")
-        print(f"  Realizations per YYYYMM range: {min(counts)}-{max(counts)}")
-        print(f"  Balanced target per YYYYMM:    {model['target_count']}")
         print(
-            f"  Balanced sample size:          "
-            f"{model['target_count'] * len(model['values_by_yyyymm'])}"
+            f"  Equal-year years used:         "
+            f"{model['equal_year_start_year']}-{model['equal_year_end_year']}"
+        )
+        print(f"  Number of equal-weight years:  {len(counts)}")
+        print(f"  Pooled years used:             {model['pooled_start_year']}-{model['pooled_end_year']}")
+        print(f"  Pooled model realizations:     {model['pooled_values'].size}")
+        print(f"  Original values/year range:    {min(counts)}-{max(counts)}")
+        print(f"  Bootstrap draws per year:      {EQUAL_YEAR_SAMPLES_PER_YEAR}")
+        print(
+            f"  Equal-year sample size:        "
+            f"{EQUAL_YEAR_SAMPLES_PER_YEAR * len(model['values_by_yyyymm'])}"
         )
         print(f"  Storm Hans threshold:          {thresholds['storm_hans_value']:.3f} mm")
         print(
