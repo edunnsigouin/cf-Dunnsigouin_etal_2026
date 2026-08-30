@@ -1,23 +1,17 @@
-#!/usr/bin/env python3
 """
-Create a four-panel schematic of the Drammen catchment and S2S sampling strategy.
+Create a two-panel schematic of the Drammen catchment and S2S sampling strategy.
 
 Panel (a) shows the Drammen catchment weights on the ERA5 0.5-degree grid and
 the catchment boundary. Panel (b) shows one ECMWF S2S forecast after catchment
 averaging and temporal accumulation. All ensemble members are grey, one example
-member is highlighted in blue, its later-period maximum is marked, and a dashed
-line marks the start of the later lead-day sampling period.
+member is highlighted in blue, its later-period maximum is marked, and shading
+marks the later lead-day sampling period.
 
-Panels (c) and (d) use the compact monthly-maximum sample file. Panel (c)
-aggregates Hindcast, Forecast, and All realization counts by calendar month across
-all years. Panel (d) shows the number of realizations assigned to each YYYYMM.
-
-The figure uses a 2 x 2 layout with equal grid-cell sizes. Panel (a) uses a
-regular subplot as an outer container, with the Cartopy map drawn as an inset
-inside that container. This preserves the map projection while making the outer
-panel geometry align more closely with panels (b)-(d). A shared typography block
-controls title, axis-label, tick-label, legend, and colorbar font sizes consistently
-across all four panels.
+The original four-panel figure used a 2 x 2 layout. This version retains only
+the original top row. The figure height is reduced from 10 inches to
+10 / (2 + 0.35) inches so panels (a) and (b) keep their original physical
+height. Figure width, horizontal spacing, map inset geometry, and colorbar
+geometry are unchanged.
 """
 
 from pathlib import Path
@@ -30,7 +24,6 @@ import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
 from matplotlib.patches import Patch
 import numpy as np
-import pandas as pd
 from shapely.geometry import MultiPolygon, Polygon
 import xarray as xr
 
@@ -44,7 +37,6 @@ from Dunnsigouin_etal_2026 import config
 variable = "tp24"
 catchment = "regine_drammen"
 accumulation_days = 2
-
 write2file = True
 show_figure = True
 
@@ -58,26 +50,18 @@ map_title_x = -0.3  # Shift title left so it begins above the colorbar.
 map_cmap = "BuGn"
 map_vmin = 0.0
 map_vmax = 1.0
-
 map_central_lon = 10.0
 map_central_lat = 62.0
 map_extent = [4.75, 12.75, 58.0, 63.0]
-
 map_coastline_width = 0.5
 map_border_width = 0.4
-
 catchment_boundary_color = "red"
 catchment_boundary_width = 1.5
 catchment_crs_if_missing = "EPSG:4326"
-
 colorbar_label = "Area fraction"
 
-# Position of the Cartopy map inside the equal-sized panel-(a) container:
-# [left, bottom, width, height] in container-axis coordinates.
-#map_inset_bounds = [0.08, 0.06, 0.84, 0.88]
+# Positions inside the panel-(a) container: [left, bottom, width, height].
 map_inset_bounds = [0.0, 0.0, 1.0, 1.0]
-
-# Position of the vertical colorbar inside the same panel container.
 map_colorbar_bounds = [0.05, 0.0, 0.075, 1.0]
 
 
@@ -87,67 +71,21 @@ map_colorbar_bounds = [0.05, 0.0, 0.075, 1.0]
 
 forecast_date = "2023-07-24"
 input_filename_prefix = f"{variable}_0.5x0.5"
-
 forecast_title = "b) Example of forecast sampling for August"
+
 # Ensemble member to highlight by positional index: 0 is the first member.
 highlight_member_index = 0
-
 ensemble_color = "0.65"
 ensemble_alpha = 0.35
 ensemble_line_width = 0.8
-
 highlight_color = "tab:blue"
 highlight_line_width = 2.0
 maximum_marker_size = 60
-
 later_group_shading_color = "tab:orange"
 later_group_shading_alpha = 0.25
-
 x_label_interval = 5
 x_label_rotation = 30
 forecast_y_limits = [0, 90]
-
-forecast_grid_linewidth = 0.7
-forecast_grid_alpha = 0.4
-
-
-# =============================================================================
-# User settings: panels (c) and (d) realization counts
-# =============================================================================
-
-# Optional explicit compact sample filename. Leave as None to construct it.
-sample_input_filename_override = None
-
-forecast_date_range = ["2020-01-02", "2023-12-28"]
-first_input_lead = 16
-last_input_lead = 46
-number_of_lead_bins = 2
-
-# Compact sample source.
-input_data_type = "raw"  # "raw" or "bias_corrected"
-bias_correction_method = "ld"  # "q", "doy", "ld", or "q_doy"
-bias_correction_reference = "era5"  # "senorge" or "era5"
-
-# Optional time limits. Use None for the complete sample_month range.
-plot_start_month = None  # e.g. 200001
-plot_end_month = None  # e.g. 202212
-
-count_colors = {
-    "All": "tab:blue",
-    "Forecast": "tab:orange",
-    "Hindcast": "tab:green",
-}
-count_linewidth = 1.7
-count_marker_size = 4.0
-
-count_show_grid = True
-count_grid_linewidth = 0.7
-count_grid_alpha = 0.45
-
-month_names = [
-    "Jan", "Feb", "Mar", "Apr", "May", "Jun",
-    "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
-]
 
 
 # =============================================================================
@@ -155,21 +93,18 @@ month_names = [
 # =============================================================================
 
 figure_width = 12
-figure_height = 10
+original_figure_height = 10
+original_figure_hspace = 0.35
+figure_height = original_figure_height / (2 + original_figure_hspace)
 figure_dpi = 300
-figure_wspace = 0.15
-figure_hspace = 0.35
+figure_wspace = 0.0
 
-# Shared typography for all panels.
 title_fontsize = 12
 axis_label_fontsize = 11
 tick_label_fontsize = 10
 legend_fontsize = 9
 
-filename_out = (
-    Path(config.dirs["fig"])
-    / f"fig-02-{forecast_date_range[0]}-{forecast_date_range[-1]}.png"
-)
+filename_out = Path(config.dirs["fig"]) / "poster_figs/" / f"fig-02-{forecast_date}.png"
 
 
 # =============================================================================
@@ -178,70 +113,13 @@ filename_out = (
 
 path_nve = Path(config.dirs["nve"])
 path_in_forecast = Path(config.dirs["s2s_forecast_daily"]) / variable
-
 filename_weights = path_nve / f"weights_catchment_{catchment}_era5_0.5x0.5.nc"
 filename_catchment = path_nve / f"catchment_nve_{catchment}.geojson"
 
 
 # =============================================================================
-# Filename helpers
+# Validation and input helpers
 # =============================================================================
-
-def get_file_id(catchment_name):
-    """Return the short catchment label used in filenames."""
-    return catchment_name.removeprefix("regine_")
-
-
-def split_usable_leads(first_lead, last_lead, number_of_bins):
-    """Split an inclusive lead interval into consecutive near-equal bins."""
-    number_of_leads = last_lead - first_lead + 1
-    base_size, remainder = divmod(number_of_leads, number_of_bins)
-    bin_sizes = [
-        base_size + int(index >= number_of_bins - remainder)
-        for index in range(number_of_bins)
-    ]
-
-    bins = []
-    current_start = first_lead
-
-    for bin_size in bin_sizes:
-        current_end = current_start + bin_size - 1
-        bins.append((current_start, current_end))
-        current_start = current_end + 1
-
-    return bins
-
-
-def build_lead_bins():
-    """Return the usable accumulated lead bins encoded in the sample filename."""
-    first_usable_lead = first_input_lead + accumulation_days - 1
-    return split_usable_leads(
-        first_usable_lead,
-        last_input_lead,
-        number_of_lead_bins,
-    )
-
-
-def make_sample_input_filename():
-    """Construct the compact monthly-maximum sample filename."""
-    if sample_input_filename_override is not None:
-        return Path(sample_input_filename_override)
-
-    first_usable_lead = first_input_lead + accumulation_days - 1
-    bin_label = "_".join(f"{start}-{end}" for start, end in build_lead_bins())
-
-    stem = (
-        f"test-monthly_max_samples_{variable}_{accumulation_days}dayacc_"
-        f"{get_file_id(catchment)}_lead{first_usable_lead}-{last_input_lead}_"
-        f"split{number_of_lead_bins}_{bin_label}_"
-        f"{forecast_date_range[0]}_{forecast_date_range[1]}"
-    )
-
-    if input_data_type == "bias_corrected":
-        stem += f"_bc_{bias_correction_method}_{bias_correction_reference}"
-
-    return Path(config.dirs["s2s_processed"]) / f"{stem}.nc"
-
 
 def find_forecast_file():
     """Return the single raw forecast file matching forecast_date."""
@@ -253,8 +131,7 @@ def find_forecast_file():
 
     if not matches:
         raise FileNotFoundError(
-            f"No forecast file ending in _{forecast_date}.nc was found in "
-            f"{path_in_forecast}."
+            f"No forecast file ending in _{forecast_date}.nc was found in {path_in_forecast}."
         )
     if len(matches) > 1:
         raise RuntimeError(
@@ -264,23 +141,8 @@ def find_forecast_file():
     return matches[0]
 
 
-# =============================================================================
-# Validation
-# =============================================================================
-
-def validate_sample_month_value(value, name):
-    """Validate one YYYYMM integer."""
-    if not isinstance(value, (int, np.integer)):
-        raise TypeError(f"{name} must be an integer YYYYMM value.")
-
-    year = int(value) // 100
-    month = int(value) % 100
-    if year < 1 or month not in range(1, 13):
-        raise ValueError(f"{name} must use valid YYYYMM format.")
-
-
 def validate_user_settings():
-    """Validate user settings and required input files."""
+    """Validate settings and required input files."""
     try:
         np.datetime64(forecast_date)
     except ValueError as exc:
@@ -295,42 +157,7 @@ def validate_user_settings():
     if map_vmin >= map_vmax:
         raise ValueError("map_vmin must be smaller than map_vmax.")
 
-    if first_input_lead > last_input_lead:
-        raise ValueError("first_input_lead must not exceed last_input_lead.")
-
-    first_usable_lead = first_input_lead + accumulation_days - 1
-    if first_usable_lead > last_input_lead:
-        raise ValueError("accumulation_days is too large for the sample lead range.")
-
-    usable_leads = last_input_lead - first_usable_lead + 1
-    if not isinstance(number_of_lead_bins, int) or not 1 <= number_of_lead_bins <= usable_leads:
-        raise ValueError("number_of_lead_bins is invalid for the usable lead range.")
-
-    if input_data_type not in {"raw", "bias_corrected"}:
-        raise ValueError("input_data_type must be 'raw' or 'bias_corrected'.")
-
-    if input_data_type == "bias_corrected":
-        if bias_correction_method not in {"q", "doy", "ld", "q_doy"}:
-            raise ValueError(
-                "bias_correction_method must be 'q', 'doy', 'ld', or 'q_doy'."
-            )
-        if bias_correction_reference not in {"senorge", "era5"}:
-            raise ValueError(
-                "bias_correction_reference must be 'senorge' or 'era5'."
-            )
-
-    for name, value in {
-        "plot_start_month": plot_start_month,
-        "plot_end_month": plot_end_month,
-    }.items():
-        if value is not None:
-            validate_sample_month_value(value, name)
-
-    if plot_start_month is not None and plot_end_month is not None:
-        if plot_end_month < plot_start_month:
-            raise ValueError("plot_end_month must not precede plot_start_month.")
-
-    for filename in [filename_weights, filename_catchment, make_sample_input_filename()]:
+    for filename in [filename_weights, filename_catchment]:
         if not filename.is_file():
             raise FileNotFoundError(f"Required file not found: {filename}")
 
@@ -431,17 +258,10 @@ def plot_catchment_panel(axis, weights, boundary, data_crs):
         linewidth=catchment_boundary_width,
         zorder=5,
     )
-
     axis.coastlines(resolution="10m", linewidth=map_coastline_width)
     axis.add_feature(cfeature.BORDERS.with_scale("10m"), linewidth=map_border_width)
     axis.set_extent(map_extent, crs=data_crs)
-    axis.set_title(
-        map_title,
-        loc="left",
-        x=map_title_x,
-        fontsize=title_fontsize,
-    )
-
+    axis.set_title(map_title, loc="left", x=map_title_x, fontsize=title_fontsize)
     return mesh
 
 
@@ -467,9 +287,7 @@ def catchment_weighted_mean(ds, catchment_weight):
     precipitation = xr.where(ds[variable] < 0, 0, ds[variable])
     latitude_weight = np.cos(np.deg2rad(ds["latitude"]))
     combined_weight = catchment_weight * latitude_weight
-    spatial_mean = precipitation.weighted(combined_weight).mean(
-        ["latitude", "longitude"]
-    )
+    spatial_mean = precipitation.weighted(combined_weight).mean(["latitude", "longitude"])
     return (spatial_mean * 1000.0).rename(variable)
 
 
@@ -483,15 +301,12 @@ def calculate_accumulation(precipitation):
     number_of_times = precipitation.sizes["time"]
     if number_of_times != 46:
         raise ValueError(
-            f"This schematic expects 46 raw forecast time steps, but found "
-            f"{number_of_times}."
+            f"This schematic expects 46 raw forecast time steps, but found {number_of_times}."
         )
 
     accumulated = precipitation.rolling(
-        time=accumulation_days,
-        min_periods=accumulation_days,
+        time=accumulation_days, min_periods=accumulation_days
     ).sum()
-
     lead_days = xr.DataArray(
         np.arange(1, 47, dtype="int64"),
         dims=("time",),
@@ -511,7 +326,7 @@ def get_lead_groups():
 
 
 def get_labelled_lead_days():
-    """Return lead days labelled on both x-axes."""
+    """Return lead days labelled on the x-axis."""
     return np.arange(1, 47, x_label_interval, dtype="int64")
 
 
@@ -534,7 +349,6 @@ def plot_forecast_panel(axis, accumulated):
     for member_index in range(accumulated.sizes["number"]):
         if member_index == highlight_member_index:
             continue
-
         member = accumulated.isel(number=member_index).squeeze(drop=True)
         axis.plot(
             member["time"].values,
@@ -546,7 +360,6 @@ def plot_forecast_panel(axis, accumulated):
 
     highlighted = accumulated.isel(number=highlight_member_index).squeeze(drop=True)
     highlighted_later = later.isel(number=highlight_member_index).squeeze(drop=True)
-
     axis.plot(
         highlighted["time"].values,
         highlighted.values,
@@ -571,8 +384,8 @@ def plot_forecast_panel(axis, accumulated):
     all_dates = accumulated["time"].values.astype("datetime64[ns]")
     initialization_date = np.datetime64(forecast_date, "ns")
     later_start_date = later["time"].values[0]
-
     later_end_date = later["time"].values[-1]
+
     axis.axvspan(
         later_start_date,
         later_end_date,
@@ -584,7 +397,6 @@ def plot_forecast_panel(axis, accumulated):
 
     labelled_leads = get_labelled_lead_days()
     labelled_dates = all_dates[labelled_leads - 1]
-
     axis.set_xticks(all_dates, minor=True)
     axis.set_xticks(labelled_dates)
     axis.xaxis.set_major_formatter(mdates.DateFormatter("%d %b"))
@@ -596,20 +408,10 @@ def plot_forecast_panel(axis, accumulated):
         labelsize=tick_label_fontsize,
         rotation=x_label_rotation,
     )
+
     for label in axis.get_xticklabels():
         label.set_horizontalalignment("right")
         label.set_rotation_mode("anchor")
-
-    #lead_axis = axis.twiny()
-    #lead_axis.set_xlim(axis.get_xlim())
-    #lead_axis.set_xticks(all_dates, minor=True)
-    #lead_axis.set_xticks(labelled_dates)
-    #lead_axis.set_xticklabels([str(lead) for lead in labelled_leads])
-    #lead_axis.tick_params(axis="x", which="minor", length=3.5, labeltop=False)
-    #lead_axis.tick_params(
-    #    axis="x", which="major", length=6.0, labelsize=tick_label_fontsize
-    #)
-    #lead_axis.set_xlabel("Lead day", fontsize=axis_label_fontsize)
 
     axis.set_title(forecast_title, loc="left", fontsize=title_fontsize)
     axis.set_xlabel("Date [day]", fontsize=axis_label_fontsize)
@@ -621,7 +423,8 @@ def plot_forecast_panel(axis, accumulated):
 
     legend_handles = [
         Line2D(
-            [0], [0],
+            [0],
+            [0],
             color=ensemble_color,
             alpha=ensemble_alpha,
             linewidth=ensemble_line_width,
@@ -634,12 +437,13 @@ def plot_forecast_panel(axis, accumulated):
             label="Sampling period (leads 17-46)",
         ),
         Line2D(
-            [0], [0],
+            [0],
+            [0],
             color=highlight_color,
             linewidth=highlight_line_width,
             marker="o",
             markersize=np.sqrt(maximum_marker_size),
-            label=f"Ensemble member maximum",
+            label="Ensemble member maximum",
         ),
     ]
     axis.legend(
@@ -648,231 +452,17 @@ def plot_forecast_panel(axis, accumulated):
         fontsize=legend_fontsize,
         loc="upper left",
     )
-
     axis.spines["top"].set_visible(False)
     axis.spines["right"].set_visible(False)
-    #lead_axis.spines["right"].set_visible(False)
-    #axis.grid(
-    #    axis="y",
-    #    linestyle=":",
-    #    linewidth=forecast_grid_linewidth,
-    #    alpha=forecast_grid_alpha,
-    #)
     axis.set_ylim(forecast_y_limits)
-
-
-# =============================================================================
-# Panels (c) and (d): realization counts
-# =============================================================================
-
-def read_sample_metadata():
-    """Read sample metadata and count finite realizations for each i_date."""
-    filename = make_sample_input_filename()
-
-    with xr.open_dataset(filename, decode_timedelta=False) as ds:
-        required = {"sample_month", "model_type", "tp24_max"}
-        missing = required - set(ds.variables)
-        if missing:
-            raise KeyError(f"Input file is missing variables: {sorted(missing)}")
-
-        if ds["sample_month"].dims != ("i_date",):
-            raise ValueError("sample_month must have dimension ('i_date',).")
-        if ds["model_type"].dims != ("i_date",):
-            raise ValueError("model_type must have dimension ('i_date',).")
-
-        expected_dims = {"number", "i_date"}
-        if set(ds["tp24_max"].dims) != expected_dims:
-            raise ValueError(
-                f"tp24_max must contain dimensions {sorted(expected_dims)}, "
-                f"but has {ds['tp24_max'].dims}."
-            )
-
-        sample_month = np.asarray(ds["sample_month"].load().values, dtype="int64")
-        model_type = np.char.lower(
-            np.asarray(ds["model_type"].load().values).astype(str)
-        )
-        realization_count = (
-            np.isfinite(ds["tp24_max"])
-            .sum(dim="number")
-            .transpose("i_date")
-            .load()
-            .values
-            .astype("int64")
-        )
-
-    unknown = sorted(set(model_type) - {"forecast", "hindcast"})
-    if unknown:
-        raise ValueError(f"Unsupported model_type values: {unknown}")
-
-    for value in np.unique(sample_month):
-        validate_sample_month_value(int(value), "sample_month")
-
-    return sample_month, model_type, realization_count
-
-
-def sample_month_to_period(sample_month):
-    """Convert one YYYYMM integer to a pandas monthly Period."""
-    year = int(sample_month) // 100
-    month = int(sample_month) % 100
-    return pd.Period(year=year, month=month, freq="M")
-
-
-def calculate_monthly_counts(sample_month, model_type, realization_count):
-    """Calculate monthly forecast, hindcast, and combined realization counts."""
-    periods = pd.PeriodIndex(
-        [sample_month_to_period(value) for value in sample_month]
-    )
-    all_months = pd.period_range(periods.min(), periods.max(), freq="M")
-
-    if plot_start_month is not None:
-        all_months = all_months[
-            all_months >= sample_month_to_period(plot_start_month)
-        ]
-    if plot_end_month is not None:
-        all_months = all_months[
-            all_months <= sample_month_to_period(plot_end_month)
-        ]
-    if all_months.empty:
-        raise ValueError("No months remain after applying the plot limits.")
-
-    monthly_counts = {}
-    for label, type_name in [("Forecast", "forecast"), ("Hindcast", "hindcast")]:
-        mask = model_type == type_name
-        counts = (
-            pd.Series(realization_count[mask], index=periods[mask])
-            .groupby(level=0)
-            .sum()
-        )
-        monthly_counts[label] = counts.reindex(all_months, fill_value=0).astype(int)
-
-    monthly_counts["All"] = monthly_counts["Forecast"] + monthly_counts["Hindcast"]
-    return all_months.to_timestamp(how="start"), monthly_counts
-
-
-def calculate_calendar_month_counts(plot_dates, monthly_counts):
-    """Sum realization counts across years for January through December."""
-    calendar_month_counts = {}
-
-    for label, counts in monthly_counts.items():
-        values = pd.Series(counts.values, index=pd.DatetimeIndex(plot_dates))
-        grouped = values.groupby(values.index.month).sum()
-        calendar_month_counts[label] = grouped.reindex(range(1, 13), fill_value=0)
-
-    return calendar_month_counts
-
-
-def format_count_axis(axis):
-    """Apply common formatting to panels (c) and (d)."""
-    axis.tick_params(
-        axis="both",
-        labelsize=tick_label_fontsize,
-        direction="out",
-        length=3.5,
-        width=0.8,
-    )
-    axis.spines["top"].set_visible(False)
-    axis.spines["right"].set_visible(False)
-    axis.set_ylim(bottom=0)
-    axis.margins(x=0.01)
-
-    #if count_show_grid:
-    #    axis.grid(
-    #        axis="y",
-    #        linestyle=":",
-    #        linewidth=count_grid_linewidth,
-    #        alpha=count_grid_alpha,
-    #    )
-
-
-def plot_monthly_count_panel(axis, plot_dates, monthly_counts):
-    """Plot realization counts for each YYYYMM in panel (d)."""
-    for label in ["Forecast","Hindcast","All"]:
-        if label == 'All':
-            axis.plot(
-                plot_dates[0],
-                np.nan,
-                linewidth=count_linewidth,
-                color=count_colors[label],
-                label=label,
-            )
-        else:
-            axis.plot(
-                plot_dates,
-                monthly_counts[label].values,
-                linewidth=count_linewidth,
-                color=count_colors[label],
-                label=label,
-            )
-
-    axis.set_title("d) Ensemble members by year", loc="left", fontsize=title_fontsize, pad=8)
-    axis.set_xlabel(
-        "Time [year]",
-        fontsize=axis_label_fontsize,
-    )
-    axis.set_ylabel("Number", fontsize=axis_label_fontsize)
-
-    start_year = plot_dates.min().year
-    end_year = plot_dates.max().year
-    tick_years = np.arange(start_year, end_year + 1)
-    label_years = set(tick_years[::2])
-
-    year_ticks = [pd.Timestamp(year=year, month=1, day=1) for year in tick_years]
-    year_labels = [str(year) if year in label_years else "" for year in tick_years]
-
-    axis.set_xticks(year_ticks)
-    axis.set_xticklabels(
-        year_labels,
-        rotation=30,
-        ha="right",
-        rotation_mode="anchor",
-    )
-
-    format_count_axis(axis)
-
-
-def plot_calendar_month_count_panel(axis, calendar_month_counts):
-    """Plot realization counts aggregated by calendar month in panel (c)."""
-    month_numbers = np.arange(1, 13)
-
-    for label in ["All","Hindcast","Forecast"]:
-        axis.plot(
-            month_numbers,
-            calendar_month_counts[label].values,
-            marker="o",
-            markersize=count_marker_size,
-            linewidth=count_linewidth,
-            color=count_colors[label],
-            label=label,
-        )
-
-    axis.set_title("c) Ensemble members by month", loc="left", fontsize=title_fontsize, pad=8)
-    axis.set_xlabel("Time [month]", fontsize=axis_label_fontsize)
-    axis.set_ylabel("Number", fontsize=axis_label_fontsize)
-    axis.set_xlim(0.5, 12.5)
-    axis.set_xticks(month_numbers)
-    axis.set_xticklabels(month_names)
-
-    format_count_axis(axis)
-    axis.legend(
-        frameon=False,
-        fontsize=legend_fontsize,
-        loc="center left",
-    )
 
 
 # =============================================================================
 # Figure assembly
 # =============================================================================
 
-def make_figure(
-    weights,
-    boundary,
-    accumulated,
-    plot_dates,
-    monthly_counts,
-    calendar_month_counts,
-):
-    """Create the combined 2 x 2 figure with an inset Cartopy map in panel (a)."""
+def make_figure(weights, boundary, accumulated):
+    """Create panels (a) and (b) at their original physical dimensions."""
     map_projection = ccrs.LambertConformal(
         central_longitude=map_central_lon,
         central_latitude=map_central_lat,
@@ -881,19 +471,14 @@ def make_figure(
 
     figure = plt.figure(figsize=(figure_width, figure_height))
     grid = figure.add_gridspec(
-        2,
+        1,
         2,
         width_ratios=[1, 1],
-        height_ratios=[1, 1],
         wspace=figure_wspace,
-        hspace=figure_hspace,
     )
 
     map_container = figure.add_subplot(grid[0, 0])
     forecast_axis = figure.add_subplot(grid[0, 1])
-    calendar_month_axis = figure.add_subplot(grid[1, 0])
-    monthly_axis = figure.add_subplot(grid[1, 1])
-
     map_container.set_axis_off()
 
     container_position = map_container.get_position()
@@ -906,11 +491,8 @@ def make_figure(
         [map_left, map_bottom, map_width, map_height],
         projection=map_projection,
     )
-
     mesh = plot_catchment_panel(map_axis, weights, boundary, data_crs)
     plot_forecast_panel(forecast_axis, accumulated)
-    plot_monthly_count_panel(monthly_axis, plot_dates, monthly_counts)
-    plot_calendar_month_count_panel(calendar_month_axis, calendar_month_counts)
 
     colorbar_left = (
         container_position.x0 + map_colorbar_bounds[0] * container_position.width
@@ -924,12 +506,7 @@ def make_figure(
     colorbar_axis = figure.add_axes(
         [colorbar_left, colorbar_bottom, colorbar_width, colorbar_height]
     )
-    colorbar = figure.colorbar(
-        mesh,
-        cax=colorbar_axis,
-        orientation="vertical",
-    )
-    
+    colorbar = figure.colorbar(mesh, cax=colorbar_axis, orientation="vertical")
     colorbar.set_label(colorbar_label, fontsize=axis_label_fontsize)
     colorbar.ax.yaxis.set_label_position("left")
     colorbar.ax.yaxis.set_ticks_position("left")
@@ -939,24 +516,7 @@ def make_figure(
         labelleft=True,
         labelright=False,
     )
-    
     return figure
-
-
-# =============================================================================
-# Reporting
-# =============================================================================
-
-def print_sample_summary(sample_month, model_type, realization_count):
-    """Print compact-sample totals."""
-    forecast_mask = model_type == "forecast"
-    hindcast_mask = model_type == "hindcast"
-
-    print("Sample file:", make_sample_input_filename())
-    print(f"Forecast samples total: {int(realization_count[forecast_mask].sum()):,}")
-    print(f"Hindcast samples total: {int(realization_count[hindcast_mask].sum()):,}")
-    print(f"First sample_month: {int(np.min(sample_month))}")
-    print(f"Last sample_month: {int(np.max(sample_month))}")
 
 
 # =============================================================================
@@ -964,7 +524,7 @@ def print_sample_summary(sample_month, model_type, realization_count):
 # =============================================================================
 
 def main():
-    """Read the map, forecast, and compact sample data and make four panels."""
+    """Read the map and forecast data and make panels (a) and (b)."""
     validate_user_settings()
 
     filename_forecast = find_forecast_file()
@@ -981,27 +541,7 @@ def main():
 
     precipitation = catchment_weighted_mean(forecast_ds, weights)
     accumulated = calculate_accumulation(precipitation)
-
-    sample_month, model_type, realization_count = read_sample_metadata()
-    plot_dates, monthly_counts = calculate_monthly_counts(
-        sample_month,
-        model_type,
-        realization_count,
-    )
-    calendar_month_counts = calculate_calendar_month_counts(
-        plot_dates,
-        monthly_counts,
-    )
-    print_sample_summary(sample_month, model_type, realization_count)
-
-    figure = make_figure(
-        weights,
-        boundary,
-        accumulated,
-        plot_dates,
-        monthly_counts,
-        calendar_month_counts,
-    )
+    figure = make_figure(weights, boundary, accumulated)
 
     if write2file:
         filename_out.parent.mkdir(parents=True, exist_ok=True)

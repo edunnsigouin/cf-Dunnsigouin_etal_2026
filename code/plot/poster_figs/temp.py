@@ -1,522 +1,1474 @@
+#!/usr/bin/env python3
 """
-Create a two-panel schematic of the Drammen catchment and S2S sampling strategy.
+Create a two-panel extreme-precipitation figure for August and May.
 
-Panel (a) shows the Drammen catchment weights on the ERA5 0.5-degree grid and
-the catchment boundary. Panel (b) shows one ECMWF S2S forecast after catchment
-averaging and temporal accumulation. All ensemble members are grey, one example
-member is highlighted in blue, its later-period maximum is marked, and shading
-marks the later lead-day sampling period.
+Panel (a) shows the August return-level distribution and panel (b) shows the
+May return-level distribution. The reference fit uses OBSERVATION_YEARS, with
+a user option controlling whether August 2023 (Storm Hans) is included in the
+August fit. The option has no effect when 2023 is outside OBSERVATION_YEARS.
 
-The original four-panel figure used a 2 x 2 layout. This version retains only
-the original top row. The figure height is reduced from 10 inches to
-10 / (2 + 0.35) inches so panels (a) and (b) keep their original physical
-height. Figure width, horizontal spacing, map inset geometry, and colorbar
-geometry are unchanged.
+The original six-panel figure used a 3 x 2 constrained layout. This version
+retains only the original top row and uses a reduced figure height chosen so
+panels (a) and (b) keep their original physical dimensions.
 """
 
 from pathlib import Path
 
-import cartopy.crs as ccrs
-import cartopy.feature as cfeature
-import geopandas as gpd
-import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
+
 from matplotlib.lines import Line2D
-from matplotlib.patches import Patch
+
+from matplotlib.ticker import FuncFormatter
+
 import numpy as np
-from shapely.geometry import MultiPolygon, Polygon
+
 import xarray as xr
+
+from scipy.optimize import minimize
+
+from scipy.stats import genextreme, gumbel_r
 
 from Dunnsigouin_etal_2026 import config
 
-
-# =============================================================================
-# User settings: shared data
 # =============================================================================
 
-variable = "tp24"
-catchment = "regine_drammen"
-accumulation_days = 2
-write2file = True
-show_figure = True
-
+# User settings
 
 # =============================================================================
-# User settings: panel (a) Drammen catchment map
-# =============================================================================
 
-map_title = "a) Model weights for drammen catchment"
-map_title_x = -0.3  # Shift title left so it begins above the colorbar.
-map_cmap = "BuGn"
-map_vmin = 0.0
-map_vmax = 1.0
-map_central_lon = 10.0
-map_central_lat = 62.0
-map_extent = [4.75, 12.75, 58.0, 63.0]
-map_coastline_width = 0.5
-map_border_width = 0.4
-catchment_boundary_color = "red"
-catchment_boundary_width = 1.5
-catchment_crs_if_missing = "EPSG:4326"
-colorbar_label = "Area fraction"
+REFERENCE_DATASET = "senorge"  # "senorge" or "era5"
 
-# Positions inside the panel-(a) container: [left, bottom, width, height].
-map_inset_bounds = [0.0, 0.0, 1.0, 1.0]
-map_colorbar_bounds = [0.05, 0.0, 0.075, 1.0]
+CATCHMENT = "regine_drammen"
 
+X_DAYS = 2
 
-# =============================================================================
-# User settings: panel (b) example forecast
-# =============================================================================
+OBSERVATION_YEARS = [1957, 2025]
 
-forecast_date = "2023-07-24"
-input_filename_prefix = f"{variable}_0.5x0.5"
-forecast_title = "b) Example of forecast sampling for August"
+REFERENCE_FILE_YEARS = [1957, 2025]
 
-# Ensemble member to highlight by positional index: 0 is the first member.
-highlight_member_index = 0
-ensemble_color = "0.65"
-ensemble_alpha = 0.35
-ensemble_line_width = 0.8
-highlight_color = "tab:blue"
-highlight_line_width = 2.0
-maximum_marker_size = 60
-later_group_shading_color = "tab:orange"
-later_group_shading_alpha = 0.25
-x_label_interval = 5
-x_label_rotation = 30
-forecast_y_limits = [0, 90]
+FORECAST_DATE_RANGE = ["2020-01-02", "2023-12-28"]
 
+MODEL_DATA_METHOD = "raw"  # "raw", "mm_1step", "mm_2step", "q", "ld", "doy", or "q_doy"
 
-# =============================================================================
-# User settings: overall figure
-# =============================================================================
+MODEL_SAMPLING_GROUP = "full"  # "full", "split1", "split2", ...
 
-figure_width = 12
-original_figure_height = 10
-original_figure_hspace = 0.35
-figure_height = original_figure_height / (2 + original_figure_hspace)
-figure_dpi = 300
-figure_wspace = 0.0
+MODEL_VARIABLE = "tp24"
 
-title_fontsize = 12
-axis_label_fontsize = 11
-tick_label_fontsize = 10
-legend_fontsize = 9
+FIRST_INPUT_LEAD = 16
 
-filename_out = Path(config.dirs["fig"]) / "poster_figs/" / f"fig-02-{forecast_date}.png"
+LAST_INPUT_LEAD = 46
 
+NUMBER_OF_LEAD_BINS = 2
 
-# =============================================================================
-# Paths
-# =============================================================================
+# Used for panels a-b. Options: "GEV", "Gumbel", "GenEx".
 
-path_nve = Path(config.dirs["nve"])
-path_in_forecast = Path(config.dirs["s2s_forecast_daily"]) / variable
-filename_weights = path_nve / f"weights_catchment_{catchment}_era5_0.5x0.5.nc"
-filename_catchment = path_nve / f"catchment_nve_{catchment}.geojson"
+TOP_DISTRIBUTION = "GEV"
 
+# Top-row x-axis metric: "return_period" or "aep".
 
-# =============================================================================
-# Validation and input helpers
-# =============================================================================
+PLOT_METRIC = "return_period"
 
-def find_forecast_file():
-    """Return the single raw forecast file matching forecast_date."""
-    matches = sorted(
-        path
-        for path in path_in_forecast.glob(f"{input_filename_prefix}*.nc")
-        if path.stem.endswith(f"_{forecast_date}")
-    )
+AEP_YEARS = 1
 
-    if not matches:
-        raise FileNotFoundError(
-            f"No forecast file ending in _{forecast_date}.nc was found in {path_in_forecast}."
-        )
-    if len(matches) > 1:
-        raise RuntimeError(
-            f"Found multiple forecast files for {forecast_date}: "
-            f"{[path.name for path in matches]}"
-        )
-    return matches[0]
+BOOTSTRAP_METHOD = "nonparametric"  # "nonparametric" or "parametric"
 
+NUMBER_OF_BOOTSTRAPS = 50
 
-def validate_user_settings():
-    """Validate settings and required input files."""
-    try:
-        np.datetime64(forecast_date)
-    except ValueError as exc:
-        raise ValueError("forecast_date must have format YYYY-MM-DD.") from exc
+CONFIDENCE_LEVEL = 0.95
 
-    if not 1 <= accumulation_days <= 31:
-        raise ValueError("accumulation_days must be between 1 and 31.")
-    if highlight_member_index < 0:
-        raise ValueError("highlight_member_index must be zero or greater.")
-    if x_label_interval < 1:
-        raise ValueError("x_label_interval must be at least 1.")
-    if map_vmin >= map_vmax:
-        raise ValueError("map_vmin must be smaller than map_vmax.")
+MIN_SUCCESSFUL_BOOTSTRAP_FRACTION = 0.90
 
-    for filename in [filename_weights, filename_catchment]:
-        if not filename.is_file():
-            raise FileNotFoundError(f"Required file not found: {filename}")
+RANDOM_SEED = 42
 
-    if not path_in_forecast.is_dir():
-        raise FileNotFoundError(f"Forecast directory not found: {path_in_forecast}")
+SUBSAMPLE_MODEL_TO_REFERENCE_LENGTH = False
 
-    find_forecast_file()
+# Include August 2023 in the observational August fit when 2023 is inside
 
+# OBSERVATION_YEARS. This setting has no effect when 2023 is outside that range.
+
+INCLUDE_STORM_HANS_IN_FIT = True
+
+REFERENCE_FILENAME_OVERRIDE = None
+
+MODEL_FILENAME_OVERRIDE = None
+
+FIGURE_DPI = 300
+
+FIG_WIDTH_IN = 12
+
+FIG_HEIGHT_IN = 4.8217081455513835
+
+# Shared return-period range for panels a-b.
+
+RETURN_PERIOD_MIN = 1.0
+
+RETURN_PERIOD_MAX = 1.0e7
+
+NUMBER_OF_RETURN_PERIODS = 500
+
+PRECIPITATION_YMIN = 0.0
+
+PRECIPITATION_YMAX = 200.0
+
+SHOW_GRID = True
+
+WRITE_TO_FILE = True
+
+SHOW_FIGURE = False
 
 # =============================================================================
-# Panel (a): Drammen catchment map
+
+# Plot constants
+
 # =============================================================================
 
-def load_catchment_weights():
-    """Load the Drammen catchment weights."""
-    with xr.open_dataset(filename_weights) as ds:
-        if "catchment_weight" not in ds:
-            raise KeyError(
-                f"'catchment_weight' was not found in {filename_weights}. "
-                f"Available variables: {list(ds.data_vars)}"
-            )
-        return ds["catchment_weight"].load()
+MAY = 5
+
+AUGUST = 8
+
+PANEL_MONTHS = [AUGUST, MAY]
+
+STORM_HANS_YEAR = 2023
+
+STORM_HANS_MONTH = AUGUST
+
+SENORGE_VARIABLE = "rr"
+
+ERA5_VARIABLE = "tp24"
+
+ERA5_GRID = "0.5x0.5"
+
+MONTH_NAMES = [
+
+    "January", "February", "March", "April", "May", "June",
+
+    "July", "August", "September", "October", "November", "December",
+
+]
+
+METHODS = ["GEV", "Gumbel", "GenEx"]
 
 
-def load_catchment_boundary():
-    """Load and dissolve the Drammen catchment to its outer boundary."""
-    plot_crs = "EPSG:4326"
-    metric_crs = "EPSG:32633"
+OBSERVATION_COLOR = "tab:orange"
 
-    gdf = gpd.read_file(filename_catchment)
-    if gdf.crs is None:
-        gdf = gdf.set_crs(catchment_crs_if_missing)
+MODEL_COLOR = 'tab:blue'
 
-    union_geom = gdf.to_crs(metric_crs).geometry.union_all()
-    if isinstance(union_geom, Polygon):
-        outer_geom = Polygon(union_geom.exterior)
-    elif isinstance(union_geom, MultiPolygon):
-        outer_geom = MultiPolygon([Polygon(poly.exterior) for poly in union_geom.geoms])
-    else:
-        outer_geom = union_geom
+STORM_HANS_COLOR = "grey"
+
+RECORD_COLOR = "grey"
+
+STORM_HANS_LINESTYLE = "--"
+
+RECORD_LINESTYLE = ":"
+
+CONFIDENCE_ALPHA = 0.15
+
+CURVE_LINEWIDTH = 2.0
+
+REFERENCE_LINEWIDTH = 2.0
+
+MARKER_SIZE = 30
+
+MARKER_LINEWIDTH = 0.8
+
+
+AXIS_LABELSIZE = 11
+
+TICK_LABELSIZE = 11
+
+TITLE_FONTSIZE = 12
+
+LEGEND_FONTSIZE = 10
+
+# =============================================================================
+
+# Validation, labels, and filenames
+
+# =============================================================================
+
+def validate_settings():
+
+    """Validate user-configurable settings."""
+
+    if REFERENCE_DATASET not in {"senorge", "era5"}:
+
+        raise ValueError("REFERENCE_DATASET must be 'senorge' or 'era5'.")
+
+    if MODEL_DATA_METHOD not in {"raw", "mm_1step", "mm_2step", "q", "ld", "doy", "q_doy"}:
+
+        raise ValueError("Unsupported MODEL_DATA_METHOD.")
+
+    if TOP_DISTRIBUTION not in METHODS:
+
+        raise ValueError(f"TOP_DISTRIBUTION must be one of {METHODS}.")
+
+    if PLOT_METRIC not in {"return_period", "aep"}:
+
+        raise ValueError("PLOT_METRIC must be 'return_period' or 'aep'.")
+
+    if BOOTSTRAP_METHOD not in {"nonparametric", "parametric"}:
+
+        raise ValueError("BOOTSTRAP_METHOD must be 'nonparametric' or 'parametric'.")
+
+    if AEP_YEARS < 1:
+
+        raise ValueError("AEP_YEARS must be at least 1.")
+
+    if OBSERVATION_YEARS[0] > OBSERVATION_YEARS[1]:
+
+        raise ValueError("OBSERVATION_YEARS must be increasing.")
+
+    if RETURN_PERIOD_MIN < 1:
+
+        raise ValueError("RETURN_PERIOD_MIN must be at least 1.")
+
+    if RETURN_PERIOD_MAX <= RETURN_PERIOD_MIN:
+
+        raise ValueError("RETURN_PERIOD_MAX must exceed RETURN_PERIOD_MIN.")
+
+    if NUMBER_OF_RETURN_PERIODS < 2:
+
+        raise ValueError("NUMBER_OF_RETURN_PERIODS must be at least 2.")
+
+    if NUMBER_OF_BOOTSTRAPS < 1:
+
+        raise ValueError("NUMBER_OF_BOOTSTRAPS must be at least 1.")
+
+    if not 0 < CONFIDENCE_LEVEL < 1:
+
+        raise ValueError("CONFIDENCE_LEVEL must lie between 0 and 1.")
+
+    if not 0 < MIN_SUCCESSFUL_BOOTSTRAP_FRACTION <= 1:
+
+        raise ValueError("MIN_SUCCESSFUL_BOOTSTRAP_FRACTION must lie in (0, 1].")
+
+    if not isinstance(INCLUDE_STORM_HANS_IN_FIT, bool):
+
+        raise TypeError("INCLUDE_STORM_HANS_IN_FIT must be True or False.")
+
+    first_usable_lead = FIRST_INPUT_LEAD + X_DAYS - 1
+
+    number_of_usable_leads = LAST_INPUT_LEAD - first_usable_lead + 1
+
+    if first_usable_lead > LAST_INPUT_LEAD:
+
+        raise ValueError("X_DAYS is too large for the configured lead range.")
+
+    if not 1 <= NUMBER_OF_LEAD_BINS <= number_of_usable_leads:
+
+        raise ValueError("NUMBER_OF_LEAD_BINS is invalid for the usable lead range.")
+
+    valid_groups = {"full", *(f"split{i}" for i in range(1, NUMBER_OF_LEAD_BINS + 1))}
+
+    if MODEL_SAMPLING_GROUP not in valid_groups:
+
+        raise ValueError(f"MODEL_SAMPLING_GROUP must be one of {sorted(valid_groups)}.")
+
+
+def get_reference_name():
+
+    """Return the display name of the selected reference dataset."""
+
+    return {"senorge": "Senorge", "era5": "ERA5"}[REFERENCE_DATASET]
+
+
+def get_reference_variable():
+
+    """Return the variable name in the selected reference dataset."""
+
+    return {"senorge": SENORGE_VARIABLE, "era5": ERA5_VARIABLE}[REFERENCE_DATASET]
+
+
+def get_reference_label():
+
+    """Return the reference label including the fitted year range."""
+
+    return f"{get_reference_name()} {OBSERVATION_YEARS[0]}-{OBSERVATION_YEARS[1]}"
+
+
+def get_model_label():
+
+    """Return the display label for the selected model data."""
+
+    return "Model" if MODEL_DATA_METHOD == "raw" else "Model BC"
+
+
+def get_record_label():
+
+    """Return the calendar-record label for the configured observation range."""
+
+    return "Monthly record excluding Storm Hans"
+
+
+def get_model_file_id(catchment_name):
+
+    """Return the short catchment identifier used in model filenames."""
+
+    return catchment_name.removeprefix("regine_")
+
+
+def split_usable_leads(first_lead, last_lead, number_of_bins):
+
+    """Split an inclusive lead range into near-equal consecutive bins."""
+
+    number_of_leads = last_lead - first_lead + 1
+
+    base_size, remainder = divmod(number_of_leads, number_of_bins)
+
+    bin_sizes = [
+
+        base_size + int(index >= number_of_bins - remainder)
+
+        for index in range(number_of_bins)
+
+    ]
+
+    bins = []
+
+    current_start = first_lead
+
+    for bin_size in bin_sizes:
+
+        current_end = current_start + bin_size - 1
+
+        bins.append((current_start, current_end))
+
+        current_start = current_end + 1
+
+    return bins
+
+
+def build_lead_bins():
+
+    """Return configured accumulated ending-lead bins."""
+
+    first_usable_lead = FIRST_INPUT_LEAD + X_DAYS - 1
+
+    return split_usable_leads(first_usable_lead, LAST_INPUT_LEAD, NUMBER_OF_LEAD_BINS)
+
+
+def get_model_variable():
+
+    """Return the compact model precipitation variable to read."""
+
+    if MODEL_SAMPLING_GROUP == "full":
+
+        return "tp24_max"
+
+    lead_start, lead_end = build_lead_bins()[int(MODEL_SAMPLING_GROUP.removeprefix("split")) - 1]
+
+    return f"tp24_max_lead{lead_start}_{lead_end}"
+
+
+def lead_split_filename_label():
+
+    """Return the lead-bin label used by the compact model filename."""
+
+    first_usable_lead = FIRST_INPUT_LEAD + X_DAYS - 1
+
+    split_text = "_".join(f"{start}-{end}" for start, end in build_lead_bins())
 
     return (
-        gpd.GeoDataFrame(geometry=[outer_geom], crs=metric_crs)
-        .to_crs(plot_crs)
-        .geometry.iloc[0]
+
+        f"lead{first_usable_lead}-{LAST_INPUT_LEAD}_"
+
+        f"split{NUMBER_OF_LEAD_BINS}_{split_text}"
+
     )
 
 
-def centers_to_edges(centers):
-    """Convert one-dimensional grid-cell centers to cell edges."""
-    centers = np.asarray(centers, dtype=float)
-    if centers.ndim != 1 or centers.size < 2:
-        raise ValueError("centers must be one-dimensional with at least two values.")
+def make_reference_filename():
 
-    edges = np.empty(centers.size + 1, dtype=float)
-    edges[1:-1] = 0.5 * (centers[:-1] + centers[1:])
-    edges[0] = centers[0] - 0.5 * (centers[1] - centers[0])
-    edges[-1] = centers[-1] + 0.5 * (centers[-1] - centers[-2])
-    return edges
+    """Construct the selected observational input filename."""
 
+    if REFERENCE_FILENAME_OVERRIDE is not None:
 
-def plot_catchment_panel(axis, weights, boundary, data_crs):
-    """Plot the Drammen catchment weights and boundary."""
-    lats = weights["latitude"].values
-    lons = weights["longitude"].values
-    values = weights.values.copy()
+        return Path(REFERENCE_FILENAME_OVERRIDE)
 
-    lat_edges = centers_to_edges(lats)
-    lon_edges = centers_to_edges(lons)
-    values = np.where(values == 0, np.nan, values)
+    first_year, last_year = REFERENCE_FILE_YEARS
 
-    if lat_edges[0] > lat_edges[-1]:
-        lat_edges = lat_edges[::-1]
-        values = values[::-1, :]
-    if lon_edges[0] > lon_edges[-1]:
-        lon_edges = lon_edges[::-1]
-        values = values[:, ::-1]
+    if REFERENCE_DATASET == "senorge":
 
-    lon_edges_2d, lat_edges_2d = np.meshgrid(lon_edges, lat_edges)
-    cmap = plt.get_cmap(map_cmap).copy()
-    cmap.set_bad("white")
+        filename = (
 
-    mesh = axis.pcolormesh(
-        lon_edges_2d,
-        lat_edges_2d,
-        values,
-        cmap=cmap,
-        vmin=map_vmin,
-        vmax=map_vmax,
-        shading="auto",
-        transform=data_crs,
-    )
-    axis.add_geometries(
-        [boundary],
-        crs=data_crs,
-        facecolor="none",
-        edgecolor=catchment_boundary_color,
-        linewidth=catchment_boundary_width,
-        zorder=5,
-    )
-    axis.coastlines(resolution="10m", linewidth=map_coastline_width)
-    axis.add_feature(cfeature.BORDERS.with_scale("10m"), linewidth=map_border_width)
-    axis.set_extent(map_extent, crs=data_crs)
-    axis.set_title(map_title, loc="left", x=map_title_x, fontsize=title_fontsize)
-    return mesh
+            f"monthly_max_samples_{SENORGE_VARIABLE}_{X_DAYS}dayacc_"
 
+            f"{CATCHMENT}_{first_year}-{last_year}.nc"
 
-# =============================================================================
-# Panel (b): forecast sampling
-# =============================================================================
-
-def catchment_weighted_mean(ds, catchment_weight):
-    """Calculate catchment- and latitude-weighted mean precipitation in mm."""
-    if variable not in ds:
-        raise KeyError(
-            f"'{variable}' was not found in the forecast dataset. "
-            f"Available variables: {list(ds.data_vars)}"
         )
 
-    for dimension in ["latitude", "longitude"]:
-        if dimension not in ds[variable].dims:
-            raise ValueError(
-                f"'{variable}' does not contain the expected '{dimension}' dimension. "
-                f"Found dimensions: {ds[variable].dims}"
+        return Path(config.dirs["senorge_processed"]) / filename
+
+    filename = (
+
+        f"monthly_max_samples_{ERA5_VARIABLE}_{X_DAYS}dayacc_{CATCHMENT}_"
+
+        f"{first_year}-{last_year}.nc"
+
+    )
+
+    return Path(config.dirs["era5_processed"]) / filename
+
+
+def make_model_filename():
+
+    """Construct the compact model filename written by the sample-building script."""
+
+    if MODEL_FILENAME_OVERRIDE is not None:
+
+        return Path(MODEL_FILENAME_OVERRIDE)
+
+    stem = (
+
+        f"monthly_max_samples_{MODEL_VARIABLE}_{X_DAYS}dayacc_"
+
+        f"{get_model_file_id(CATCHMENT)}_{FORECAST_DATE_RANGE[0]}_{FORECAST_DATE_RANGE[1]}"
+
+    )
+
+    if MODEL_DATA_METHOD == "raw":
+
+        correction_label = "raw"
+
+    else:
+
+        correction_label = (
+
+            f"bc_{MODEL_DATA_METHOD}_{REFERENCE_DATASET}_"
+
+            f"{OBSERVATION_YEARS[0]}-{OBSERVATION_YEARS[-1]}"
+
+        )
+
+    return Path(config.dirs["s2s_processed"]) / f"{stem}_{correction_label}.nc"
+
+
+def make_figure_filename():
+
+    """Construct the two-panel output figure filename."""
+
+    model_label = "model-raw" if MODEL_DATA_METHOD == "raw" else f"model-bc-{MODEL_DATA_METHOD}"
+
+    hans_fit_label = "with-hans-fit" if INCLUDE_STORM_HANS_IN_FIT else "without-hans-fit"
+
+    return Path(config.dirs["fig"]) / "poster_figs/" / (
+
+        f"fig-04-{PLOT_METRIC}-{TOP_DISTRIBUTION}-{model_label}-"
+
+        f"{FORECAST_DATE_RANGE[0]}-{FORECAST_DATE_RANGE[-1]}-{REFERENCE_DATASET}-"
+
+        f"{OBSERVATION_YEARS[0]}-{OBSERVATION_YEARS[-1]}-{hans_fit_label}.png"
+
+    )
+
+
+# =============================================================================
+
+# Data reading
+
+# =============================================================================
+
+def read_reference_month(month):
+
+    """Read a complete reference-month sample and its two event thresholds."""
+
+    filename = make_reference_filename()
+
+    variable = get_reference_variable()
+
+    if not filename.is_file():
+
+        raise FileNotFoundError(f"Reference file not found: {filename}")
+
+    with xr.open_dataset(filename) as ds:
+
+        if variable not in ds:
+
+            raise KeyError(f"Variable '{variable}' was not found in {filename}.")
+
+        selected = ds[variable].sel(
+
+            year=slice(OBSERVATION_YEARS[0], OBSERVATION_YEARS[1]), month=month
+
+        ).load()
+
+        storm_hans_value = float(
+
+            ds[variable].sel(year=STORM_HANS_YEAR, month=STORM_HANS_MONTH).load().values
+
+        )
+
+    years = np.asarray(selected["year"].values)
+
+    values = np.asarray(selected.values, dtype=float)
+
+    finite = np.isfinite(values)
+
+    years, values = years[finite], values[finite]
+
+    if values.size < 10:
+
+        raise ValueError(f"Fewer than 10 finite {MONTH_NAMES[month - 1]} values remain.")
+
+    hans_in_observation_range = OBSERVATION_YEARS[0] <= STORM_HANS_YEAR <= OBSERVATION_YEARS[1]
+
+    record_mask = np.ones(values.size, dtype=bool)
+
+    if month == AUGUST and hans_in_observation_range:
+
+        record_mask &= years != STORM_HANS_YEAR
+
+    record_values = values[record_mask]
+
+    record_years = years[record_mask]
+
+    fit_mask = np.ones(values.size, dtype=bool)
+
+    if month == AUGUST and hans_in_observation_range and not INCLUDE_STORM_HANS_IN_FIT:
+
+        fit_mask &= years != STORM_HANS_YEAR
+
+    fit_values = values[fit_mask]
+
+    fit_years = years[fit_mask]
+
+    if fit_values.size < 10:
+
+        raise ValueError(
+
+            f"Fewer than 10 finite {MONTH_NAMES[month - 1]} values remain in the fit."
+
+        )
+
+    if record_values.size == 0:
+
+        raise ValueError(f"No values remain for the {MONTH_NAMES[month - 1]} record.")
+
+    record_index = int(np.argmax(record_values))
+
+    return {
+
+        "fit_values": fit_values,
+
+        "fit_years": fit_years,
+
+        "storm_hans_value": storm_hans_value,
+
+        "record_value": float(record_values[record_index]),
+
+        "record_year": int(record_years[record_index]),
+
+    }
+
+
+def read_model_month(month):
+
+    """Read one calendar-month model sample from sample_month(YYYYMM)."""
+
+    filename = make_model_filename()
+
+    variable = get_model_variable()
+
+    if not filename.is_file():
+
+        raise FileNotFoundError(f"Model file not found: {filename}")
+
+    with xr.open_dataset(filename, decode_timedelta=False) as ds:
+
+        if variable not in ds:
+
+            raise KeyError(
+
+                f"Variable '{variable}' was not found in {filename}. "
+
+                f"Available variables: {list(ds.data_vars)}"
+
             )
 
-    precipitation = xr.where(ds[variable] < 0, 0, ds[variable])
-    latitude_weight = np.cos(np.deg2rad(ds["latitude"]))
-    combined_weight = catchment_weight * latitude_weight
-    spatial_mean = precipitation.weighted(combined_weight).mean(["latitude", "longitude"])
-    return (spatial_mean * 1000.0).rename(variable)
+        if "sample_month" not in ds:
+
+            raise KeyError(f"Variable 'sample_month' was not found in {filename}.")
+
+        if set(ds[variable].dims) != {"number", "i_date"}:
+
+            raise ValueError(
+
+                f"'{variable}' must have dimensions ('number', 'i_date'); "
+
+                f"found {ds[variable].dims}."
+
+            )
+
+        if ds["sample_month"].dims != ("i_date",):
+
+            raise ValueError("'sample_month' must have dimension ('i_date',).")
+
+        calendar_month = ds["sample_month"] % 100
+
+        values = np.asarray(
+
+            ds[variable].where(calendar_month == month, drop=True).values, dtype=float
+
+        ).ravel()
+
+    values = values[np.isfinite(values)]
+
+    if values.size < 10:
+
+        raise ValueError(f"Fewer than 10 finite model values were found for month {month}.")
+
+    return values
 
 
-def calculate_accumulation(precipitation):
-    """Calculate trailing accumulation and assign ending lead days 1-46."""
-    if "time" not in precipitation.dims:
-        raise ValueError(
-            f"'{variable}' must contain a 'time' dimension; found {precipitation.dims}."
+def subsample_model_values(values, reference_size, random_seed):
+
+    """Optionally subsample model values to the reference sample size."""
+
+    if not SUBSAMPLE_MODEL_TO_REFERENCE_LENGTH:
+
+        return values
+
+    if values.size < reference_size:
+
+        raise ValueError("The model sample is smaller than the reference sample.")
+
+    rng = np.random.default_rng(random_seed)
+
+    return values[rng.choice(values.size, size=reference_size, replace=False)]
+
+# =============================================================================
+
+# Shared distribution methods
+
+# =============================================================================
+
+def genex_negative_log_likelihood(log_parameters, values):
+
+    """Return the GenEx negative log-likelihood."""
+
+    shape, scale = np.exp(log_parameters)
+
+    if shape <= 0 or scale <= 0 or np.any(values < 0):
+
+        return np.inf
+
+    z = values / scale
+
+    log_pdf = np.log(shape) - np.log(scale) - z + (shape - 1.0) * np.log(-np.expm1(-z))
+
+    return np.inf if not np.isfinite(log_pdf).all() else -np.sum(log_pdf)
+
+
+def fit_distribution(values, method, initial_parameters=None):
+
+    """Fit one supported extreme-value distribution."""
+
+    if method == "GEV":
+
+        parameters = genextreme.fit(values)
+
+    elif method == "Gumbel":
+
+        parameters = gumbel_r.fit(values)
+
+    elif method == "GenEx":
+
+        positive = values[values > 0]
+
+        if np.any(values < 0) or positive.size == 0:
+
+            raise ValueError("GenEx requires non-negative values with at least one positive value.")
+
+        initial_parameters = (
+
+            initial_parameters
+
+            if initial_parameters is not None
+
+            else (1.0, np.mean(positive))
+
         )
 
-    number_of_times = precipitation.sizes["time"]
-    if number_of_times != 46:
-        raise ValueError(
-            f"This schematic expects 46 raw forecast time steps, but found {number_of_times}."
+        result = minimize(
+
+            genex_negative_log_likelihood,
+
+            x0=np.log(initial_parameters),
+
+            args=(values,),
+
+            method="Nelder-Mead",
+
+            options={"maxiter": 5000},
+
         )
 
-    accumulated = precipitation.rolling(
-        time=accumulation_days, min_periods=accumulation_days
-    ).sum()
-    lead_days = xr.DataArray(
-        np.arange(1, 47, dtype="int64"),
-        dims=("time",),
-        coords={"time": accumulated["time"]},
-        name="lead_day",
+        if not result.success:
+
+            raise RuntimeError(f"GenEx fit failed: {result.message}")
+
+        parameters = tuple(np.exp(result.x))
+
+    else:
+
+        raise ValueError(f"Unsupported distribution: {method}")
+
+    if not np.isfinite(parameters).all() or parameters[-1] <= 0:
+
+        raise RuntimeError(f"{method} fit returned invalid parameters.")
+
+    return parameters
+
+
+def distribution_ppf(probabilities, parameters, method):
+
+    """Evaluate the fitted quantile function."""
+
+    if method == "GEV":
+
+        shape, location, scale = parameters
+
+        return genextreme.ppf(probabilities, shape, loc=location, scale=scale)
+
+    if method == "Gumbel":
+
+        location, scale = parameters
+
+        return gumbel_r.ppf(probabilities, loc=location, scale=scale)
+
+    shape, scale = parameters
+
+    return -scale * np.log1p(-np.power(probabilities, 1.0 / shape))
+
+
+def exceedance_probability(event_value, parameters, method):
+
+    """Return the fitted probability of exceeding one event value."""
+
+    if method == "GEV":
+
+        shape, location, scale = parameters
+
+        probability = genextreme.sf(event_value, shape, loc=location, scale=scale)
+
+    elif method == "Gumbel":
+
+        location, scale = parameters
+
+        probability = gumbel_r.sf(event_value, loc=location, scale=scale)
+
+    else:
+
+        shape, scale = parameters
+
+        probability = (
+
+            1.0 if event_value < 0
+
+            else 1.0 - (1.0 - np.exp(-event_value / scale)) ** shape
+
+        )
+
+    if not np.isfinite(probability):
+
+        raise RuntimeError(f"{method} produced a non-finite exceedance probability.")
+
+    return float(np.clip(probability, 0.0, 1.0))
+
+
+def simulate_distribution(parameters, method, sample_size, rng):
+
+    """Simulate from one fitted distribution."""
+
+    if method == "GEV":
+
+        shape, location, scale = parameters
+
+        return genextreme.rvs(
+
+            shape, loc=location, scale=scale, size=sample_size, random_state=rng
+
+        )
+
+    if method == "Gumbel":
+
+        location, scale = parameters
+
+        return gumbel_r.rvs(loc=location, scale=scale, size=sample_size, random_state=rng)
+
+    shape, scale = parameters
+
+    probabilities = rng.random(sample_size)
+
+    return -scale * np.log1p(-np.power(probabilities, 1.0 / shape))
+
+
+def make_bootstrap_sample(values, method, rng, fitted_parameters=None):
+
+    """Create one nonparametric or parametric bootstrap sample."""
+
+    if BOOTSTRAP_METHOD == "nonparametric":
+
+        return rng.choice(values, size=values.size, replace=True)
+
+    if fitted_parameters is None:
+
+        raise ValueError("Parametric bootstrap requires fitted parameters.")
+
+    return simulate_distribution(fitted_parameters, method, values.size, rng)
+
+
+def empirical_return_periods(values):
+
+    """Return Weibull empirical return periods and descending values."""
+
+    sorted_values = np.sort(values)[::-1]
+
+    ranks = np.arange(1, sorted_values.size + 1)
+
+    return (sorted_values.size + 1) / ranks, sorted_values
+
+
+def return_period_from_probability(probability):
+
+    """Convert annual exceedance probability to return period."""
+
+    return np.inf if probability <= 0 else 1.0 / probability
+
+
+def horizon_aep(probability):
+
+    """Convert annual exceedance probability to AEP_YEARS exceedance probability."""
+
+    probability = float(np.clip(probability, 0.0, 1.0))
+
+    return float(-np.expm1(AEP_YEARS * np.log1p(-probability)))
+
+
+# =============================================================================
+
+# Shared bootstrap analyses
+
+# =============================================================================
+
+class ProgressTracker:
+
+    """Print integer percentage completion for the requested bootstrap fits."""
+
+    def __init__(self, total):
+
+        self.total = total
+
+        self.completed = 0
+
+        self.last_percent = -1
+
+    def update(self):
+
+        """Advance one bootstrap fit and print when the integer percentage changes."""
+
+        self.completed += 1
+
+        percent = min(100, int(100 * self.completed / self.total))
+
+        if percent != self.last_percent:
+
+            print(f"Progress: {percent:3d}%", end="\r", flush=True)
+
+            self.last_percent = percent
+
+        if self.completed == self.total:
+
+            print()
+
+
+def make_return_period_grid():
+
+    """Return the return-period grid used by panels a-b."""
+
+    grid_min = max(RETURN_PERIOD_MIN, 1.0 + np.finfo(float).eps)
+
+    return np.geomspace(grid_min, RETURN_PERIOD_MAX, NUMBER_OF_RETURN_PERIODS)
+
+
+def bootstrap_distribution(values, method, random_seed, progress=None):
+
+    """Fit one distribution and create reusable bootstrap parameter sets."""
+
+    parameters = fit_distribution(values, method)
+
+    rng = np.random.default_rng(random_seed)
+
+    bootstrap_parameters = []
+
+    for _ in range(NUMBER_OF_BOOTSTRAPS):
+
+        try:
+
+            sample = make_bootstrap_sample(
+
+                values,
+
+                method,
+
+                rng,
+
+                fitted_parameters=parameters,
+
+            )
+
+            fitted = fit_distribution(
+
+                sample,
+
+                method,
+
+                initial_parameters=parameters if method == "GenEx" else None,
+
+            )
+
+            bootstrap_parameters.append(fitted)
+
+        except (RuntimeError, ValueError, FloatingPointError):
+
+            pass
+
+        finally:
+
+            if progress is not None:
+
+                progress.update()
+
+    minimum = int(np.ceil(MIN_SUCCESSFUL_BOOTSTRAP_FRACTION * NUMBER_OF_BOOTSTRAPS))
+
+    if len(bootstrap_parameters) < minimum:
+
+        raise RuntimeError(
+
+            f"Only {len(bootstrap_parameters)} of {NUMBER_OF_BOOTSTRAPS} "
+
+            f"{method} bootstrap fits succeeded."
+
+        )
+
+    return {
+
+        "parameters": parameters,
+
+        "bootstrap_parameters": bootstrap_parameters,
+
+    }
+
+
+def build_month_analysis(month, month_index, progress=None):
+    """Read one month and bootstrap the selected distribution for reference and model."""
+    reference = read_reference_month(month)
+    model_values = read_model_month(month)
+    model_values = subsample_model_values(
+        model_values,
+        reference["fit_values"].size,
+        RANDOM_SEED + 100 * month_index,
     )
-    return accumulated.assign_coords(lead_day=lead_days)
+    samples = {"reference": reference["fit_values"], "model": model_values}
+    bootstrap = {}
 
-
-def get_lead_groups():
-    """Return early and later accumulated ending-lead ranges."""
-    first_usable_lead = accumulation_days
-    later_start = 15 + accumulation_days
-    early = np.arange(first_usable_lead, later_start, dtype="int64")
-    later = np.arange(later_start, 47, dtype="int64")
-    return early, later
-
-
-def get_labelled_lead_days():
-    """Return lead days labelled on the x-axis."""
-    return np.arange(1, 47, x_label_interval, dtype="int64")
-
-
-def plot_forecast_panel(axis, accumulated):
-    """Plot the ensemble and one highlighted member with its later-period maximum."""
-    if "number" not in accumulated.dims:
-        raise ValueError(
-            f"'{variable}' must contain an ensemble 'number' dimension; "
-            f"found {accumulated.dims}."
+    for group_index, (group, values) in enumerate(samples.items()):
+        seed = (
+            RANDOM_SEED
+            + 10_000 * month_index
+            + 1_000 * group_index
+            + METHODS.index(TOP_DISTRIBUTION)
         )
-    if highlight_member_index >= accumulated.sizes["number"]:
-        raise ValueError(
-            f"highlight_member_index={highlight_member_index} is outside the available "
-            f"range 0-{accumulated.sizes['number'] - 1}."
+        bootstrap[(group, TOP_DISTRIBUTION)] = bootstrap_distribution(
+            values, TOP_DISTRIBUTION, seed, progress
         )
 
-    _, later_leads = get_lead_groups()
-    later = accumulated.where(accumulated["lead_day"].isin(later_leads), drop=True)
+    return {
+        "reference": reference,
+        "samples": samples,
+        "bootstrap": bootstrap,
+    }
 
-    for member_index in range(accumulated.sizes["number"]):
-        if member_index == highlight_member_index:
-            continue
-        member = accumulated.isel(number=member_index).squeeze(drop=True)
-        axis.plot(
-            member["time"].values,
-            member.values,
-            color=ensemble_color,
-            alpha=ensemble_alpha,
-            linewidth=ensemble_line_width,
-        )
+def evaluate_return_levels(values, fit, return_periods, method):
 
-    highlighted = accumulated.isel(number=highlight_member_index).squeeze(drop=True)
-    highlighted_later = later.isel(number=highlight_member_index).squeeze(drop=True)
-    axis.plot(
-        highlighted["time"].values,
-        highlighted.values,
-        color=highlight_color,
-        linewidth=highlight_line_width,
-        zorder=4,
+    """Evaluate fitted and bootstrap return-level curves."""
+
+    probabilities = 1.0 - 1.0 / return_periods
+
+    fitted_levels = distribution_ppf(probabilities, fit["parameters"], method)
+
+    bootstrap_levels = np.array(
+
+        [
+
+            distribution_ppf(probabilities, parameters, method)
+
+            for parameters in fit["bootstrap_parameters"]
+
+        ]
+
     )
 
-    later_values = np.asarray(highlighted_later.values, dtype=float)
-    if np.isfinite(later_values).any():
-        maximum_index = int(np.nanargmax(later_values))
-        axis.scatter(
-            highlighted_later["time"].values[maximum_index],
-            later_values[maximum_index],
-            marker="o",
-            s=maximum_marker_size,
-            color=highlight_color,
-            edgecolors="none",
-            zorder=5,
+    alpha = 1.0 - CONFIDENCE_LEVEL
+
+    lower = np.percentile(bootstrap_levels, 100.0 * alpha / 2.0, axis=0)
+
+    upper = np.percentile(
+
+        bootstrap_levels,
+
+        100.0 * (1.0 - alpha / 2.0),
+
+        axis=0,
+
+    )
+
+    empirical_rp, empirical_values = empirical_return_periods(values)
+
+    return {
+
+        "values": values,
+
+        "parameters": fit["parameters"],
+
+        "fitted_levels": fitted_levels,
+
+        "lower": lower,
+
+        "upper": upper,
+
+        "empirical_rp": empirical_rp,
+
+        "empirical_values": empirical_values,
+
+    }
+
+
+def analyse_top_month(month_analysis, return_periods):
+
+    """Prepare reference and model return-level analyses for one month."""
+
+    return {
+
+        "reference": month_analysis["reference"],
+
+        "reference_analysis": evaluate_return_levels(
+
+            month_analysis["samples"]["reference"],
+
+            month_analysis["bootstrap"][("reference", TOP_DISTRIBUTION)],
+
+            return_periods,
+
+            TOP_DISTRIBUTION,
+
+        ),
+
+        "model_analysis": evaluate_return_levels(
+
+            month_analysis["samples"]["model"],
+
+            month_analysis["bootstrap"][("model", TOP_DISTRIBUTION)],
+
+            return_periods,
+
+            TOP_DISTRIBUTION,
+
+        ),
+
+    }
+
+# =============================================================================
+
+# Plot formatting
+
+# =============================================================================
+
+def return_period_to_aep_percent(return_period):
+
+    """Convert a return period to the configured multi-year AEP percentage."""
+
+    annual_probability = 1.0 / return_period
+
+    probability = -np.expm1(AEP_YEARS * np.log1p(-annual_probability))
+
+    return 100.0 * probability
+
+
+def top_x_values(return_periods):
+
+    """Convert return periods to the selected top-row x coordinate."""
+
+    if PLOT_METRIC == "return_period":
+
+        return return_periods
+
+    return return_period_to_aep_percent(return_periods)
+
+
+def format_power_of_ten(value, _position):
+
+    """Format positive logarithmic ticks as powers of ten."""
+
+    if value <= 0:
+
+        return ""
+
+    exponent = np.log10(value)
+
+    rounded_exponent = int(np.round(exponent))
+
+    if not np.isclose(exponent, rounded_exponent, atol=1e-10):
+
+        return ""
+
+    return rf"$10^{{{rounded_exponent}}}$"
+
+
+def format_metric_return_period(value, _position):
+
+    """Format lower-panel return periods and mark the configured upper limit."""
+
+    if value <= 0:
+
+        return ""
+
+    exponent = np.log10(value)
+
+    rounded_exponent = int(np.round(exponent))
+
+    if not np.isclose(exponent, rounded_exponent, atol=1e-10):
+
+        return ""
+
+    if np.isclose(value, RETURN_PERIOD_MAX):
+
+        return rf"$>10^{{{rounded_exponent}}}$"
+
+    return rf"$10^{{{rounded_exponent}}}$"
+
+
+def get_aep_limits():
+
+    """Return AEP limits equivalent to the shared return-period range."""
+
+    lower = return_period_to_aep_percent(RETURN_PERIOD_MAX)
+
+    upper = return_period_to_aep_percent(RETURN_PERIOD_MIN)
+
+    return lower, upper
+
+
+def format_top_axis(axis):
+
+    """Format a return-level panel."""
+
+    axis.set_xscale("log")
+
+    if PLOT_METRIC == "return_period":
+
+        axis.set_xlim(RETURN_PERIOD_MIN, RETURN_PERIOD_MAX)
+
+        axis.set_xlabel("Return period [years]", fontsize=AXIS_LABELSIZE)
+
+        axis.xaxis.set_major_formatter(FuncFormatter(format_power_of_ten))
+
+    else:
+
+        aep_min, aep_max = get_aep_limits()
+
+        axis.set_xlim(aep_max, aep_min)
+
+        axis.set_xlabel(
+
+            f"{AEP_YEARS}-year exceedance probability [%]",
+
+            fontsize=AXIS_LABELSIZE,
+
         )
 
-    all_dates = accumulated["time"].values.astype("datetime64[ns]")
-    initialization_date = np.datetime64(forecast_date, "ns")
-    later_start_date = later["time"].values[0]
-    later_end_date = later["time"].values[-1]
+    axis.set_ylim(PRECIPITATION_YMIN, PRECIPITATION_YMAX)
 
-    axis.axvspan(
-        later_start_date,
-        later_end_date,
-        color=later_group_shading_color,
-        alpha=later_group_shading_alpha,
-        zorder=0,
-    )
-    axis.set_xlim(initialization_date, all_dates[-1])
-
-    labelled_leads = get_labelled_lead_days()
-    labelled_dates = all_dates[labelled_leads - 1]
-    axis.set_xticks(all_dates, minor=True)
-    axis.set_xticks(labelled_dates)
-    axis.xaxis.set_major_formatter(mdates.DateFormatter("%d %b"))
-    axis.tick_params(axis="x", which="minor", length=3.5, labelbottom=False)
-    axis.tick_params(
-        axis="x",
-        which="major",
-        length=6.0,
-        labelsize=tick_label_fontsize,
-        rotation=x_label_rotation,
-    )
-
-    for label in axis.get_xticklabels():
-        label.set_horizontalalignment("right")
-        label.set_rotation_mode("anchor")
-
-    axis.set_title(forecast_title, loc="left", fontsize=title_fontsize)
-    axis.set_xlabel("Date [day]", fontsize=axis_label_fontsize)
     axis.set_ylabel(
-        f"{accumulation_days}-day accumulated precipitation [mm]",
-        fontsize=axis_label_fontsize,
-    )
-    axis.tick_params(axis="y", labelsize=tick_label_fontsize)
 
-    legend_handles = [
-        Line2D(
-            [0],
-            [0],
-            color=ensemble_color,
-            alpha=ensemble_alpha,
-            linewidth=ensemble_line_width,
-            label="Forecast members",
-        ),
-        Patch(
-            facecolor=later_group_shading_color,
-            edgecolor="none",
-            alpha=later_group_shading_alpha,
-            label="Sampling period (leads 17-46)",
-        ),
-        Line2D(
-            [0],
-            [0],
-            color=highlight_color,
-            linewidth=highlight_line_width,
-            marker="o",
-            markersize=np.sqrt(maximum_marker_size),
-            label="Ensemble member maximum",
-        ),
-    ]
-    axis.legend(
-        handles=legend_handles,
-        frameon=False,
-        fontsize=legend_fontsize,
-        loc="upper left",
+        f"Monthly maximum {X_DAYS}-day precipitation [mm]",
+
+        fontsize=AXIS_LABELSIZE,
+
     )
+
+    axis.tick_params(axis="both", labelsize=TICK_LABELSIZE)
+
     axis.spines["top"].set_visible(False)
+
     axis.spines["right"].set_visible(False)
-    axis.set_ylim(forecast_y_limits)
+
+
+def plot_top_panel(axis, panel_label, month, result, return_periods, show_legend=False):
+
+    """Plot one return-level distribution panel with reference data on top."""
+
+    x_values = top_x_values(return_periods)
+
+    reference_analysis = result["reference_analysis"]
+
+    model_analysis = result["model_analysis"]
+
+    for analysis, color, zorder in [
+
+        (model_analysis, MODEL_COLOR, 2),
+
+        (reference_analysis, OBSERVATION_COLOR, 3),
+
+    ]:
+
+        axis.fill_between(
+
+            x_values,
+
+            analysis["lower"],
+
+            analysis["upper"],
+
+            color=color,
+
+            alpha=CONFIDENCE_ALPHA,
+
+            linewidth=0,
+
+            zorder=zorder,
+
+        )
+
+        axis.plot(
+
+            x_values,
+
+            analysis["fitted_levels"],
+
+            color=color,
+
+            linewidth=CURVE_LINEWIDTH,
+
+            zorder=zorder,
+
+        )
+
+        axis.scatter(
+
+            top_x_values(analysis["empirical_rp"]),
+
+            analysis["empirical_values"],
+
+            facecolors="none",
+
+            edgecolors=color,
+
+            linewidths=MARKER_LINEWIDTH,
+
+            s=MARKER_SIZE,
+
+            zorder=zorder,
+
+        )
+
+    reference = result["reference"]
+
+    axis.axhline(
+
+        reference["storm_hans_value"],
+
+        color=STORM_HANS_COLOR,
+
+        linestyle=STORM_HANS_LINESTYLE,
+
+        linewidth=REFERENCE_LINEWIDTH,
+
+        zorder=4,
+
+    )
+
+    axis.axhline(
+
+        reference["record_value"],
+
+        color=RECORD_COLOR,
+
+        linestyle=RECORD_LINESTYLE,
+
+        linewidth=REFERENCE_LINEWIDTH,
+
+        zorder=4,
+
+    )
+
+    format_top_axis(axis)
+
+    axis.set_title(
+
+        f"{panel_label}) {MONTH_NAMES[month - 1]}: {TOP_DISTRIBUTION} fit",
+
+        loc="left",
+
+        fontsize=TITLE_FONTSIZE,
+
+        fontweight="normal",
+
+    )
+
+    if show_legend:
+
+        handles = [
+
+            Line2D(
+
+                [0],
+
+                [0],
+
+                color=OBSERVATION_COLOR,
+
+                linewidth=CURVE_LINEWIDTH,
+
+                label=get_reference_label(),
+
+            ),
+
+            Line2D(
+
+                [0],
+
+                [0],
+
+                color=MODEL_COLOR,
+
+                linewidth=CURVE_LINEWIDTH,
+
+                label=get_model_label(),
+
+            ),
+
+            Line2D(
+
+                [0],
+
+                [0],
+
+                color=STORM_HANS_COLOR,
+
+                linestyle=STORM_HANS_LINESTYLE,
+
+                linewidth=REFERENCE_LINEWIDTH,
+
+                label="Storm Hans August 2023",
+
+            ),
+
+            Line2D(
+
+                [0],
+
+                [0],
+
+                color=RECORD_COLOR,
+
+                linestyle=RECORD_LINESTYLE,
+
+                linewidth=REFERENCE_LINEWIDTH,
+
+                label=get_record_label(),
+
+            ),
+
+        ]
+
+        axis.legend(
+
+            handles=handles,
+
+            frameon=False,
+
+            fontsize=LEGEND_FONTSIZE,
+
+            loc="upper left",
+
+        )
 
 
 # =============================================================================
-# Figure assembly
+# Reporting
 # =============================================================================
 
-def make_figure(weights, boundary, accumulated):
+def print_summary(top_results):
+    """Print the key input and threshold information."""
+    print("Selected settings")
+    print("-----------------")
+    print(f"Reference dataset: {get_reference_label()}")
+    print(f"Model data:        {MODEL_DATA_METHOD}")
+    print(f"Model file:        {make_model_filename()}")
+    print(f"Reference file:    {make_reference_filename()}")
+    print(f"Top distribution:  {TOP_DISTRIBUTION}")
+    print(f"Metric:            {PLOT_METRIC}")
+    print(f"Bootstrap method:  {BOOTSTRAP_METHOD}")
+    print(f"Bootstraps:        {NUMBER_OF_BOOTSTRAPS}")
+    print(f"Include Hans fit:  {INCLUDE_STORM_HANS_IN_FIT}")
+
+    for month in PANEL_MONTHS:
+        reference = top_results[month]["reference"]
+        hans_in_observation_range = (
+            OBSERVATION_YEARS[0] <= STORM_HANS_YEAR <= OBSERVATION_YEARS[1]
+        )
+        record_range = (
+            f"{OBSERVATION_YEARS[0]}-{STORM_HANS_YEAR - 1}"
+            if month == AUGUST and hans_in_observation_range
+            else f"{OBSERVATION_YEARS[0]}-{OBSERVATION_YEARS[1]}"
+        )
+
+        print()
+        print(f"{MONTH_NAMES[month - 1]} reference fit: {reference['fit_values'].size} values")
+        print(
+            f"{MONTH_NAMES[month - 1]} record {record_range}: "
+            f"{reference['record_value']:.3f} mm ({reference['record_year']})"
+        )
+        print(f"Storm Hans threshold: {reference['storm_hans_value']:.3f} mm")
+
+
+# =============================================================================
+# Figure
+# =============================================================================
+
+def make_figure(top_results, return_periods):
     """Create panels (a) and (b) at their original physical dimensions."""
-    map_projection = ccrs.LambertConformal(
-        central_longitude=map_central_lon,
-        central_latitude=map_central_lat,
-    )
-    data_crs = ccrs.PlateCarree()
-
-    figure = plt.figure(figsize=(figure_width, figure_height))
-    grid = figure.add_gridspec(
-        1,
-        2,
-        width_ratios=[1, 1],
-        wspace=figure_wspace,
+    plt.rcParams.update(
+        {
+            "font.family": "sans-serif",
+            "font.size": TICK_LABELSIZE,
+            "axes.linewidth": 0.8,
+            "xtick.major.width": 0.8,
+            "ytick.major.width": 0.8,
+            "pdf.fonttype": 42,
+            "ps.fonttype": 42,
+        }
     )
 
-    map_container = figure.add_subplot(grid[0, 0])
-    forecast_axis = figure.add_subplot(grid[0, 1])
-    map_container.set_axis_off()
+    figure, axes = plt.subplots(
+        1, 2, figsize=(FIG_WIDTH_IN, FIG_HEIGHT_IN), constrained_layout=True
+    )
+    plot_top_panel(
+        axes[0], "a", AUGUST, top_results[AUGUST], return_periods, show_legend=True
+    )
+    plot_top_panel(axes[1], "b", MAY, top_results[MAY], return_periods)
 
-    container_position = map_container.get_position()
-    map_left = container_position.x0 + map_inset_bounds[0] * container_position.width
-    map_bottom = container_position.y0 + map_inset_bounds[1] * container_position.height
-    map_width = map_inset_bounds[2] * container_position.width
-    map_height = map_inset_bounds[3] * container_position.height
+    if WRITE_TO_FILE:
+        filename = make_figure_filename()
+        filename.parent.mkdir(parents=True, exist_ok=True)
+        figure.savefig(filename, dpi=FIGURE_DPI, bbox_inches="tight", facecolor="white")
+        print("Wrote:", filename)
 
-    map_axis = figure.add_axes(
-        [map_left, map_bottom, map_width, map_height],
-        projection=map_projection,
-    )
-    mesh = plot_catchment_panel(map_axis, weights, boundary, data_crs)
-    plot_forecast_panel(forecast_axis, accumulated)
+    if SHOW_FIGURE:
+        plt.show()
 
-    colorbar_left = (
-        container_position.x0 + map_colorbar_bounds[0] * container_position.width
-    )
-    colorbar_bottom = (
-        container_position.y0 + map_colorbar_bounds[1] * container_position.height
-    )
-    colorbar_width = map_colorbar_bounds[2] * container_position.width
-    colorbar_height = map_colorbar_bounds[3] * container_position.height
-
-    colorbar_axis = figure.add_axes(
-        [colorbar_left, colorbar_bottom, colorbar_width, colorbar_height]
-    )
-    colorbar = figure.colorbar(mesh, cax=colorbar_axis, orientation="vertical")
-    colorbar.set_label(colorbar_label, fontsize=axis_label_fontsize)
-    colorbar.ax.yaxis.set_label_position("left")
-    colorbar.ax.yaxis.set_ticks_position("left")
-    colorbar.ax.tick_params(
-        axis="y",
-        labelsize=tick_label_fontsize,
-        labelleft=True,
-        labelright=False,
-    )
-    return figure
+    plt.close(figure)
 
 
 # =============================================================================
@@ -524,39 +1476,25 @@ def make_figure(weights, boundary, accumulated):
 # =============================================================================
 
 def main():
-    """Read the map and forecast data and make panels (a) and (b)."""
-    validate_user_settings()
+    """Run the two-panel May/August return-level analysis."""
+    validate_settings()
+    return_periods = make_return_period_grid()
+    total_bootstraps = len(PANEL_MONTHS) * 2 * NUMBER_OF_BOOTSTRAPS
+    progress = ProgressTracker(total_bootstraps)
 
-    filename_forecast = find_forecast_file()
-    print("Forecast initialization:", forecast_date)
-    print("Forecast file:", filename_forecast)
-    print("Catchment weights:", filename_weights)
-    print("Catchment boundary:", filename_catchment)
+    print("Running bootstrap fits...")
+    print("Progress:   0%", end="\r", flush=True)
+    month_analyses = {
+        month: build_month_analysis(month, index, progress)
+        for index, month in enumerate(PANEL_MONTHS)
+    }
+    top_results = {
+        month: analyse_top_month(month_analyses[month], return_periods)
+        for month in PANEL_MONTHS
+    }
 
-    weights = load_catchment_weights()
-    boundary = load_catchment_boundary()
-
-    with xr.open_dataset(filename_forecast) as opened:
-        forecast_ds = opened.load()
-
-    precipitation = catchment_weighted_mean(forecast_ds, weights)
-    accumulated = calculate_accumulation(precipitation)
-    figure = make_figure(weights, boundary, accumulated)
-
-    if write2file:
-        filename_out.parent.mkdir(parents=True, exist_ok=True)
-        figure.savefig(
-            filename_out,
-            dpi=figure_dpi,
-            bbox_inches="tight",
-            facecolor="white",
-        )
-        print("Wrote:", filename_out)
-
-    if show_figure:
-        plt.show()
-
-    plt.close(figure)
+    print_summary(top_results)
+    make_figure(top_results, return_periods)
 
 
 if __name__ == "__main__":
