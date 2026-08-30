@@ -97,7 +97,7 @@ original_figure_height = 10
 original_figure_hspace = 0.35
 figure_height = original_figure_height / (2 + original_figure_hspace)
 figure_dpi = 300
-figure_wspace = 0.0
+figure_wspace = 0.05
 
 title_fontsize = 12
 axis_label_fontsize = 11
