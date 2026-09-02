@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """
 Create calendar-month S2S precipitation-maximum samples, with optional MM correction.
 
