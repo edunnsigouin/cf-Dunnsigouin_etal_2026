@@ -1,31 +1,24 @@
 #!/usr/bin/env python3
 """
 Combined Storm Hans figure.
-
 Figure idea
 -----------
 Panels a-d are map views of four selected Storm Hans dates.
-
 Each map shows:
     - S2S daily accumulated precipitation as shading;
-    - S2S mean sea level pressure as labelled grey contours;
+    - optional S2S mean sea level pressure as labelled grey contours;
     - the selected catchment boundary in red.
-
 Panel e is a catchment-mean precipitation time series over the event period.
-
 It shows:
     - the full S2S forecast ensemble in grey;
     - the wettest forecast ensemble member highlighted in green;
         - seNorge Storm Hans precipitation in red;
     - the forecast initialization date as a vertical dashed line.
-
 Together, panels a-d show the spatial weather evolution, while panel e shows
 how catchment-mean precipitation evolved through time for the forecast and
 the seNorge observational reference dataset.
 """
-
 from pathlib import Path
-
 import cartopy.crs as ccrs
 import geopandas as gpd
 import matplotlib.dates as mdates
@@ -36,45 +29,36 @@ import xarray as xr
 from matplotlib.gridspec import GridSpec
 from matplotlib.lines import Line2D
 from shapely.geometry import MultiPolygon, Polygon
-
 from Dunnsigouin_etal_2026 import config, misc
-
 
 # =============================================================================
 # 1. User settings
+
 # =============================================================================
-
 CATCHMENT_NAME = "drammen"  # options: "drammen", "glomma"
-
 FORECAST_DATE = "2023-08-05"
-ENSEMBLE_MEMBER = 48
-
 EVENT_DATES = [
     "2023-08-06",
     "2023-08-07",
     "2023-08-08",
     "2023-08-09",
 ]
-
 TIMESERIES_N_DAYS_BEFORE = 3
 TIMESERIES_M_DAYS_LEAD = 6
-
+PLOT_MSL_CONTOURS = True
 WRITE_TO_FILE = True
 
 
 # =============================================================================
 # 2. Data settings
+
 # =============================================================================
-
 MODEL_TYPE = "forecast"
-
 S2S_GRID = "0.25x0.25"
 ERA5_LAND_GRID = "0.1x0.1"
-
 # Map-panel variables
 MAP_PRECIP_VAR = "tp24"
 MAP_MSL_VAR = "msl"
-
 # Panel e precipitation variables
 PRECIP_FORECAST_VAR = "tp24"
 PRECIP_ERA5_VAR = "tp24"
@@ -84,52 +68,43 @@ PRECIP_ACCUMULATION_DAYS = 1
 
 # =============================================================================
 # 3. Paths
-# =============================================================================
 
+# =============================================================================
 PATH_OUT = Path(config.dirs["fig"])
 PATH_CATCHMENT = Path(config.dirs["nve"])
-
 S2S_BASE_DIR = Path("/nird/datapeak/NS9873K/etdu/raw/s2s/mars/ecmwf")
-
 PRECIP_FORECAST_FILE = (
     Path(config.dirs["s2s_forecast_daily"])
     / PRECIP_FORECAST_VAR
     / f"{PRECIP_FORECAST_VAR}_{S2S_GRID}_{FORECAST_DATE}.nc"
 )
-
 PRECIP_ERA5_PATH = Path(config.dirs["era5_continuous_daily"]) / PRECIP_ERA5_VAR
 PRECIP_ERA5_FILE_PATTERN = f"{PRECIP_ERA5_VAR}_{S2S_GRID}" + "_{year}.nc"
 PRECIP_ERA5_DOMAIN = "norway"
-
 PRECIP_SENORGE_PATH = (
     Path(config.dirs["senorge_continuous_daily"])
     / PRECIP_SENORGE_VAR
 )
 PRECIP_SENORGE_FILE_PATTERN = f"{PRECIP_SENORGE_VAR}" + "_{year}.nc"
-
 OUTPUT_FILENAME = PATH_OUT / "fig-06.png"
 
 
 # =============================================================================
 # 4. Figure settings
-# =============================================================================
 
+# =============================================================================
 FIG_WIDTH_IN = 9.4
 FIG_HEIGHT_IN = 13.4
-
 MAP_EXTENT = [-10, 25, 50, 70]
 MAP_WSPACE = 0.02
 MAP_HSPACE = 0.12
-
 CENTRAL_LON = 10.0
 CENTRAL_LAT = 62.0
-
 TICK_LABELSIZE = 12
 AXIS_LABELSIZE = 11
 TITLE_FONTSIZE = 13
 CONTOUR_LABELSIZE = 9
 LEGEND_FONTSIZE = 9
-
 DATE_TICK_FORMAT = "%d %b"
 DATE_TICK_INTERVAL_DAYS = 1
 DATE_TICK_ROTATION = 30
@@ -137,21 +112,18 @@ DATE_TICK_ROTATION = 30
 
 # =============================================================================
 # 5. Plot styling
-# =============================================================================
 
+# =============================================================================
 PRECIP_LEVELS = np.arange(5, 65, 5)
 PRECIP_ZERO_THRESHOLD = 5.0
 PRECIP_CMAP = plt.get_cmap("GnBu").copy()
 PRECIP_CMAP.set_under("white")
-
 MSL_CONTOUR_LEVELS = np.arange(975, 1045, 5)
 MSL_CONTOUR_COLOR = "0.7"
 MSL_CONTOUR_LINEWIDTH = 1.5
-
 CATCHMENT_EDGE_COLOR = "red"
 CATCHMENT_LINEWIDTH = 1.0
 CATCHMENT_CRS_IF_MISSING = "EPSG:4326"
-
 PRECIP_ENSEMBLE_COLOR = "0.7"
 PRECIP_ENSEMBLE_LINEWIDTH = 1.0
 PRECIP_ENSEMBLE_ALPHA = 0.6
@@ -159,7 +131,6 @@ PRECIP_HIGHLIGHT_COLOR = "tab:green"
 PRECIP_ERA5_COLOR = "tab:blue"
 PRECIP_SENORGE_COLOR = "tab:red"
 PRECIP_LINEWIDTH = 2.5
-
 INITIALIZATION_LINE_COLOR = "k"
 INITIALIZATION_LINE_WIDTH = 1.2
 INITIALIZATION_LINE_STYLE = "--"
@@ -167,8 +138,8 @@ INITIALIZATION_LINE_STYLE = "--"
 
 # =============================================================================
 # 6. Catchment metadata
-# =============================================================================
 
+# =============================================================================
 CATCHMENTS = {
     "drammen": {
         "filename": "catchment_nve_regine_drammen.geojson",
@@ -182,27 +153,25 @@ CATCHMENTS = {
     },
 }
 
-
 # =============================================================================
 # 7. General helper functions
+
 # =============================================================================
+
 
 def get_catchment_settings(catchment_name):
     """Return settings for the selected catchment."""
-
     if catchment_name not in CATCHMENTS:
         valid_names = ", ".join(CATCHMENTS)
         raise ValueError(
             f"Unknown catchment '{catchment_name}'. "
             f"Valid options are: {valid_names}."
         )
-
     return CATCHMENTS[catchment_name]
 
 
 def make_s2s_file(variable):
     """Create path to one S2S daily forecast file."""
-
     return (
         S2S_BASE_DIR
         / MODEL_TYPE
@@ -216,9 +185,7 @@ def make_s2s_file(variable):
 
 def make_era5_weights_file(catchment_name):
     """Return the ERA5/S2S-grid catchment-weight file."""
-
     catchment = get_catchment_settings(catchment_name)
-
     return (
         PATH_CATCHMENT
         / f"weights_catchment_{catchment['weights_id']}_era5_{S2S_GRID}.nc"
@@ -227,9 +194,7 @@ def make_era5_weights_file(catchment_name):
 
 def make_senorge_weights_file(catchment_name):
     """Return the seNorge-grid catchment-weight file."""
-
     catchment = get_catchment_settings(catchment_name)
-
     return (
         PATH_CATCHMENT
         / f"weights_catchment_{catchment['weights_id']}_senorge.nc"
@@ -238,57 +203,44 @@ def make_senorge_weights_file(catchment_name):
 
 def get_time_coord_name(da):
     """Return the name of the time coordinate."""
-
     for name in ["time", "valid_time"]:
         if name in da.dims or name in da.coords:
             return name
-
     raise ValueError("Could not identify time coordinate.")
 
 
 def get_member_coord_name(da):
     """Return the ensemble member coordinate name."""
-
     for name in ["number", "member", "ensemble_member", "realization"]:
         if name in da.dims or name in da.coords:
             return name
-
     raise ValueError("Could not identify ensemble member coordinate.")
 
 
 def get_lon_lat(da):
     """Return longitude and latitude coordinates."""
-
     lon = da["longitude"] if "longitude" in da.coords else da["lon"]
     lat = da["latitude"] if "latitude" in da.coords else da["lat"]
-
     return lon, lat
 
 
 def centers_to_edges(centers):
     """Convert one-dimensional grid-cell centers to grid-cell edges."""
-
     centers = np.asarray(centers)
-
     if centers.ndim != 1:
         raise ValueError("centers must be one-dimensional.")
-
     if centers.size < 2:
         raise ValueError("At least two center points are needed to infer edges.")
-
     edges = np.empty(centers.size + 1)
     edges[1:-1] = 0.5 * (centers[:-1] + centers[1:])
     edges[0] = centers[0] - 0.5 * (centers[1] - centers[0])
     edges[-1] = centers[-1] + 0.5 * (centers[-1] - centers[-2])
-
     return edges
 
 
 def check_dims(da, expected_dims, name):
     """Check that required dimensions are present."""
-
     missing = [dim for dim in expected_dims if dim not in da.dims]
-
     if missing:
         raise ValueError(
             f"{name} is missing dimensions {missing}. "
@@ -298,148 +250,114 @@ def check_dims(da, expected_dims, name):
 
 def round_time_to_nearest_day(da):
     """Round timestamps to the nearest calendar day."""
-
     time_name = get_time_coord_name(da)
     rounded_time = pd.to_datetime(da[time_name].values).round("D")
-
     return da.assign_coords({time_name: rounded_time})
 
 
 def shift_time_back_one_day(da):
     """Shift timestamps one day earlier."""
-
     time_name = get_time_coord_name(da)
     shifted_time = pd.to_datetime(da[time_name].values) - pd.Timedelta(days=1)
-
     return da.assign_coords({time_name: shifted_time})
 
 
 def subset_to_period(da, start_date, end_date):
     """Subset a DataArray to a date period."""
-
     time_name = get_time_coord_name(da)
-
     return da.sel({time_name: slice(start_date, end_date)})
 
 
 def get_plot_period(forecast_date, n_days_before, m_days_lead, x_days=1):
     """
     Return initialization date, plot window, loading window, and years.
-
     The loading window is wider than the plot window so that rolling
     accumulations can be calculated safely.
     """
-
     init_date = pd.to_datetime(forecast_date)
-
     plot_start = init_date - pd.Timedelta(days=n_days_before)
     plot_end = init_date + pd.Timedelta(days=m_days_lead)
-
     load_start = plot_start - pd.Timedelta(days=x_days + 1)
     load_end = plot_end + pd.Timedelta(days=x_days + 1)
-
     years = np.arange(load_start.year, load_end.year + 1)
-
     return init_date, plot_start, plot_end, load_start, load_end, years
 
 
 def remove_era5_ensemble_dimension_if_present(ds):
     """Remove unnecessary ERA5 ensemble coordinate if present."""
-
     return ds.drop_vars("number", errors="ignore")
-
 
 # =============================================================================
 # 8. Unit handling
+
 # =============================================================================
+
 
 def standardize_precipitation_units(da, variable_name):
     """Convert precipitation to millimetres when needed."""
-
     units = str(da.attrs.get("units", "")).strip().lower()
-
     if variable_name == "tp24" or units in {"m", "meter", "metre"}:
         da = da * 1000.0
         da.attrs["units"] = "mm"
-
     elif units in {"kg/m^2", "kg/m2", "kg m-2", "mm", "mm/day", "mm d-1"}:
         da.attrs["units"] = "mm"
-
     return da
 
 
 def load_weights(filename, spatial_dims):
     """Load predefined catchment weights."""
-
     filename = Path(filename)
-
     if not filename.exists():
         raise FileNotFoundError(f"Catchment weights not found: {filename}")
-
     with xr.open_dataset(filename) as ds:
         if "catchment_weight" not in ds:
             raise KeyError(
                 f"'catchment_weight' not found in {filename}. "
                 f"Available variables: {list(ds.data_vars)}"
             )
-
         weights = ds["catchment_weight"].astype("float32").load()
-
     weights.name = "catchment_weight"
-
     check_dims(
         da=weights,
         expected_dims=spatial_dims,
         name="Catchment weights",
     )
-
     return weights
 
 
 def align_weights_to_data_grid(da, weights):
     """
     Align two-dimensional catchment weights to the spatial grid of the data.
-
     The data may also have non-spatial dimensions such as time or ensemble member.
     """
-
     spatial_dims = tuple(weights.dims)
-
     grid_template = da
-
     for dim in da.dims:
         if dim not in spatial_dims:
             grid_template = grid_template.isel({dim: 0}, drop=True)
-
     weights_on_grid = weights.reindex_like(grid_template)
-
     if weights_on_grid.shape != grid_template.shape:
         raise ValueError(
             f"Weights shape {weights_on_grid.shape} does not match "
             f"data grid shape {grid_template.shape}."
         )
-
     if np.isfinite(weights_on_grid).sum().item() == 0:
         raise ValueError(
             "All aligned catchment weights are NaN. "
             "This usually means the weight coordinates and data coordinates "
             "do not overlap."
         )
-
     return weights_on_grid
 
 
 def catchment_weighted_mean(da, weights, spatial_dims, output_name):
     """Calculate catchment-weighted spatial mean."""
-
     weights_on_grid = align_weights_to_data_grid(da, weights)
-
     valid = (
         np.isfinite(da)
         & np.isfinite(weights_on_grid)
         & (weights_on_grid > 0)
     )
-
     weighted_sum = (
         da.where(valid)
         * weights_on_grid.where(valid)
@@ -447,184 +365,147 @@ def catchment_weighted_mean(da, weights, spatial_dims, output_name):
         dim=spatial_dims,
         skipna=True,
     )
-
     weight_sum = weights_on_grid.where(valid).sum(
         dim=spatial_dims,
         skipna=True,
     )
-
     out = weighted_sum / weight_sum
     out.name = output_name
     out.attrs["units"] = da.attrs.get("units", "")
-
     return out
 
 
 def trailing_xday_accumulation(da, x_days):
     """Calculate trailing X-day accumulation."""
-
     accumulated = (
         da
         .rolling(time=x_days, min_periods=x_days)
         .sum()
         .dropna("time", how="any")
     )
-
     accumulated.name = f"{x_days}day_accumulation"
     accumulated.attrs["units"] = da.attrs.get("units", "mm")
-
     return accumulated
-
 
 # =============================================================================
 # 10. Panel e: precipitation time-series data
+
 # =============================================================================
+
 
 def load_precip_forecast():
     """Load S2S forecast precipitation."""
-
     if not PRECIP_FORECAST_FILE.exists():
         raise FileNotFoundError(f"File not found: {PRECIP_FORECAST_FILE}")
-
     with xr.open_dataset(PRECIP_FORECAST_FILE) as ds:
         if PRECIP_FORECAST_VAR not in ds:
             raise KeyError(
                 f"'{PRECIP_FORECAST_VAR}' not found in {PRECIP_FORECAST_FILE}. "
                 f"Available variables: {list(ds.data_vars)}"
             )
-
         da = ds[PRECIP_FORECAST_VAR].load()
-
     da = standardize_precipitation_units(
         da=da,
         variable_name=PRECIP_FORECAST_VAR,
     )
-
     check_dims(
         da=da,
         expected_dims=("time", "number", "latitude", "longitude"),
         name="Forecast precipitation",
     )
-
     return da
 
 
 def load_precip_era5(years, loading_start, loading_end):
     """Load ERA5 precipitation."""
-
     filenames = [
         str(PRECIP_ERA5_PATH / PRECIP_ERA5_FILE_PATTERN.format(year=int(year)))
         for year in years
     ]
-
     ds = xr.open_mfdataset(
         filenames,
         preprocess=remove_era5_ensemble_dimension_if_present,
         combine="by_coords",
     )
-
     try:
         if PRECIP_ERA5_DOMAIN is not None:
             domain_lats, domain_lons = misc.get_domain_latlon(PRECIP_ERA5_DOMAIN)
             ds = ds.sel(latitude=domain_lats, longitude=domain_lons)
-
         if PRECIP_ERA5_VAR not in ds:
             raise KeyError(
                 f"'{PRECIP_ERA5_VAR}' not found in ERA5 files. "
                 f"Available variables: {list(ds.data_vars)}"
             )
-
         da = ds[PRECIP_ERA5_VAR].sel(
             time=slice(loading_start, loading_end)
         ).load()
-
     finally:
         ds.close()
-
     da = standardize_precipitation_units(
         da=da,
         variable_name=PRECIP_ERA5_VAR,
     )
-
     check_dims(
         da=da,
         expected_dims=("time", "latitude", "longitude"),
         name="ERA5 precipitation",
     )
-
     return da
 
 
 def load_precip_senorge(years, loading_start, loading_end):
     """Load seNorge precipitation."""
-
     yearly_data = []
-
     for year in years:
         filename = PRECIP_SENORGE_PATH / PRECIP_SENORGE_FILE_PATTERN.format(
             year=int(year)
         )
-
         if not filename.exists():
             raise FileNotFoundError(f"File not found: {filename}")
-
         with xr.open_dataset(filename) as ds:
             ds = xr.decode_cf(ds)
-
             if PRECIP_SENORGE_VAR not in ds:
                 raise KeyError(
                     f"'{PRECIP_SENORGE_VAR}' not found in {filename}. "
                     f"Available variables: {list(ds.data_vars)}"
                 )
-
             da_one_year = ds[PRECIP_SENORGE_VAR].sel(
                 time=slice(loading_start, loading_end)
             )
-
             fill_value = da_one_year.attrs.get("_FillValue")
             if fill_value is not None:
                 da_one_year = da_one_year.where(da_one_year != fill_value)
-
             da_one_year = standardize_precipitation_units(
                 da=da_one_year,
                 variable_name=PRECIP_SENORGE_VAR,
             )
-
             check_dims(
                 da=da_one_year,
                 expected_dims=("time", "Y", "X"),
                 name="seNorge precipitation",
             )
-
             yearly_data.append(da_one_year.load())
-
     return xr.concat(yearly_data, dim="time").sortby("time")
 
 
 def process_precip_forecast(dates):
     """Process S2S forecast precipitation for panel e."""
-
     weights = load_weights(
         filename=make_era5_weights_file(CATCHMENT_NAME),
         spatial_dims=("latitude", "longitude"),
     )
-
     da = load_precip_forecast()
-
     da_mean = catchment_weighted_mean(
         da=da,
         weights=weights,
         spatial_dims=("latitude", "longitude"),
         output_name="catchment_mean_precipitation",
     )
-
     da_accumulated = trailing_xday_accumulation(
         da=da_mean,
         x_days=PRECIP_ACCUMULATION_DAYS,
     )
-
     da_accumulated = round_time_to_nearest_day(da_accumulated)
-
     return subset_to_period(
         da=da_accumulated,
         start_date=dates["init_date"],
@@ -634,32 +515,26 @@ def process_precip_forecast(dates):
 
 def process_precip_era5(dates):
     """Process ERA5 precipitation for panel e."""
-
     weights = load_weights(
         filename=make_era5_weights_file(CATCHMENT_NAME),
         spatial_dims=("latitude", "longitude"),
     )
-
     da = load_precip_era5(
         years=dates["years"],
         loading_start=dates["load_start"],
         loading_end=dates["load_end"],
     )
-
     da_mean = catchment_weighted_mean(
         da=da,
         weights=weights,
         spatial_dims=("latitude", "longitude"),
         output_name="catchment_mean_precipitation",
     )
-
     da_accumulated = trailing_xday_accumulation(
         da=da_mean,
         x_days=PRECIP_ACCUMULATION_DAYS,
     )
-
     da_accumulated = round_time_to_nearest_day(da_accumulated)
-
     return subset_to_period(
         da=da_accumulated,
         start_date=dates["plot_start"],
@@ -669,35 +544,28 @@ def process_precip_era5(dates):
 
 def process_precip_senorge(dates):
     """Process seNorge precipitation for panel e."""
-
     weights = load_weights(
         filename=make_senorge_weights_file(CATCHMENT_NAME),
         spatial_dims=("Y", "X"),
     )
-
     da = load_precip_senorge(
         years=dates["years"],
         loading_start=dates["load_start"],
         loading_end=dates["load_end"],
     )
-
     # Keep the time convention used in the original precipitation script.
     da = shift_time_back_one_day(da)
-
     da_mean = catchment_weighted_mean(
         da=da,
         weights=weights,
         spatial_dims=("Y", "X"),
         output_name="catchment_mean_precipitation",
     )
-
     da_accumulated = trailing_xday_accumulation(
         da=da_mean,
         x_days=PRECIP_ACCUMULATION_DAYS,
     )
-
     da_accumulated = round_time_to_nearest_day(da_accumulated)
-
     return subset_to_period(
         da=da_accumulated,
         start_date=dates["plot_start"],
@@ -707,57 +575,72 @@ def process_precip_senorge(dates):
 
 def keep_only_common_observation_dates(era5, senorge):
     """Keep only dates available in both ERA5 and seNorge."""
-
     common_dates = np.intersect1d(era5.time.values, senorge.time.values)
-
     if len(common_dates) == 0:
         raise ValueError("No common dates found between ERA5 and seNorge.")
-
     return era5.sel(time=common_dates), senorge.sel(time=common_dates)
 
 
 def keep_forecast_dates_available_in_observations(forecast, observation_dates):
     """Keep forecast dates that are also available in the observations."""
-
     common_dates = np.intersect1d(forecast.time.values, observation_dates)
-
     if len(common_dates) == 0:
         raise ValueError("No common dates found between forecast and observations.")
-
     return forecast.sel(time=common_dates)
 
 
 def find_wettest_ensemble_member(forecast):
     """Find the ensemble member with the largest accumulated precipitation."""
-
     member_name = get_member_coord_name(forecast)
-
     maximum_by_member = forecast.max(dim="time")
-
     wettest_member = int(maximum_by_member.idxmax(dim=member_name))
     maximum_value = float(maximum_by_member.max())
-
     wettest_series = forecast.sel({member_name: wettest_member})
     time_index = wettest_series.argmax(dim="time")
     maximum_date = pd.Timestamp(wettest_series.time[time_index].values)
-
     return wettest_member, maximum_value, maximum_date
+
+
+def get_precipitation_dates():
+    """Return date settings used for member selection and panel e."""
+    init_date, plot_start, plot_end, load_start, load_end, years = get_plot_period(
+        forecast_date=FORECAST_DATE,
+        n_days_before=TIMESERIES_N_DAYS_BEFORE,
+        m_days_lead=TIMESERIES_M_DAYS_LEAD,
+        x_days=PRECIP_ACCUMULATION_DAYS,
+    )
+    return {
+        "init_date": init_date,
+        "plot_start": plot_start,
+        "plot_end": plot_end,
+        "load_start": load_start,
+        "load_end": load_end,
+        "years": years,
+    }
+
+
+def print_wettest_ensemble_member(member, maximum_value, maximum_date):
+    """Print the automatically selected ensemble member."""
+    print(
+        f"\nWettest ensemble member: {member}"
+        f"\nMaximum {PRECIP_ACCUMULATION_DAYS}-day accumulated precipitation: "
+        f"{maximum_value:.1f} mm"
+        f"\nDate of maximum: {maximum_date:%Y-%m-%d}\n"
+    )
 
 
 # =============================================================================
 # 11. Panels a-d: map data
+
 # =============================================================================
+
 
 def open_s2s_variable(variable):
     """Open one S2S variable and convert to plotting units."""
-
     filename = make_s2s_file(variable)
-
     if not filename.exists():
         raise FileNotFoundError(f"File not found: {filename}")
-
     ds = xr.open_dataset(filename)
-
     if variable not in ds:
         available = list(ds.data_vars)
         ds.close()
@@ -765,69 +648,64 @@ def open_s2s_variable(variable):
             f"Variable '{variable}' not found in {filename}. "
             f"Available variables: {available}"
         )
-
     if variable == MAP_PRECIP_VAR:
         ds[variable] = ds[variable] * 1000.0
         ds[variable].attrs["units"] = "mm/day"
-
     elif variable == MAP_MSL_VAR:
         ds[variable] = ds[variable] / 100.0
         ds[variable].attrs["units"] = "hPa"
-
     return ds
 
 
-def select_member(da):
-    """Select the requested ensemble member."""
-
+def select_member(da, ensemble_member):
+    """Select one ensemble member."""
     member_name = get_member_coord_name(da)
-
-    return da.sel({member_name: ENSEMBLE_MEMBER})
+    return da.sel({member_name: ensemble_member})
 
 
 def select_date(da, target_date):
     """Select one target date and load it into memory."""
-
     time_name = get_time_coord_name(da)
     target_date = np.datetime64(target_date, "ns")
-
     return da.sel({time_name: target_date}).load()
 
 
-def load_daily_s2s_variable(variable, target_date):
-    """Load one daily S2S field for the selected member and date."""
-
+def load_daily_s2s_variable(variable, target_date, ensemble_member):
+    """Load one daily S2S field for one ensemble member and date."""
     ds = open_s2s_variable(variable)
-
     try:
-        da = ds[variable]
-        da = select_member(da)
+        da = select_member(ds[variable], ensemble_member)
         da = select_date(da, target_date)
-
     finally:
         ds.close()
-
     return da
 
 
-def load_map_precipitation(target_date):
+def load_map_precipitation(target_date, ensemble_member):
     """Load S2S precipitation for one map panel."""
+    return load_daily_s2s_variable(
+        MAP_PRECIP_VAR,
+        target_date,
+        ensemble_member,
+    )
 
-    return load_daily_s2s_variable(MAP_PRECIP_VAR, target_date)
 
-
-def load_map_msl(target_date):
+def load_map_msl(target_date, ensemble_member):
     """Load S2S mean sea level pressure for one map panel."""
-
-    return load_daily_s2s_variable(MAP_MSL_VAR, target_date)
+    return load_daily_s2s_variable(
+        MAP_MSL_VAR,
+        target_date,
+        ensemble_member,
+    )
 
 
 # =============================================================================
 # 12. Catchment boundary
-# =============================================================================
-
 
 # =============================================================================
+
+# =============================================================================
+
 
 def load_catchment_outer_boundary(
     filename,
@@ -835,69 +713,54 @@ def load_catchment_outer_boundary(
     crs_if_missing="EPSG:4326",
 ):
     """Load catchment and keep only the outer boundary."""
-
     plot_crs = "EPSG:4326"
     metric_crs = "EPSG:32633"
-
     catchment_path = Path(base_dir) / filename
-
     if not catchment_path.exists():
         raise FileNotFoundError(f"Catchment file not found: {catchment_path}")
-
     gdf = gpd.read_file(catchment_path)
-
     if gdf.crs is None:
         gdf = gdf.set_crs(crs_if_missing)
-
     union_geom = gdf.to_crs(metric_crs).geometry.union_all()
-
     if isinstance(union_geom, Polygon):
         outer_geom = Polygon(union_geom.exterior)
-
     elif isinstance(union_geom, MultiPolygon):
         outer_geom = MultiPolygon(
             [Polygon(poly.exterior) for poly in union_geom.geoms]
         )
-
     else:
         outer_geom = union_geom
-
     outer_gdf = gpd.GeoDataFrame(
         geometry=[outer_geom],
         crs=metric_crs,
     ).to_crs(plot_crs)
-
     return outer_gdf.geometry.iloc[0]
-
 
 # =============================================================================
 # 13. Figure setup
+
 # =============================================================================
+
 
 def make_figure_axes():
     """
     Create four map panels, one precipitation time-series panel, and a colorbar.
-
     Layout:
     - Row 0: map panels a and b
     - Row 1: map panels c and d
     - Row 2: precipitation time-series panel e
     """
-
     proj_map = ccrs.LambertConformal(
         central_longitude=CENTRAL_LON,
         central_latitude=CENTRAL_LAT,
     )
-
     proj_data = ccrs.PlateCarree()
-
     fig = plt.figure(
         figsize=(
             FIG_WIDTH_IN,
             11.2,
         )
     )
-
     gs = GridSpec(
         3,
         3,
@@ -915,7 +778,6 @@ def make_figure_axes():
         wspace=MAP_WSPACE,
         hspace=MAP_HSPACE,
     )
-
     map_axes = np.empty(
         (
             2,
@@ -923,7 +785,6 @@ def make_figure_axes():
         ),
         dtype=object,
     )
-
     map_axes[
         0,
         0,
@@ -934,7 +795,6 @@ def make_figure_axes():
         ],
         projection=proj_map,
     )
-
     map_axes[
         0,
         1,
@@ -945,7 +805,6 @@ def make_figure_axes():
         ],
         projection=proj_map,
     )
-
     map_axes[
         1,
         0,
@@ -956,7 +815,6 @@ def make_figure_axes():
         ],
         projection=proj_map,
     )
-
     map_axes[
         1,
         1,
@@ -967,33 +825,27 @@ def make_figure_axes():
         ],
         projection=proj_map,
     )
-
     cbar_ax = fig.add_subplot(
         gs[
             0:2,
             2,
         ]
     )
-
     precip_ts_ax = fig.add_subplot(
         gs[
             2,
             0:2,
         ]
     )
-
     for ax in map_axes.flat:
-
         ax.coastlines(
             resolution="10m",
             linewidth=0.5,
         )
-
         ax.set_extent(
             MAP_EXTENT,
             crs=proj_data,
         )
-
     return (
         fig,
         map_axes,
@@ -1005,27 +857,21 @@ def make_figure_axes():
 
 def get_map_axes(map_axes):
     """Return map panels as a flat list."""
-
     return list(map_axes.flat)
 
 
 def align_axis_to_map_panels(fig, map_axes, ax_to_align):
     """Align a time-series axis with the combined width of the map panels."""
-
     fig.canvas.draw()
-
     left = min(
         map_axes[0, 0].get_position().x0,
         map_axes[1, 0].get_position().x0,
     )
-
     right = max(
         map_axes[0, 1].get_position().x1,
         map_axes[1, 1].get_position().x1,
     )
-
     pos = ax_to_align.get_position()
-
     ax_to_align.set_position(
         [
             left,
@@ -1035,30 +881,25 @@ def align_axis_to_map_panels(fig, map_axes, ax_to_align):
         ]
     )
 
-
 # =============================================================================
 # 14. Map plotting
+
 # =============================================================================
+
 
 def plot_precipitation_map(ax, da_precip, proj_data):
     """Plot daily precipitation as shaded grid cells."""
-
     lon, lat = get_lon_lat(da_precip)
     precip = da_precip.values
-
     lon_edges = centers_to_edges(lon.values)
     lat_edges = centers_to_edges(lat.values)
-
     if lat_edges[0] > lat_edges[-1]:
         lat_edges = lat_edges[::-1]
         precip = precip[::-1, :]
-
     if lon_edges[0] > lon_edges[-1]:
         lon_edges = lon_edges[::-1]
         precip = precip[:, ::-1]
-
     lon_edges_2d, lat_edges_2d = np.meshgrid(lon_edges, lat_edges)
-
     return ax.pcolormesh(
         lon_edges_2d,
         lat_edges_2d,
@@ -1073,9 +914,7 @@ def plot_precipitation_map(ax, da_precip, proj_data):
 
 def plot_msl_contours(ax, da_msl, proj_data):
     """Plot labelled mean sea level pressure contours."""
-
     lon, lat = get_lon_lat(da_msl)
-
     contour = ax.contour(
         lon.values,
         lat.values,
@@ -1086,7 +925,6 @@ def plot_msl_contours(ax, da_msl, proj_data):
         transform=proj_data,
         zorder=6,
     )
-
     ax.clabel(
         contour,
         inline=True,
@@ -1099,7 +937,6 @@ def plot_msl_contours(ax, da_msl, proj_data):
 
 def plot_catchment_boundary(ax, geometry, proj_data):
     """Overlay catchment boundary."""
-
     ax.add_geometries(
         [geometry],
         crs=proj_data,
@@ -1110,76 +947,55 @@ def plot_catchment_boundary(ax, geometry, proj_data):
     )
 
 
-def plot_event_panel(ax, target_date, catchment_boundary, proj_data):
+def plot_event_panel(
+    ax,
+    target_date,
+    ensemble_member,
+    catchment_boundary,
+    proj_data,
+):
     """Plot one daily map panel."""
-
-    da_precip = load_map_precipitation(target_date)
-    da_msl = load_map_msl(target_date)
-
+    da_precip = load_map_precipitation(target_date, ensemble_member)
     mesh = plot_precipitation_map(ax, da_precip, proj_data)
-    plot_msl_contours(ax, da_msl, proj_data)
-    plot_catchment_boundary(ax, catchment_boundary, proj_data)
 
+    if PLOT_MSL_CONTOURS:
+        da_msl = load_map_msl(target_date, ensemble_member)
+        plot_msl_contours(ax, da_msl, proj_data)
+
+    plot_catchment_boundary(ax, catchment_boundary, proj_data)
     return mesh
 
 
 # =============================================================================
 # 15. Panel e: precipitation time series
+
 # =============================================================================
 
-def plot_precipitation_timeseries(ax, catchment_label):
+
+def plot_precipitation_timeseries(
+    ax,
+    catchment_label,
+    dates,
+    forecast,
+    wettest_member,
+):
     """Plot catchment-mean precipitation in panel e."""
+    init_date = dates["init_date"]
+    plot_start = dates["plot_start"]
+    plot_end = dates["plot_end"]
 
-    (
-        init_date,
-        plot_start,
-        plot_end,
-        load_start,
-        load_end,
-        years,
-    ) = get_plot_period(
-        forecast_date=FORECAST_DATE,
-        n_days_before=TIMESERIES_N_DAYS_BEFORE,
-        m_days_lead=TIMESERIES_M_DAYS_LEAD,
-        x_days=PRECIP_ACCUMULATION_DAYS,
-    )
-
-    dates = {
-        "init_date": init_date,
-        "plot_start": plot_start,
-        "plot_end": plot_end,
-        "load_start": load_start,
-        "load_end": load_end,
-        "years": years,
-    }
-
-    forecast = process_precip_forecast(dates)
     era5 = process_precip_era5(dates)
     senorge = process_precip_senorge(dates)
-
     era5, senorge = keep_only_common_observation_dates(
         era5=era5,
         senorge=senorge,
     )
-
     forecast = keep_forecast_dates_available_in_observations(
         forecast=forecast,
         observation_dates=era5.time.values,
     )
 
-    wettest_member, maximum_precipitation, maximum_date = find_wettest_ensemble_member(
-        forecast=forecast,
-    )
-
-    print(
-        "\nPrecipitation time-series panel:"
-        f"\nWettest ensemble member: {wettest_member}"
-        f"\nMaximum precipitation: {maximum_precipitation:.1f} mm"
-        f"\nDate: {maximum_date:%Y-%m-%d}\n"
-    )
-
     member_name = get_member_coord_name(forecast)
-
     ax.axvline(
         init_date,
         color=INITIALIZATION_LINE_COLOR,
@@ -1187,7 +1003,6 @@ def plot_precipitation_timeseries(ax, catchment_label):
         linestyle=INITIALIZATION_LINE_STYLE,
         label="Forecast initialization",
     )
-
     ax.plot(
         [],
         [],
@@ -1196,11 +1011,9 @@ def plot_precipitation_timeseries(ax, catchment_label):
         alpha=PRECIP_ENSEMBLE_ALPHA,
         label="Forecast ensemble",
     )
-
     for member in forecast[member_name].values:
         if member == wettest_member:
             continue
-
         ax.plot(
             forecast["time"],
             forecast.sel({member_name: member}),
@@ -1208,7 +1021,6 @@ def plot_precipitation_timeseries(ax, catchment_label):
             linewidth=PRECIP_ENSEMBLE_LINEWIDTH,
             alpha=PRECIP_ENSEMBLE_ALPHA,
         )
-
     ax.plot(
         forecast["time"],
         forecast.sel({member_name: wettest_member}),
@@ -1217,7 +1029,6 @@ def plot_precipitation_timeseries(ax, catchment_label):
         zorder=10,
         label="Counterfactual Storm Hans",
     )
-
     ax.plot(
         senorge["time"],
         senorge,
@@ -1225,47 +1036,38 @@ def plot_precipitation_timeseries(ax, catchment_label):
         linewidth=PRECIP_LINEWIDTH,
         label="SeNorge Storm Hans",
     )
-
     ax.set_title(
         f"e) {catchment_label} precipitation",
         fontsize=TITLE_FONTSIZE,
         pad=5,
     )
-
     ax.set_ylabel("mm", fontsize=AXIS_LABELSIZE)
-
     ax.set_xlabel(
         "Date",
         fontsize=AXIS_LABELSIZE,
     )
-
     ax.tick_params(
         axis="both",
         labelsize=TICK_LABELSIZE,
     )
-
     ax.xaxis.set_major_formatter(
         mdates.DateFormatter(
             DATE_TICK_FORMAT
         )
     )
-
     ax.xaxis.set_major_locator(
         mdates.DayLocator(
             interval=DATE_TICK_INTERVAL_DAYS
         )
     )
-
     plt.setp(
         ax.get_xticklabels(),
         rotation=DATE_TICK_ROTATION,
         ha="right",
         rotation_mode="anchor",
     )
-
     ax.set_xlim(plot_start, plot_end)
     ax.margins(x=0)
-
     ax.legend(
         loc="upper left",
         frameon=False,
@@ -1275,19 +1077,18 @@ def plot_precipitation_timeseries(ax, catchment_label):
 
 # =============================================================================
 # 17. Panel f: runoff time series
+
 # =============================================================================
-
-
 
 # =============================================================================
 # 16. Figure finishing
+
 # =============================================================================
+
 
 def add_map_panel_titles(map_axes):
     """Add panel labels and dates to map panels a-d."""
-
     panel_labels = ["a)", "b)", "c)", "d)"]
-
     for ax, panel_label, date in zip(
         get_map_axes(map_axes),
         panel_labels,
@@ -1299,7 +1100,6 @@ def add_map_panel_titles(map_axes):
             .astype(object)
             .strftime("%B %-d")
         )
-
         ax.set_title(
             f"{panel_label} {formatted_date} 2023",
             fontsize=TITLE_FONTSIZE,
@@ -1309,24 +1109,20 @@ def add_map_panel_titles(map_axes):
 
 def add_colorbar(fig, mesh, cbar_ax):
     """Add precipitation colorbar beside the map panels."""
-
     cbar = fig.colorbar(
         mesh,
         cax=cbar_ax,
         orientation="vertical",
     )
-
     cbar.set_label(
         "Precipitation (mm)",
         fontsize=AXIS_LABELSIZE,
     )
-
     cbar.ax.tick_params(labelsize=TICK_LABELSIZE)
 
 
 def add_map_legend(map_axes, catchment_label):
     """Add map legend inside panel a."""
-
     legend_handles = [
         Line2D(
             [0],
@@ -1334,15 +1130,19 @@ def add_map_legend(map_axes, catchment_label):
             color=CATCHMENT_EDGE_COLOR,
             linewidth=2,
             label=catchment_label,
-        ),
-        Line2D(
-            [0],
-            [0],
-            color=MSL_CONTOUR_COLOR,
-            linewidth=MSL_CONTOUR_LINEWIDTH,
-            label="Mean sea level pressure (hPa)",
-        ),
+        )
     ]
+
+    if PLOT_MSL_CONTOURS:
+        legend_handles.append(
+            Line2D(
+                [0],
+                [0],
+                color=MSL_CONTOUR_COLOR,
+                linewidth=MSL_CONTOUR_LINEWIDTH,
+                label="Mean sea level pressure (hPa)",
+            )
+        )
 
     legend = map_axes[0, 0].legend(
         handles=legend_handles,
@@ -1350,7 +1150,6 @@ def add_map_legend(map_axes, catchment_label):
         frameon=True,
         fontsize=LEGEND_FONTSIZE,
     )
-
     legend.get_frame().set_facecolor("white")
     legend.get_frame().set_edgecolor("black")
     legend.get_frame().set_linewidth(0.8)
@@ -1368,54 +1167,57 @@ def finalize_figure(
     savepath,
 ):
     """Add titles, colorbar, legend, layout, save, and show."""
-
     add_map_panel_titles(
         map_axes
     )
-
     add_colorbar(
         fig,
         mesh,
         cbar_ax,
     )
-
     add_map_legend(
         map_axes,
         catchment_label,
     )
-
     fig.subplots_adjust(
         left=0.09,
         right=0.98,
         bottom=0.075,
         top=0.965,
     )
-
     align_axis_to_map_panels(
         fig,
         map_axes,
         precip_ts_ax,
     )
-
     if WRITE_TO_FILE:
-
         fig.savefig(
             savepath,
             dpi=300,
             bbox_inches="tight",
         )
-
     plt.show()
-
 
 # =============================================================================
 # 17. Main workflow
+
 # =============================================================================
+
 
 def main():
     """Run the full plotting workflow."""
-
     catchment = get_catchment_settings(CATCHMENT_NAME)
+
+    dates = get_precipitation_dates()
+    forecast = process_precip_forecast(dates)
+    ensemble_member, maximum_value, maximum_date = find_wettest_ensemble_member(
+        forecast
+    )
+    print_wettest_ensemble_member(
+        ensemble_member,
+        maximum_value,
+        maximum_date,
+    )
 
     catchment_boundary = load_catchment_outer_boundary(
         filename=catchment["filename"],
@@ -1423,20 +1225,14 @@ def main():
         crs_if_missing=CATCHMENT_CRS_IF_MISSING,
     )
 
-    (
-        fig,
-        map_axes,
-        precip_ts_ax,
-        cbar_ax,
-        proj_data,
-    ) = make_figure_axes()
+    fig, map_axes, precip_ts_ax, cbar_ax, proj_data = make_figure_axes()
 
     mesh = None
-
     for ax, target_date in zip(get_map_axes(map_axes), EVENT_DATES):
         mesh = plot_event_panel(
             ax=ax,
             target_date=target_date,
+            ensemble_member=ensemble_member,
             catchment_boundary=catchment_boundary,
             proj_data=proj_data,
         )
@@ -1444,6 +1240,9 @@ def main():
     plot_precipitation_timeseries(
         ax=precip_ts_ax,
         catchment_label=catchment["label"],
+        dates=dates,
+        forecast=forecast,
+        wettest_member=ensemble_member,
     )
 
     finalize_figure(
@@ -1455,7 +1254,6 @@ def main():
         catchment_label=catchment["label"],
         savepath=OUTPUT_FILENAME,
     )
-
 
 if __name__ == "__main__":
     main()
