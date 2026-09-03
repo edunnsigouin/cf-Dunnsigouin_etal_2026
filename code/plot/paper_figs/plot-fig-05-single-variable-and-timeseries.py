@@ -26,7 +26,7 @@ from Dunnsigouin_etal_2026 import config
 # =============================================================================
 CATCHMENT_NAME = "drammen"  # options: "drammen", "glomma"
 EVENT_MONTH = 5
-EVENT_RANK = 1
+EVENT_RANK = 2
 FORECAST_DATE_RANGE = ["2020-01-02", "2023-12-28"]
 OBSERVATION_YEARS = ["1957", "2025"]
 ACCUMULATION_DAYS = 2
@@ -41,7 +41,7 @@ RANK_VARIABLE = "tp24"
 # User settings: plotted variable and dates
 # =============================================================================
 # Options: "tp24", "msl", "sd", "sm", "ro24", "sro24"
-PLOT_VARIABLE = "sro24"
+PLOT_VARIABLE = "sm"
 EVENT_LAGS = [-2, -1, 0, 1]
 WRITE_TO_FILE = True
 
