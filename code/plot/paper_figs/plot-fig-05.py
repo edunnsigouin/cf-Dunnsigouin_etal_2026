@@ -42,7 +42,7 @@ from Dunnsigouin_etal_2026 import config
 # =============================================================================
 CATCHMENT_NAME = "drammen"  # options: "drammen", "glomma"
 EVENT_MONTH = 5
-EVENT_RANK = 1
+EVENT_RANK = 10
 FORECAST_DATE_RANGE = ["2020-01-02", "2023-12-28"]
 OBSERVATION_YEARS = ["1957", "2025"]
 ACCUMULATION_DAYS = 2
@@ -56,7 +56,7 @@ EVENT_LAGS = [-2, -1, 0, 1]
 PRECIP_VAR = "tp24"
 MSL_VAR = "msl"
 SNOW_VAR = "sd"
-WRITE_TO_FILE = False
+WRITE_TO_FILE = True
 
 # =============================================================================
 # Drammen city settings
