@@ -41,7 +41,7 @@ from Dunnsigouin_etal_2026 import config
 MAP_CATCHMENT_NAME = "drammen"
 
 # Catchment used for the spatial averages in panels e-f
-TIMESERIES_CATCHMENT_NAME = "bergheim"
+TIMESERIES_CATCHMENT_NAME = "drammen"
 
 EVENT_RANK = 1              # options: 1-5
 
