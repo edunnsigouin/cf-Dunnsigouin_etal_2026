@@ -57,7 +57,7 @@ OBSERVATION_YEARS = [1957, 2025]
 REFERENCE_FILE_YEARS = [1957, 2025]
 FORECAST_DATE_RANGE = ["2020-01-02", "2023-12-28"]
 
-MODEL_DATA_METHOD = "raw"  # "raw", "mm_1step", "mm_2step", "q", "ld", "doy", or "q_doy"
+MODEL_DATA_METHOD = "mm_1step"  # "raw", "mm_1step", "mm_2step", "q", "ld", "doy", or "q_doy"
 MODEL_SAMPLING_GROUP = "full"  # "full", "split1", "split2", ...
 MODEL_VARIABLE = "tp24"
 
@@ -69,11 +69,11 @@ NUMBER_OF_LEAD_BINS = 2
 TOP_DISTRIBUTION = "GEV"
 
 # Used by all panels. Options: "return_period" or "aep".
-PLOT_METRIC = "return_period"
+PLOT_METRIC = "aep"
 AEP_YEARS = 1
 
 BOOTSTRAP_METHOD = "nonparametric"  # "nonparametric" or "parametric"
-NUMBER_OF_BOOTSTRAPS = 1000
+NUMBER_OF_BOOTSTRAPS = 50
 CONFIDENCE_LEVEL = 0.95
 MIN_SUCCESSFUL_BOOTSTRAP_FRACTION = 0.90
 RANDOM_SEED = 42
@@ -100,8 +100,8 @@ PRECIPITATION_YMIN = 0.0
 PRECIPITATION_YMAX = 200.0
 
 SHOW_GRID = True
-WRITE_TO_FILE = True
-SHOW_FIGURE = False
+WRITE_TO_FILE = False
+SHOW_FIGURE = True
 
 # =============================================================================
 # Plot constants
