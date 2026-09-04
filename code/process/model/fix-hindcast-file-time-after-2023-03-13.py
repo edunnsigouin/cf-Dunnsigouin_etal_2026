@@ -22,14 +22,14 @@ from netCDF4 import Dataset
 # =============================================================================
 
 path_in = Path(
-    "/nird/datapeak/NS9873K/etdu/raw/s2s/mars/ecmwf/hindcast/sfc/daily/europe/tp24"
+    "/nird/datapeak/NS9873K/etdu/raw/s2s/mars/ecmwf/hindcast/sfc/daily/europe/rn24"
 )
 
-first_date = date.fromisoformat("2023-03-20")
-last_date = date.fromisoformat("2023-12-28")
+first_date = date.fromisoformat("2023-04-27")
+last_date = date.fromisoformat("2023-04-27")
 
 # True: only report proposed changes. False: modify files in place.
-dry_run = True
+dry_run = False
 
 
 # =============================================================================
@@ -91,5 +91,5 @@ def fix_file(filename):
 
 
 if __name__ == "__main__":
-    for filename in sorted(path_in.glob("tp24_0.5x0.5_*.nc")):
+    for filename in sorted(path_in.glob("rn24_0.5x0.5_*.nc")):
         fix_file(filename)

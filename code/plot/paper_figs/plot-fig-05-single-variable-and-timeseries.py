@@ -1,14 +1,16 @@
 """
 Plot one high-ranking S2S precipitation event as four maps plus a time series.
 Event selection is based on ranked accumulated precipitation. Panels a-d shade one
-user-selected variable: "tp24", "msl", "sd", "sm", "ro24", or "sro24".
+user-selected variable: "tp24", "rn24", "msl", "sd", "sm", "ro24", or "sro24".
 Panel e shows the catchment-mean evolution of the same variable as a 95% interval
 over all hindcast dates and ensemble members, with the selected member in dark blue.
 "sm" is derived from "sd" as:
     ΔSWE = SWE(current day) - SWE(previous day)
 Negative values therefore indicate snowmelt.
 """
+
 from pathlib import Path
+
 import cartopy.crs as ccrs
 import geopandas as gpd
 import matplotlib.dates as mdates
@@ -19,6 +21,7 @@ from matplotlib.colors import BoundaryNorm
 from matplotlib.gridspec import GridSpec
 from matplotlib.lines import Line2D
 from shapely.geometry import MultiPolygon, Polygon
+
 from Dunnsigouin_etal_2026 import config
 
 # =============================================================================
@@ -40,8 +43,8 @@ RANK_VARIABLE = "tp24"
 # =============================================================================
 # User settings: plotted variable and dates
 # =============================================================================
-# Options: "tp24", "msl", "sd", "sm", "ro24", "sro24"
-PLOT_VARIABLE = "sm"
+# Options: "tp24", "rn24", "msl", "sd", "sm", "ro24", "sro24"
+PLOT_VARIABLE = "rn24"
 EVENT_LAGS = [-2, -1, 0, 1]
 WRITE_TO_FILE = True
 
@@ -87,6 +90,15 @@ VARIABLE_SETTINGS = {
         "vmax": 60.0,
         "levels": None,
         "label": "Precipitation (mm/day)",
+        "extend": "max",
+        "white_under": True,
+    },
+    "rn24": {
+        "cmap": "GnBu",
+        "vmin": 5.0,
+        "vmax": 60.0,
+        "levels": None,
+        "label": "Rain (mm/day)",
         "extend": "max",
         "white_under": True,
     },
@@ -162,6 +174,7 @@ def get_catchment_settings(catchment_name):
         )
     return CATCHMENTS[catchment_name]
 
+
 def get_variable_settings(variable):
     """Validate and return plotting settings for the selected variable."""
     if variable not in VARIABLE_SETTINGS:
@@ -171,11 +184,13 @@ def get_variable_settings(variable):
         )
     return VARIABLE_SETTINGS[variable]
 
+
 def get_file_id(catchment_name):
     """Return the short catchment label used in S2S filenames."""
     if catchment_name.startswith("regine_"):
         return catchment_name.replace("regine_", "", 1)
     return catchment_name
+
 
 def make_sample_filename(catchment_name):
     """Return the monthly-maximum precipitation sample filename used for ranking."""
@@ -193,6 +208,7 @@ def make_sample_filename(catchment_name):
         f"{get_file_id(catchment_name)}_"
         f"{FORECAST_DATE_RANGE[0]}_{FORECAST_DATE_RANGE[1]}_{correction_label}.nc"
     )
+
 
 def validate_sample_dataset(ds):
     """Check variables needed to identify the ranked precipitation event."""
@@ -213,6 +229,7 @@ def validate_sample_dataset(ds):
     if set(ds["sample_month"].dims) != {"i_date"}:
         raise ValueError("sample_month must have dimension i_date.")
 
+
 def format_date(value):
     """Return a compact YYYY-MM-DD date string."""
     value = np.asarray(value).astype("datetime64[ns]")
@@ -220,12 +237,14 @@ def format_date(value):
         return "-"
     return np.datetime_as_string(value.astype("datetime64[D]"), unit="D")
 
+
 def decode_hdate(value):
     """Return YYYY-MM-DD for hindcast hdate, or '-' for forecast rows."""
     if value is None or int(value) == 0:
         return "-"
     text = f"{int(value):08d}"
     return f"{text[:4]}-{text[4:6]}-{text[6:8]}"
+
 
 def get_ranked_event_indices(ds, month_of_year):
     """Return event indices ranked from largest to smallest precipitation."""
@@ -239,6 +258,7 @@ def get_ranked_event_indices(ds, month_of_year):
     order = np.argsort(values[i_indices, number_indices])[::-1]
     return [(int(i_indices[i]), int(number_indices[i])) for i in order]
 
+
 def make_s2s_file(event, variable, grid):
     """Create the expected raw S2S file path."""
     return (
@@ -251,12 +271,14 @@ def make_s2s_file(event, variable, grid):
         / f"{variable}_{grid}_{event['forecast_date']}.nc"
     )
 
+
 def find_raw_s2s_file(event, variable):
     """Return the existing raw S2S file, checking available grids."""
     candidates = [
         make_s2s_file(event, variable, grid) for grid in ["0.5x0.5", "0.25x0.25"]
     ]
     return next((filename for filename in candidates if filename.is_file()), candidates[0])
+
 
 def get_selected_event(catchment_name, month_of_year, event_rank):
     """Read the sample file and return metadata for the Nth ranked event."""
@@ -294,10 +316,12 @@ def get_selected_event(catchment_name, month_of_year, event_rank):
     event["source_file"] = find_raw_s2s_file(event, RANK_VARIABLE)
     return event
 
+
 def get_event_dates(event):
     """Return plotted dates as YYYY-MM-DD strings."""
     date_of_max = np.datetime64(event["date_of_max"], "D")
     return [str(date_of_max + np.timedelta64(lag, "D")) for lag in EVENT_LAGS]
+
 
 def print_selected_event(event):
     """Print ranked-event metadata and plotted lead/valid dates."""
@@ -316,6 +340,7 @@ def print_selected_event(event):
         lead_day = event["lead_of_max"] + lag
         print(f"  lag {lag:+d}: lead_day {lead_day:.0f}, valid_date {valid_date}")
 
+
 def make_output_filename(catchment_name, event_rank):
     """Create output filename including the selected plotted variable."""
     return (
@@ -326,7 +351,6 @@ def make_output_filename(catchment_name, event_rank):
 
 # =============================================================================
 # Catchment-average helpers
-
 # =============================================================================
 
 def make_catchment_weights_file(catchment_name, grid):
@@ -336,6 +360,7 @@ def make_catchment_weights_file(catchment_name, grid):
         Path(PATH_CATCHMENT)
         / f"weights_catchment_{catchment['weights_id']}_era5_{grid}.nc"
     )
+
 
 def load_weights(filename):
     """Load predefined catchment weights."""
@@ -348,6 +373,7 @@ def load_weights(filename):
             raise KeyError(f"'catchment_weight' not found in {filename}")
         return ds["catchment_weight"].astype("float32").load()
 
+
 def align_weights(da, weights):
     """Align catchment weights to the variable grid."""
     time_name = get_time_coord_name(da)
@@ -356,6 +382,7 @@ def align_weights(da, weights):
         return weights.reindex_like(template)
     except Exception:
         return weights.broadcast_like(template)
+
 
 def catchment_mean(da, weights):
     """Calculate the catchment-weighted spatial mean."""
@@ -373,7 +400,6 @@ def catchment_mean(da, weights):
 
 # =============================================================================
 # Data loading
-
 # =============================================================================
 
 def get_time_coord_name(da):
@@ -383,11 +409,13 @@ def get_time_coord_name(da):
             return name
     raise ValueError("Could not identify time coordinate.")
 
+
 def get_lon_lat(da):
     """Return longitude and latitude coordinates."""
     lon = da["longitude"] if "longitude" in da.coords else da["lon"]
     lat = da["latitude"] if "latitude" in da.coords else da["lat"]
     return lon, lat
+
 
 def get_member_coord_name(da):
     """Return ensemble member coordinate name."""
@@ -395,6 +423,7 @@ def get_member_coord_name(da):
         if name in da.dims or name in da.coords:
             return name
     raise ValueError("Could not identify ensemble member coordinate.")
+
 
 def centers_to_edges(centers):
     """Convert 1D grid-cell centers to grid-cell edges."""
@@ -409,6 +438,7 @@ def centers_to_edges(centers):
     edges[-1] = centers[-1] + 0.5 * (centers[-1] - centers[-2])
     return edges
 
+
 def open_s2s_variable(filename, variable):
     """Open one S2S variable and convert it to plotting units."""
     filename = Path(filename)
@@ -419,7 +449,7 @@ def open_s2s_variable(filename, variable):
     if variable not in ds:
         ds.close()
         raise KeyError(f"Variable '{variable}' not found in {filename}")
-    if variable == "tp24":
+    if variable in ["tp24", "rn24"]:
         ds[variable] = ds[variable] * 1000.0
         ds[variable].attrs["units"] = "mm/day"
     elif variable == "msl":
@@ -432,6 +462,7 @@ def open_s2s_variable(filename, variable):
         ds[variable] = ds[variable] * 1000.0
         ds[variable].attrs["units"] = "mm/day"
     return ds
+
 
 def get_raw_member_label(da, event):
     """Return the member label available in the current raw S2S variable."""
@@ -446,6 +477,7 @@ def get_raw_member_label(da, event):
         f"Could not find ensemble member {member} in raw {member_name} coordinate. "
         f"Available values: {available.tolist()}"
     )
+
 
 def select_event_member(da, event):
     """Select the event hindcast date and member from an opened DataArray."""
@@ -463,6 +495,7 @@ def select_event_member(da, event):
         )
     return da.sel({member_name: raw_member})
 
+
 def select_event_hdate(da, event):
     """Select the event hindcast date while retaining all ensemble members."""
     if event["model_type"] != "hindcast":
@@ -472,9 +505,11 @@ def select_event_hdate(da, event):
             return da.sel({name: event["hdate"]})
     raise ValueError("Could not identify hindcast-date coordinate.")
 
+
 def get_raw_plot_variable():
     """Return the raw variable needed for the selected plotted field."""
     return "sd" if PLOT_VARIABLE == "sm" else PLOT_VARIABLE
+
 
 def derive_plot_variable(da):
     """Return the selected raw or derived variable."""
@@ -485,6 +520,7 @@ def derive_plot_variable(da):
     out.name = "sm"
     out.attrs.update(units="mm", long_name="Daily change in snow water equivalent")
     return out
+
 
 def load_plot_dataset(event, catchment_name):
     """Load all map and panel-e data from one raw-variable file."""
@@ -528,10 +564,12 @@ def load_plot_dataset(event, catchment_name):
         f"{event['forecast_date']}."
     )
 
+
 def select_loaded_date(da, target_date):
     """Select one date from data already loaded into memory."""
     time_name = get_time_coord_name(da)
     return da.sel({time_name: np.datetime64(target_date, "ns")})
+
 
 def load_catchment_outer_boundary(filename, base_dir, crs_if_missing="EPSG:4326"):
     """Load the catchment and retain only its outer boundary."""
@@ -553,7 +591,6 @@ def load_catchment_outer_boundary(filename, base_dir, crs_if_missing="EPSG:4326"
 
 # =============================================================================
 # Plotting
-
 # =============================================================================
 
 def make_figure_axes():
@@ -585,6 +622,7 @@ def make_figure_axes():
         ax.set_extent(MAP_EXTENT, crs=proj_data)
     return fig, axes, timeseries_ax, cbar_ax, proj_data
 
+
 def plot_shaded_field(ax, da, proj_data):
     """Plot the selected variable as colored grid cells."""
     settings = get_variable_settings(PLOT_VARIABLE)
@@ -613,6 +651,7 @@ def plot_shaded_field(ax, da, proj_data):
         kwargs["norm"] = BoundaryNorm(settings["levels"], cmap.N, clip=False)
     return ax.pcolormesh(lon_edges_2d, lat_edges_2d, values, **kwargs)
 
+
 def plot_catchment_boundary(ax, geometry, proj_data):
     """Overlay the selected catchment boundary."""
     ax.add_geometries(
@@ -624,12 +663,14 @@ def plot_catchment_boundary(ax, geometry, proj_data):
         zorder=9,
     )
 
+
 def plot_event_panel(ax, maps, target_date, catchment_boundary, proj_data):
     """Plot one date from already-loaded map data."""
     field = select_loaded_date(maps, target_date)
     mesh = plot_shaded_field(ax, field, proj_data)
     plot_catchment_boundary(ax, catchment_boundary, proj_data)
     return mesh
+
 
 def plot_ensemble_timeseries(ax, event, event_dates, selected, lower, upper):
     """Plot panel e with the 95% interval, selected member, and map-date markers."""
@@ -675,6 +716,7 @@ def plot_ensemble_timeseries(ax, event, event_dates, selected, lower, upper):
     plt.setp(ax.get_xticklabels(), rotation=30, ha="right")
     ax.legend(frameon=False, fontsize=9)
 
+
 def align_timeseries_axis(fig, axes, timeseries_ax):
     """Align panel e with the outer edges of panels a-d."""
     fig.canvas.draw()
@@ -683,10 +725,12 @@ def align_timeseries_axis(fig, axes, timeseries_ax):
     position = timeseries_ax.get_position()
     timeseries_ax.set_position([left, position.y0, right - left, position.height])
 
+
 def format_panel_date(date):
     """Format a date as 'June 4'."""
     date_object = np.datetime64(date).astype("datetime64[D]").astype(object)
     return f"{date_object.strftime('%B')} {date_object.day}"
+
 
 def add_panel_titles(axes, event_dates):
     """Add panel labels and calendar dates."""
@@ -697,6 +741,7 @@ def add_panel_titles(axes, event_dates):
             fontsize=TITLE_FONTSIZE,
             pad=2,
         )
+
 
 def add_colorbar(fig, mesh, cbar_ax):
     """Add the variable-specific colorbar."""
@@ -711,6 +756,7 @@ def add_colorbar(fig, mesh, cbar_ax):
     cbar.set_label(settings["label"], fontsize=AXIS_LABELSIZE, labelpad=6)
     cbar.ax.tick_params(labelsize=TICK_LABELSIZE, width=0.7, length=3)
     cbar.outline.set_linewidth(0.7)
+
 
 def add_legend(axes, catchment_label):
     """Add a legend for the catchment boundary."""
@@ -730,6 +776,7 @@ def add_legend(axes, catchment_label):
     legend.get_frame().set_alpha(1.0)
     legend.set_zorder(100)
 
+
 def finalize_figure(
     fig, axes, timeseries_ax, cbar_ax, mesh, event, event_dates,
     selected, lower, upper, catchment_label, savepath
@@ -748,6 +795,7 @@ def finalize_figure(
         print("Saved figure:", savepath)
     plt.show()
     plt.close(fig)
+
 
 def main():
     """Run the full plotting workflow."""
@@ -777,6 +825,7 @@ def main():
         fig, axes, timeseries_ax, cbar_ax, mesh, event, event_dates,
         selected, lower, upper, catchment["label"], savepath
     )
+
 
 if __name__ == "__main__":
     main()
