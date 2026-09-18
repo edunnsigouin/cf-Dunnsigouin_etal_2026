@@ -266,9 +266,7 @@ def make_figure(raw_results: pd.DataFrame, corrected_results: pd.DataFrame, file
     with plt.rc_context(style):
         figure, axes = plt.subplots(2, 1, figsize=figure_size, sharex=True)
         plot_fidelity_heatmap(axes[0], raw_results, "(a) Raw model")
-        plot_fidelity_heatmap(
-            axes[1], corrected_results, f"(b) Bias-corrected model)"
-        )
+        plot_fidelity_heatmap(axes[1], corrected_results, f"(b) Bias-corrected model")
         axes[0].tick_params(axis="x", labelbottom=True)
         axes[1].set_xlabel("Month", labelpad=10)
         axes[0].set_xlabel("Month", labelpad=10)
