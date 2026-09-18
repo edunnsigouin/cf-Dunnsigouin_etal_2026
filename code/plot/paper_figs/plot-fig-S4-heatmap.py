@@ -322,7 +322,7 @@ def main() -> None:
     filename = None
     correction_mode = "failed-months" if BIAS_CORRECT_ONLY_FAILED_MONTHS else "all-months"
     if write2file:
-        filename = Path(output_filename_override) if output_filename_override else (Path(config.dirs["fig"]) / ("fig-S4.pdf"))
+        filename = Path(output_filename_override) if output_filename_override else (Path(config.dirs["fig"]) / ("fig-S4.png"))
     make_figure(raw_results, corrected_results, filename)
 
 
