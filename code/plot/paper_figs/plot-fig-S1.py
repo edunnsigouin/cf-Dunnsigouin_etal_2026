@@ -94,7 +94,7 @@ BIAS_CORRECTION_METHODS = [
 ]
 
 # If True, apply each correction only to months that fail at least one raw test.
-BIAS_CORRECT_ONLY_FAILED_MONTHS = True
+BIAS_CORRECT_ONLY_FAILED_MONTHS = False
 
 EXCLUDE_STORM_HANS_FROM_REFERENCE = True
 
