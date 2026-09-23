@@ -15,6 +15,8 @@ year range, but August 2023 is always excluded from the August record so Storm
 Hans does not define its own comparison threshold. May 2023 is retained.
 Panels (c)-(f) show the original fitted return metric as a dot and the central
 CONFIDENCE_LEVEL bootstrap interval as a capped vertical line (95% by default).
+Each distribution tick has reference data on its left and model data on its right,
+using the same orange and blue colors as panels (a)-(b).
 Infinite return-period estimates are retained when calculating the percentiles.
 Plotted values are clipped to the existing metric limits, as in the original
 figure. Set PLOT_FIRST_FOUR_PANELS = True to display only panels (a)-(d).
@@ -112,8 +114,7 @@ MONTH_NAMES = [
     "July", "August", "September", "October", "November", "December",
 ]
 METHODS = ["GEV", "Gumbel", "GenEx"]
-METHOD_COLORS = {"GEV": "tab:pink", "Gumbel": "tab:green", "GenEx": "tab:purple"}
-METHOD_OFFSETS = {"GEV": -0.18, "Gumbel": 0.0, "GenEx": 0.18}
+DATASET_OFFSET = 0.12  # Symmetric separation around each distribution tick.
 OBSERVATION_COLOR = "tab:orange"
 MODEL_COLOR = 'tab:blue'
 STORM_HANS_COLOR = "grey"
@@ -903,11 +904,11 @@ def configure_metric_axis(axis):
     else:
         axis.set_ylim(RETURN_PERIOD_MIN, 1.15*RETURN_PERIOD_MAX)
         axis.yaxis.set_major_formatter(FuncFormatter(format_metric_return_period))
-    axis.set_xlim(-0.55, 1.55)
-    axis.set_xticks([0, 1])
-    axis.set_xticklabels([get_reference_name(), get_model_label()])
+    axis.set_xlim(-0.5, len(METHODS) - 0.5)
+    axis.set_xticks(range(len(METHODS)))
+    axis.set_xticklabels(METHODS)
     axis.set_ylabel(metric_axis_label(), fontsize=AXIS_LABELSIZE)
-    axis.set_xlabel('Dataset', fontsize=AXIS_LABELSIZE)
+    axis.set_xlabel("Extreme-value distribution", fontsize=AXIS_LABELSIZE)
     axis.tick_params(axis="both", labelsize=TICK_LABELSIZE)
     axis.spines["top"].set_visible(False)
     axis.spines["right"].set_visible(False)
@@ -947,12 +948,13 @@ def plot_metric_panel(axis, panel_label, panel_output, show_legend=False):
     """Plot fitted dots and central bootstrap intervals for reference and model."""
     tail_percent = 100 * (1 - CONFIDENCE_LEVEL) / 2
 
-    for group_index, group in enumerate(["reference", "model"]):
-
-        for method in METHODS:
+    for method_index, method in enumerate(METHODS):
+        for group, offset, color in [
+            ("reference", -DATASET_OFFSET, OBSERVATION_COLOR),
+            ("model", DATASET_OFFSET, MODEL_COLOR),
+        ]:
             analysis = panel_output["results"][(group, method)]
-            position = group_index + METHOD_OFFSETS[method]
-            color = METHOD_COLORS[method]
+            position = method_index + offset
             fitted = (
                 100 * horizon_aep(analysis["probability"])
                 if PLOT_METRIC == "aep" else analysis["return_period"]
@@ -990,9 +992,12 @@ def plot_metric_panel(axis, panel_label, panel_output, show_legend=False):
     )
     if show_legend:
         handles = [
-            Line2D([0], [0], linestyle="-", marker="o", color=METHOD_COLORS[method],
-                   linewidth=INTERVAL_LINEWIDTH, label=method)
-            for method in METHODS
+            Line2D([0], [0], linestyle="-", marker="o", color=color,
+                   linewidth=INTERVAL_LINEWIDTH, label=label)
+            for label, color in [
+                (get_reference_name(), OBSERVATION_COLOR),
+                (get_model_label(), MODEL_COLOR),
+            ]
         ]
         axis.legend(handles=handles, frameon=False, fontsize=LEGEND_FONTSIZE, loc="best")
 
@@ -1118,7 +1123,7 @@ def make_figure(top_results, metric_results, return_periods):
     # August is always the left column; May is always the right column.
     plot_top_panel(axes[0, 0], "a", AUGUST, top_results[AUGUST], return_periods, show_legend=True )
     plot_top_panel(axes[0, 1], "b", MAY, top_results[MAY], return_periods)
-    plot_metric_panel(axes[1, 0], "c", metric_results[(AUGUST, "storm_hans")], True)
+    plot_metric_panel(axes[1, 0], "c", metric_results[(AUGUST, "storm_hans")], False)
     plot_metric_panel(axes[1, 1], "d", metric_results[(MAY, "storm_hans")])
     if not PLOT_FIRST_FOUR_PANELS:
         plot_metric_panel(axes[2, 0], "e", metric_results[(AUGUST, "calendar_record")])
