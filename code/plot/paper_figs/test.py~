@@ -46,12 +46,8 @@ combined as
     p_year^(b) = 1 - product_m(1 - p_m^(b)),
     P_N^(b) = 1 - (1 - p_year^(b))^N.
 
-The figure shows UNSEEN fitted probabilities as points and central
-CONFIDENCE_LEVEL bootstrap intervals as vertical lines, using a separate
-probability scale for each threshold. Observational estimates remain available
-in the printed summary but are not plotted. Observations define the thresholds.
-Intervals describe sampling uncertainty conditional on each distribution and
-the assumptions above. Failed distribution fits are
+The resulting P_N bootstrap sample is summarized by its median, interquartile
+range, and central CONFIDENCE_LEVEL interval. Failed distribution fits are
 skipped; at least MIN_SUCCESSFUL_BOOTSTRAP_FRACTION of the requested fits must
 succeed for every month/dataset/distribution combination.
 
@@ -68,6 +64,7 @@ record calculation. Other months in 2023, including May 2023, remain eligible.
 from pathlib import Path
 
 import matplotlib.pyplot as plt
+from matplotlib.lines import Line2D
 import numpy as np
 import xarray as xr
 from scipy.optimize import minimize
@@ -99,7 +96,7 @@ AEP_YEARS = 10
 INCLUDE_STORM_HANS_IN_FIT = True
 
 BOOTSTRAP_METHOD = "nonparametric"  # "nonparametric" or "parametric"
-NUMBER_OF_BOOTSTRAPS = 100
+NUMBER_OF_BOOTSTRAPS = 50
 CONFIDENCE_LEVEL = 0.95
 MIN_SUCCESSFUL_BOOTSTRAP_FRACTION = 0.90
 RANDOM_SEED = 42
@@ -107,20 +104,20 @@ RANDOM_SEED = 42
 REFERENCE_FILENAME_OVERRIDE = None
 MODEL_FILENAME_OVERRIDE = None
 
-WRITE_TO_FILE = True
+WRITE_TO_FILE = False
 SHOW_FIGURE = True
 FIGURE_DPI = 300
 FIGURE_SIZE = (10.0, 4.6)
-PANEL_WSPACE = 0.35
+PANEL_WSPACE = 0.22
 
 PANEL_SETTINGS = {
     "storm_hans": {
         "title": "Storm Hans threshold",
-        "ylim": (0, 1),
+        "ylim": (0, 10),
         "yticks": None,
     },
     "monthly_record_without_hans": {
-        "title": "Calendar-month record thresholds",
+        "title": "Monthly records without Storm Hans",
         "ylim": (0, 100),
         "yticks": None,
     },
@@ -148,11 +145,13 @@ MONTH_NAMES = [
 
 METHODS = ["GEV", "Gumbel", "GenEx"]
 METHOD_COLORS = {"GEV": "tab:pink", "Gumbel": "tab:green", "GenEx": "tab:purple"}
+METHOD_OFFSETS = {"GEV": -0.18, "Gumbel": 0.0, "GenEx": 0.18}
 
 INTERVAL_LINEWIDTH = 1.4
 AXIS_LABELSIZE = 11
 TICK_LABELSIZE = 11
 TITLE_FONTSIZE = 12
+LEGEND_FONTSIZE = 10
 
 
 def validate_settings():
@@ -205,7 +204,7 @@ def get_reference_variable():
 
 def get_model_label():
     """Return the model display label."""
-    return "UNSEEN" if MODEL_DATA_METHOD == "raw" else "UNSEEN (bias corrected)"
+    return "Model" if MODEL_DATA_METHOD == "raw" else "Model BC"
 
 
 def split_usable_leads(first_lead, last_lead, number_of_bins):
@@ -614,66 +613,84 @@ def threshold_label(threshold_type, thresholds):
 
 
 def draw_probability_panel(axis, results, settings, panel_label):
-    """Draw UNSEEN fitted probabilities and central bootstrap intervals."""
+    """Draw one threshold panel."""
     alpha = 1.0 - CONFIDENCE_LEVEL
-    estimates = []
-    for method in METHODS:
-        result = results[("model", method)]
-        lower, upper = np.percentile(
-            result["metric_samples"], [100 * alpha / 2, 100 * (1 - alpha / 2)]
-        )
-        estimates.append((result["probability"], lower, upper))
 
-    limits = settings["ylim"]
-    if limits is None:
-        maximum = max(max(estimate, upper) for estimate, lower, upper in estimates)
-        limits = (0, min(100, max(0.01, 1.25 * maximum)))
-    axis.set_ylim(*limits)
-    axis.set_xlim(-0.5, len(METHODS) - 0.5)
+    for group_index, group in enumerate(["reference", "model"]):
+        for method in METHODS:
+            samples = results[(group, method)]["metric_samples"]
+            lower, q1, median, q3, upper = np.percentile(
+                samples, [100 * alpha / 2, 25, 50, 75, 100 * (1 - alpha / 2)]
+            )
+            position = group_index + METHOD_OFFSETS[method]
+            color = METHOD_COLORS[method]
+            axis.bxp(
+                [{
+                    "label": "", "q1": q1, "med": median, "q3": q3,
+                    "whislo": lower, "whishi": upper, "fliers": [],
+                }],
+                positions=[position], widths=0.14, showfliers=False, manage_ticks=False,
+                boxprops={"color": color, "linewidth": INTERVAL_LINEWIDTH},
+                whiskerprops={"color": color, "linewidth": INTERVAL_LINEWIDTH},
+                capprops={"color": color, "linewidth": INTERVAL_LINEWIDTH},
+                medianprops={"color": color, "linewidth": 1.8},
+            )
+
+    axis.set_xlim(-0.55, 1.55)
+    axis.set_ylim(*settings["ylim"])
     if settings["yticks"] is not None:
         axis.set_yticks(settings["yticks"])
 
-    for position, (method, (estimate, lower, upper)) in enumerate(zip(METHODS, estimates)):
-        color = METHOD_COLORS[method]
-        # Draw the interval separately: a percentile interval need not contain the estimate.
-        axis.vlines(position, lower, upper, color=color, linewidth=INTERVAL_LINEWIDTH)
-        axis.hlines(
-            [lower, upper], position - 0.06, position + 0.06,
-            color=color, linewidth=INTERVAL_LINEWIDTH,
-        )
-        axis.plot(position, estimate, "o", color=color, markersize=6, zorder=3)
-
-    axis.set_xticks(range(len(METHODS)))
-    axis.set_xticklabels(METHODS)
-    axis.set_title(
-        f"{panel_label} {settings['title']}", loc="left",
-        fontsize=TITLE_FONTSIZE, fontweight="normal", pad=12,
+    axis.set_xticks([0, 1])
+    axis.set_xticklabels([get_reference_name(), get_model_label()])
+    axis.set_title(settings["title"], loc="left", fontsize=TITLE_FONTSIZE, fontweight="normal")
+    axis.text(
+        0.0, 1.03, panel_label, transform=axis.transAxes,
+        fontsize=TITLE_FONTSIZE, fontweight="normal", ha="left", va="bottom",
     )
-    axis.set_ylabel(f"{AEP_YEARS}-year exceedance probability (%)", fontsize=AXIS_LABELSIZE)
+
     axis.tick_params(axis="both", labelsize=TICK_LABELSIZE, direction="out")
     axis.spines["top"].set_visible(False)
     axis.spines["right"].set_visible(False)
+
     if SHOW_GRID:
         axis.grid(axis="y", linestyle=":", linewidth=0.7, alpha=GRID_ALPHA)
         axis.set_axisbelow(True)
 
 
 def plot_all_month_probabilities(results):
-    """Plot UNSEEN probabilities for two thresholds with separate probability scales."""
+    """Plot Storm Hans and monthly-record exceedance probabilities side by side."""
     figure, axes = plt.subplots(
-        1, 2, figsize=FIGURE_SIZE, gridspec_kw={"wspace": PANEL_WSPACE}, sharey=False,
+        1, 2, figsize=FIGURE_SIZE,
+        gridspec_kw={"wspace": PANEL_WSPACE},
+        constrained_layout=False,
     )
+
     panel_types = ["storm_hans", "monthly_record_without_hans"]
     for axis, threshold_type, panel_label in zip(axes, panel_types, ["a)", "b)"]):
         draw_probability_panel(
             axis, results[threshold_type], PANEL_SETTINGS[threshold_type], panel_label
         )
 
-    figure.subplots_adjust(left=0.09, right=0.98, top=0.90, bottom=0.12)
+    axes[0].set_ylabel(
+        f"Probability of at least one exceedance in {AEP_YEARS} years [%]",
+        fontsize=AXIS_LABELSIZE,
+    )
+
+    handles = [
+        Line2D([0], [0], color=METHOD_COLORS[method], linewidth=2, label=method)
+        for method in METHODS
+    ]
+    figure.legend(
+        handles=handles, loc="lower center", ncol=len(METHODS), frameon=False,
+        fontsize=LEGEND_FONTSIZE, bbox_to_anchor=(0.5, -0.01),
+    )
+    figure.subplots_adjust(left=0.09, right=0.99, top=0.90, bottom=0.18)
 
     if WRITE_TO_FILE:
         filename = Path(config.dirs["fig"]) / (
-            f"fig-06-all-month-{AEP_YEARS}yr.png"
+            f"all-month-{AEP_YEARS}yr-exceedance-two-panels-"
+            f"{MODEL_DATA_METHOD}-{REFERENCE_DATASET}.png"
         )
         filename.parent.mkdir(parents=True, exist_ok=True)
         figure.savefig(filename, dpi=FIGURE_DPI, bbox_inches="tight", facecolor="white")
@@ -681,6 +698,7 @@ def plot_all_month_probabilities(results):
 
     if SHOW_FIGURE:
         plt.show()
+
     plt.close(figure)
 
 
