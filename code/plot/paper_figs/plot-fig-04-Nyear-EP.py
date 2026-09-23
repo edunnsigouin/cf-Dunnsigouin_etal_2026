@@ -46,10 +46,12 @@ combined as
     p_year^(b) = 1 - product_m(1 - p_m^(b)),
     P_N^(b) = 1 - (1 - p_year^(b))^N.
 
-The figure shows UNSEEN fitted probabilities as points and central
-CONFIDENCE_LEVEL bootstrap intervals as vertical lines, using a separate
-probability scale for each threshold. Observational estimates remain available
-in the printed summary but are not plotted. Observations define the thresholds.
+The figure shows fitted probabilities as points and central CONFIDENCE_LEVEL
+bootstrap intervals as vertical lines, using a separate scale for each threshold.
+With PLOT_REFERENCE = True, orange reference estimates appear to the left and
+blue model estimates to the right of each distribution tick. With False, only
+blue model estimates are shown, centered on each tick. Observations define the
+thresholds and both datasets remain available in the printed summary.
 Intervals describe sampling uncertainty conditional on each distribution and
 the assumptions above. Failed distribution fits are
 skipped; at least MIN_SUCCESSFUL_BOOTSTRAP_FRACTION of the requested fits must
@@ -112,11 +114,12 @@ SHOW_FIGURE = True
 FIGURE_DPI = 300
 FIGURE_SIZE = (10.0, 4.6)
 PANEL_WSPACE = 0.35
+PLOT_REFERENCE = True  # True: Senorge/model pairs; False: model only, centered on ticks.
 
 PANEL_SETTINGS = {
     "storm_hans": {
         "title": "Storm Hans threshold",
-        "ylim": (0, 1),
+        "ylim": None,  # Automatic limits include every displayed confidence interval.
         "yticks": None,
     },
     "monthly_record_without_hans": {
@@ -147,7 +150,9 @@ MONTH_NAMES = [
 ]
 
 METHODS = ["GEV", "Gumbel", "GenEx"]
-METHOD_COLORS = {"GEV": "tab:pink", "Gumbel": "tab:green", "GenEx": "tab:purple"}
+OBSERVATION_COLOR = "tab:orange"
+MODEL_COLOR = "tab:blue"
+DATASET_OFFSET = 0.12
 
 INTERVAL_LINEWIDTH = 1.4
 AXIS_LABELSIZE = 11
@@ -161,6 +166,9 @@ def validate_settings():
         raise ValueError("REFERENCE_DATASET must be 'senorge' or 'era5'.")
     if MODEL_DATA_METHOD not in {"raw", "mm_1step", "mm_2step", "q", "ld", "doy", "q_doy"}:
         raise ValueError("Unsupported MODEL_DATA_METHOD.")
+
+    if not isinstance(PLOT_REFERENCE, bool):
+        raise TypeError("PLOT_REFERENCE must be True or False.")
 
     required_panels = {"storm_hans", "monthly_record_without_hans"}
     if set(PANEL_SETTINGS) != required_panels:
@@ -205,7 +213,7 @@ def get_reference_variable():
 
 def get_model_label():
     """Return the model display label."""
-    return "UNSEEN" if MODEL_DATA_METHOD == "raw" else "UNSEEN (bias corrected)"
+    return "Model" if MODEL_DATA_METHOD == "raw" else "Model bias corrected"
 
 
 def split_usable_leads(first_lead, last_lead, number_of_bins):
@@ -614,34 +622,44 @@ def threshold_label(threshold_type, thresholds):
 
 
 def draw_probability_panel(axis, results, settings, panel_label):
-    """Draw UNSEEN fitted probabilities and central bootstrap intervals."""
+    """Draw paired reference/model estimates or centered model-only estimates."""
     alpha = 1.0 - CONFIDENCE_LEVEL
-    estimates = []
-    for method in METHODS:
-        result = results[("model", method)]
-        lower, upper = np.percentile(
-            result["metric_samples"], [100 * alpha / 2, 100 * (1 - alpha / 2)]
-        )
-        estimates.append((result["probability"], lower, upper))
+    groups = [("model", 0.0, MODEL_COLOR, get_model_label())]
+    if PLOT_REFERENCE:
+        groups = [
+            ("reference", -DATASET_OFFSET, OBSERVATION_COLOR, get_reference_name()),
+            ("model", DATASET_OFFSET, MODEL_COLOR, get_model_label()),
+        ]
+
+    maximum = 0.0
+    for method_index, method in enumerate(METHODS):
+        for group, offset, color, label in groups:
+            result = results[(group, method)]
+            estimate = result["probability"]
+            lower, upper = np.percentile(
+                result["metric_samples"], [100 * alpha / 2, 100 * (1 - alpha / 2)]
+            )
+            maximum = max(maximum, estimate, upper)
+            position = method_index + offset
+
+            # Keep the fitted value separate from its percentile interval.
+            axis.vlines(position, lower, upper, color=color, linewidth=INTERVAL_LINEWIDTH)
+            axis.hlines(
+                [lower, upper], position - 0.05, position + 0.05,
+                color=color, linewidth=INTERVAL_LINEWIDTH,
+            )
+            axis.plot(
+                position, estimate, "o", color=color, markersize=6, zorder=3,
+                label=label if method_index == 0 else "_nolegend_",
+            )
 
     limits = settings["ylim"]
     if limits is None:
-        maximum = max(max(estimate, upper) for estimate, lower, upper in estimates)
         limits = (0, min(100, max(0.01, 1.25 * maximum)))
     axis.set_ylim(*limits)
     axis.set_xlim(-0.5, len(METHODS) - 0.5)
     if settings["yticks"] is not None:
         axis.set_yticks(settings["yticks"])
-
-    for position, (method, (estimate, lower, upper)) in enumerate(zip(METHODS, estimates)):
-        color = METHOD_COLORS[method]
-        # Draw the interval separately: a percentile interval need not contain the estimate.
-        axis.vlines(position, lower, upper, color=color, linewidth=INTERVAL_LINEWIDTH)
-        axis.hlines(
-            [lower, upper], position - 0.06, position + 0.06,
-            color=color, linewidth=INTERVAL_LINEWIDTH,
-        )
-        axis.plot(position, estimate, "o", color=color, markersize=6, zorder=3)
 
     axis.set_xticks(range(len(METHODS)))
     axis.set_xticklabels(METHODS)
@@ -650,7 +668,7 @@ def draw_probability_panel(axis, results, settings, panel_label):
         fontsize=TITLE_FONTSIZE, fontweight="normal", pad=12,
     )
     axis.set_ylabel(f"{AEP_YEARS}-year exceedance probability [%]", fontsize=AXIS_LABELSIZE)
-    axis.set_xlabel(f"Extreme value distribution", fontsize=AXIS_LABELSIZE)
+    axis.set_xlabel("Extreme value distribution", fontsize=AXIS_LABELSIZE)
     axis.tick_params(axis="both", labelsize=TICK_LABELSIZE, direction="out")
     axis.spines["top"].set_visible(False)
     axis.spines["right"].set_visible(False)
@@ -660,7 +678,7 @@ def draw_probability_panel(axis, results, settings, panel_label):
 
 
 def plot_all_month_probabilities(results):
-    """Plot UNSEEN probabilities for two thresholds with separate probability scales."""
+    """Plot the selected datasets for both thresholds with separate probability scales."""
     figure, axes = plt.subplots(
         1, 2, figsize=FIGURE_SIZE, gridspec_kw={"wspace": PANEL_WSPACE}, sharey=False,
     )
@@ -670,7 +688,9 @@ def plot_all_month_probabilities(results):
             axis, results[threshold_type], PANEL_SETTINGS[threshold_type], panel_label
         )
 
-    figure.subplots_adjust(left=0.09, right=0.98, top=0.90, bottom=0.12)
+    if PLOT_REFERENCE:
+        axes[0].legend(frameon=False, fontsize=10, loc="best")
+    figure.subplots_adjust(left=0.09, right=0.98, top=0.90, bottom=0.15)
 
     if WRITE_TO_FILE:
         filename = Path(config.dirs["fig"]) / (
