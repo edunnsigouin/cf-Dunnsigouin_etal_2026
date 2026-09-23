@@ -185,7 +185,7 @@ def validate_settings():
 
 def get_reference_name():
     """Return the display name of the selected reference dataset."""
-    return {"senorge": "Senorge", "era5": "ERA5"}[REFERENCE_DATASET]
+    return {"senorge": "seNorge", "era5": "ERA5"}[REFERENCE_DATASET]
 
 
 def get_reference_variable():
@@ -195,7 +195,7 @@ def get_reference_variable():
 
 def get_reference_label():
     """Return the reference label including the fitted year range."""
-    return f"{get_reference_name()} {OBSERVATION_YEARS[0]}-{OBSERVATION_YEARS[1]}"
+    return f"{get_reference_name()}"
 
 
 def get_model_label():
@@ -205,7 +205,7 @@ def get_model_label():
 
 def get_record_label():
     """Return the calendar-record label for the configured observation range."""
-    return "Monthly record excluding Storm Hans"
+    return "Calendar-month record"
 
 
 def get_model_file_id(catchment_name):
@@ -874,7 +874,7 @@ def plot_top_panel(axis, panel_label, month, result, return_periods, show_legend
                 color=STORM_HANS_COLOR,
                 linestyle=STORM_HANS_LINESTYLE,
                 linewidth=REFERENCE_LINEWIDTH,
-                label="Storm Hans August 2023",
+                label="Storm Hans",
             ),
             Line2D(
                 [0],
