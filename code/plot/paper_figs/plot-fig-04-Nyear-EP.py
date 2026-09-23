@@ -99,7 +99,7 @@ AEP_YEARS = 10
 INCLUDE_STORM_HANS_IN_FIT = True
 
 BOOTSTRAP_METHOD = "nonparametric"  # "nonparametric" or "parametric"
-NUMBER_OF_BOOTSTRAPS = 100
+NUMBER_OF_BOOTSTRAPS = 20
 CONFIDENCE_LEVEL = 0.95
 MIN_SUCCESSFUL_BOOTSTRAP_FRACTION = 0.90
 RANDOM_SEED = 42
@@ -649,7 +649,8 @@ def draw_probability_panel(axis, results, settings, panel_label):
         f"{panel_label} {settings['title']}", loc="left",
         fontsize=TITLE_FONTSIZE, fontweight="normal", pad=12,
     )
-    axis.set_ylabel(f"{AEP_YEARS}-year exceedance probability (%)", fontsize=AXIS_LABELSIZE)
+    axis.set_ylabel(f"{AEP_YEARS}-year exceedance probability [%]", fontsize=AXIS_LABELSIZE)
+    axis.set_xlabel(f"Extreme value distribution", fontsize=AXIS_LABELSIZE)
     axis.tick_params(axis="both", labelsize=TICK_LABELSIZE, direction="out")
     axis.spines["top"].set_visible(False)
     axis.spines["right"].set_visible(False)
