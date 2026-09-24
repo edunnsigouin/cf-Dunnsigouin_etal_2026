@@ -103,11 +103,11 @@ SHOW_GRID = True
 # =============================================================================
 # FIGURE OUTPUT — edit the directory or filename here
 # =============================================================================
-WRITE_TO_FILE = False
+WRITE_TO_FILE = True
 SHOW_FIGURE = True
 FIGURE_DPI = 300
 OUTPUT_DIRECTORY = Path(config.dirs["fig"])
-OUTPUT_FILENAME = "bootstrap_comparison.png"
+OUTPUT_FILENAME = "fig-S2.png"
 OUTPUT_PATH = OUTPUT_DIRECTORY / OUTPUT_FILENAME
 
 # =============================================================================
