@@ -88,7 +88,7 @@ STREAMFLOW_CLIMATOLOGY_YEARS = [1921, 2025]
 STREAMFLOW_CENTER_STATISTIC = "median"
 
 # Plot the maximum for each day of year across all available years in grey.
-PLOT_STREAMFLOW_DAILY_MAX = False
+PLOT_STREAMFLOW_DAILY_MAX = True
 
 # Optional Bergheim station coordinate overrides in decimal degrees.
 # Leave both as None to read coordinates from the NVE station NetCDF metadata.
@@ -119,7 +119,7 @@ ERA5_PRECIP_FILE = PATH_ERA5 / ERA5_PRECIP_VAR / f"{ERA5_PRECIP_VAR}_0.5x0.5_{YE
 
 MSL_FILE = PATH_ERA5 / MSL_VAR / f"{MSL_VAR}_0.5x0.5_{YEAR}.nc"
 STREAMFLOW_FILE = PATH_STATION / "streamflow.Bergheim.nc"
-OUTPUT_FILE = PATH_OUT / f"fig-01_{REFERENCE_DATASET}.png"
+OUTPUT_FILE = PATH_OUT / f"fig-01.png"
 
 
 # =============================================================================
@@ -658,7 +658,7 @@ def plot_streamflow_timeseries(ts_ax, ds_streamflow, year):
         color=TIMESERIES_RANGE_FILL_COLOR,
         alpha=TIMESERIES_RANGE_FILL_ALPHA,
         linewidth=0,
-        label=f"95% interval {period_label}",
+        label=f"95% interval",
     )
 
     center_label = STREAMFLOW_CENTER_STATISTIC.capitalize()
@@ -667,7 +667,7 @@ def plot_streamflow_timeseries(ts_ax, ds_streamflow, year):
         center,
         linewidth=TIMESERIES_CENTER_LINEWIDTH,
         color=TIMESERIES_CENTER_LINE_COLOR,
-        label=f"{center_label} {period_label}",
+        label=f"{center_label}",
     )
 
     if PLOT_STREAMFLOW_DAILY_MAX:
@@ -676,7 +676,7 @@ def plot_streamflow_timeseries(ts_ax, ds_streamflow, year):
             daily_max,
             linewidth=TIMESERIES_MAX_LINEWIDTH,
             color=TIMESERIES_MAX_LINE_COLOR,
-            label="Daily maximum (all years)",
+            label="Maximum",
         )
 
     ts_ax.plot(x, y, linewidth=TIMESERIES_YEAR_LINEWIDTH, label=f"{year}")
@@ -694,7 +694,7 @@ def plot_streamflow_timeseries(ts_ax, ds_streamflow, year):
     ts_ax.xaxis.set_major_locator(mdates.MonthLocator())
     ts_ax.xaxis.set_major_formatter(mdates.DateFormatter("%b"))
     ts_ax.xaxis.set_minor_locator(mdates.MonthLocator())
-    ts_ax.legend(frameon=False, fontsize=LEGEND_FONTSIZE, loc="upper right")
+    ts_ax.legend(frameon=False, fontsize=LEGEND_FONTSIZE, loc="upper left")
 
 def add_panel_titles(map_axes):
     """Add panel labels and dates to panels a-d."""
@@ -711,7 +711,7 @@ def add_panel_titles(map_axes):
 def add_precip_colorbar(fig, mesh, cbar_ax):
     """Add precipitation colorbar for the selected reference dataset."""
     colorbar = fig.colorbar(mesh, cax=cbar_ax, orientation='vertical')
-    colorbar.set_label(f'{get_reference_name()} precipitation (mm)', fontsize=AXIS_LABELSIZE)
+    colorbar.set_label('Precipitation [mm]', fontsize=AXIS_LABELSIZE)
     colorbar.ax.tick_params(labelsize=TICK_LABELSIZE)
 
 def add_map_legend(map_axes, catchment_label):
@@ -723,7 +723,7 @@ def add_map_legend(map_axes, catchment_label):
             [0],
             color=MSL_CONTOUR_COLOR,
             linewidth=MSL_CONTOUR_LINEWIDTH,
-            label="ERA5 mean sea level pressure (hPa)",
+            label="Mean sea level pressure [hPa]",
         ),
         Line2D(
             [0],
