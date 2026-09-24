@@ -1,23 +1,19 @@
 #!/usr/bin/env python3
 """Compare monthly fidelity percentiles for raw and bias-corrected model data.
-
 The upper panel uses raw data; the lower optionally corrects only failed months.
 Columns are calendar months; rows are mean, std, kurtosis, and skewness.
 Numbers are reference-statistic percentiles in model bootstrap distributions.
 Blue cells pass the central bootstrap interval test; orange cells fail.
-
 Bootstrap samples are drawn with replacement and match the reference sample
 size. Ties receive half weight in the percentile calculation. Colours use the
 unrounded interval test, not the displayed percentile. Statistic definitions,
 monthly random seeds, and reference selection follow the original script.
-
 Bias-corrected filenames follow script 1. If BIAS_CORRECT_ONLY_FAILED_MONTHS is
 True, a month uses corrected data for all four tests in panel (b) only if at
 least one raw fidelity test fails. Otherwise its raw results are reused exactly.
 If False, panel (b) uses corrected data for every month.
 Requires numpy, scipy, pandas, xarray, matplotlib, and the project config.
 """
-
 from calendar import month_abbr
 from pathlib import Path
 
@@ -31,42 +27,67 @@ from scipy.stats import kurtosis, skew
 
 from Dunnsigouin_etal_2026 import config
 
-
-# User settings
-x_days = 2
+# =============================================================================
+# USER INPUTS — data selection
+# =============================================================================
+x_days = 2  # Precipitation accumulation length in days.
 catchment = "regine_drammen"
 forecast_date_range = ("2020-01-02", "2023-12-28")
-reference_years = ("1957", "2025")
-REFERENCE_FILE_YEARS = ("1957", "2025")
-REFERENCE_DATASET = "senorge"  # "era5" or "senorge"
-EXCLUDE_STORM_HANS_FROM_REFERENCE = True
-BIAS_CORRECTION_METHOD = "mm_1step"  # "mm_1step", "mm_2step", "q", "doy", "ld", "q_doy"
+reference_years = ("1957", "2025")  # Reference period used in the fidelity tests.
+REFERENCE_FILE_YEARS = ("1957", "2025")  # Full period encoded in the reference filename.
+REFERENCE_DATASET = "senorge"  # "era5" or "senorge".
+EXCLUDE_STORM_HANS_FROM_REFERENCE = True  # Remove August 2023 from the reference sample.
 
-# True: correct months failing any raw fidelity test; False: correct every month.
+BIAS_CORRECTION_METHOD = "mm_1step"  # "mm_1step", "mm_2step", "q", "doy", "ld", "q_doy".
+# True: correct all four tests for any month failing at least one raw test.
+# False: use corrected data for every month in panel (b).
 BIAS_CORRECT_ONLY_FAILED_MONTHS = False
 
-number_of_bootstrap_samples = 10_000
-confidence_level_percent = 95.0
-random_seed = 42
-
+# Optional explicit input paths; None builds filenames from the settings above.
 raw_model_filename_override = None
 bias_corrected_model_filename_override = None
 reference_filename_override = None
-output_filename_override = None  # Optional .pdf, .svg, or .png path
-write2file = True
+
+# =============================================================================
+# BOOTSTRAP SETTINGS
+# =============================================================================
+number_of_bootstrap_samples = 10_000
+confidence_level_percent = 95.0  # Central bootstrap interval used for pass/fail decisions.
+random_seed = 42  # Each calendar month uses random_seed + month.
+
+# =============================================================================
+# FIGURE OUTPUT — edit the directory or filename here
+# =============================================================================
+write2file = False  # Set True to save the figure.
 show_figure = True
-
-figure_size = (10.0, 6.4)
+output_directory = Path(config.dirs["fig"])
+output_filename = "fig-S1.png"  # Also supports .pdf and .svg.
+output_filename_override = None  # Optional full path; takes precedence over the two above.
+output_path = (
+    Path(output_filename_override) if output_filename_override
+    else output_directory / output_filename
+)
 figure_dpi = 400
-annotation_decimals = 1
-PASS_COLOR = "#0072B2"  # Okabe-Ito blue
-FAIL_COLOR = "#E69F00"  # Okabe-Ito orange
 
-# Fixed settings
+# =============================================================================
+# FIGURE APPEARANCE
+# =============================================================================
+figure_size = (10.0, 6.4)  # Width and height in inches.
+annotation_decimals = 1  # Display precision only; does not affect pass/fail decisions.
+PASS_COLOR = "#0072B2"  # Okabe-Ito blue.
+FAIL_COLOR = "#E69F00"  # Okabe-Ito orange.
+
+# =============================================================================
+# DATASET AND TEST CONVENTIONS
+# =============================================================================
 MODEL_MONTH_COORDINATE = "sample_month"
 STATISTICS = ("mean", "std", "kurtosis", "skewness")
 TEST_LABELS = ("Mean", "Standard deviation", "Kurtosis", "Skewness")
 MONTHS = np.arange(1, 13)
+
+# =============================================================================
+# Input filenames and validation
+# =============================================================================
 
 
 def build_model_filename(method: str) -> Path:
@@ -112,10 +133,15 @@ def validate_settings() -> None:
         raise ValueError("confidence_level_percent must be between 0 and 100.")
     if not 0 <= annotation_decimals <= 4:
         raise ValueError("annotation_decimals must be between 0 and 4.")
+
     first_year, last_year = map(int, reference_years)
     file_start, file_end = map(int, REFERENCE_FILE_YEARS)
     if not file_start <= first_year <= last_year <= file_end:
         raise ValueError("reference_years must be increasing and within REFERENCE_FILE_YEARS.")
+
+# =============================================================================
+# Data preparation
+# =============================================================================
 
 
 def finite_values(values: np.ndarray) -> np.ndarray:
@@ -133,7 +159,6 @@ def get_calendar_month(model_ds: xr.Dataset) -> xr.DataArray:
     sample_month = model_ds[MODEL_MONTH_COORDINATE]
     if sample_month.dims != ("i_date",):
         raise ValueError("sample_month must have dimension ('i_date',).")
-
     values = np.asarray(sample_month.values)
     valid = np.isfinite(values)
     months = np.full(values.shape, -1, dtype="int16")
@@ -150,6 +175,7 @@ def get_reference_values(ds: xr.Dataset, variable: str, month: int) -> np.ndarra
     data = ds[variable]
     if not {"year", "month"}.issubset(set(data.dims) | set(data.coords)):
         raise ValueError("Reference data must contain year and month.")
+
     first_year, last_year = map(int, reference_years)
     selected = data.sel(year=slice(first_year, last_year), month=month)
     if EXCLUDE_STORM_HANS_FROM_REFERENCE and month == 8 and first_year <= 2023 <= last_year:
@@ -157,6 +183,10 @@ def get_reference_values(ds: xr.Dataset, variable: str, month: int) -> np.ndarra
             raise ValueError("Cannot exclude Storm Hans: August 2023 is absent.")
         selected = selected.sel(year=selected["year"] != 2023)
     return finite_values(selected.values)
+
+# =============================================================================
+# Bootstrap fidelity calculations
+# =============================================================================
 
 
 def calculate_statistic(values: np.ndarray, statistic: str, axis=None):
@@ -176,10 +206,12 @@ def evaluate_month(model: np.ndarray, reference: np.ndarray, month: int) -> list
     """Return reference percentiles and the unchanged interval-based decisions."""
     if min(model.size, reference.size) < 4:
         raise ValueError(f"{month_abbr[month]} requires at least four model and reference values.")
+
     rng = np.random.default_rng(random_seed + month)
     indices = rng.integers(0, model.size, size=(number_of_bootstrap_samples, reference.size))
     resampled = model[indices]
     tail = (100.0 - confidence_level_percent) / 2.0
+
     results = []
 
     for statistic in STATISTICS:
@@ -207,6 +239,7 @@ def evaluate_month(model: np.ndarray, reference: np.ndarray, month: int) -> list
 def evaluate_fidelity(model_ds: xr.Dataset, reference_ds: xr.Dataset, variable: str, months=MONTHS):
     """Evaluate the four fidelity tests for the requested calendar months."""
     calendar_month = get_calendar_month(model_ds)
+
     results = []
     for month in months:
         selected = model_ds["tp24_max"].where(calendar_month == month, drop=True)
@@ -230,6 +263,10 @@ def evaluate_panel_b(raw_results, corrected_ds, reference_ds, reference_variable
     retained = raw_results.loc[~raw_results["month"].isin(months)]
     return pd.concat([retained, corrected], ignore_index=True)
 
+# =============================================================================
+# Plotting
+# =============================================================================
+
 
 def plot_fidelity_heatmap(axis, results: pd.DataFrame, title: str) -> None:
     """Draw on supplied axes so this panel can be reused in a comparison figure."""
@@ -239,8 +276,9 @@ def plot_fidelity_heatmap(axis, results: pd.DataFrame, title: str) -> None:
     passes = passes.loc[list(STATISTICS), MONTHS].to_numpy(dtype=bool)
     axis.imshow(
         passes.astype(int), cmap=ListedColormap([FAIL_COLOR, PASS_COLOR]),
-        vmin=0, vmax=1, aspect="auto", interpolation="nearest",alpha=1.0,
+        vmin=0, vmax=1, aspect="auto", interpolation="nearest", alpha=1.0,
     )
+
     for (row, column), percentile in np.ndenumerate(percentiles):
         axis.text(
             column, row, f"{percentile:.{annotation_decimals}f}",
@@ -266,11 +304,12 @@ def make_figure(raw_results: pd.DataFrame, corrected_results: pd.DataFrame, file
     with plt.rc_context(style):
         figure, axes = plt.subplots(2, 1, figsize=figure_size, sharex=True)
         plot_fidelity_heatmap(axes[0], raw_results, "(a) Raw model")
-        plot_fidelity_heatmap(axes[1], corrected_results, f"(b) Bias-corrected model")
+        plot_fidelity_heatmap(axes[1], corrected_results, "(b) Bias-corrected model")
         axes[0].tick_params(axis="x", labelbottom=True)
         axes[1].set_xlabel("Month", labelpad=10)
         axes[0].set_xlabel("Month", labelpad=10)
         figure.subplots_adjust(left=0.20, right=0.99, top=0.93, bottom=0.17, hspace=0.42)
+
         figure.legend(
             handles=[Patch(facecolor=PASS_COLOR, label="Pass"),
                      Patch(facecolor=FAIL_COLOR, label="Fail")],
@@ -279,16 +318,23 @@ def make_figure(raw_results: pd.DataFrame, corrected_results: pd.DataFrame, file
             frameon=False, handlelength=1.2, handleheight=1.0,
             title_fontsize=10,
         )
+
         if filename is not None:
             filename.parent.mkdir(parents=True, exist_ok=True)
             figure.savefig(filename, dpi=figure_dpi, bbox_inches="tight", facecolor="white")
             print("Wrote:", filename)
+
         if show_figure:
             plt.show()
         plt.close(figure)
 
+# =============================================================================
+# Main workflow
+# =============================================================================
+
 
 def main() -> None:
+    """Read inputs, evaluate monthly fidelity, and plot the two comparison panels."""
     validate_settings()
     raw_filename = build_model_filename("raw")
     corrected_filename = build_model_filename(BIAS_CORRECTION_METHOD)
@@ -296,6 +342,7 @@ def main() -> None:
     for filename in (raw_filename, corrected_filename, reference_filename):
         if not filename.is_file():
             raise FileNotFoundError(f"Required input file not found: {filename}")
+    print("Figure output:", output_path, "(saving enabled)" if write2file else "(saving disabled)")
     print("Raw model:", raw_filename)
     print(f"Bias-corrected model ({BIAS_CORRECTION_METHOD}):", corrected_filename)
     print(f"{reference_label}:", reference_filename)
@@ -317,11 +364,7 @@ def main() -> None:
         table.columns = [month_abbr[month] for month in MONTHS]
         print(table.to_string(float_format=lambda value: f"{value:.{annotation_decimals}f}"))
 
-    filename = None
-    correction_mode = "failed-months" if BIAS_CORRECT_ONLY_FAILED_MONTHS else "all-months"
-    if write2file:
-        filename = Path(output_filename_override) if output_filename_override else (Path(config.dirs["fig"]) / ("fig-S4.png"))
-    make_figure(raw_results, corrected_results, filename)
+    make_figure(raw_results, corrected_results, output_path if write2file else None)
 
 
 if __name__ == "__main__":
