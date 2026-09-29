@@ -46,7 +46,7 @@ EVENT_DATES = [
 TIMESERIES_N_DAYS_BEFORE = 3
 TIMESERIES_M_DAYS_LEAD = 6
 PLOT_MSL_CONTOURS = True
-WRITE_TO_FILE = False
+WRITE_TO_FILE = True
 
 
 # =============================================================================
