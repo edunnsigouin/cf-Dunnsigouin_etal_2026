@@ -41,7 +41,7 @@ from Dunnsigouin_etal_2026 import config
 # =============================================================================
 CATCHMENT_NAME = "drammen"  # options: "drammen", "glomma"
 EVENT_MONTH = 5
-EVENT_RANK = 10
+EVENT_RANK = 1
 FORECAST_DATE_RANGE = ["2020-01-02", "2023-12-28"]
 OBSERVATION_YEARS = ["1957", "2025"]
 ACCUMULATION_DAYS = 2
@@ -101,7 +101,7 @@ FIG_TOP_IN = 0.448
 # Plot styling
 
 # =============================================================================
-PRECIP_LEVELS = np.arange(5, 55, 5)
+PRECIP_LEVELS = np.arange(5, 65, 5)
 PRECIP_ZERO_THRESHOLD = 5.0
 PRECIP_CMAP = plt.get_cmap("GnBu").copy()
 PRECIP_CMAP.set_under("white")
@@ -317,9 +317,7 @@ def print_selected_event(event):
 def make_output_filename(catchment_name, event_rank):
     """Create output filename including the selected plotted variable."""
     return (
-        f"{PATH_OUT}fig-05-{catchment_name}-"
-        f"month-{EVENT_MONTH:02d}-rank-{event_rank:02d}-"
-        f"{FORECAST_DATE_RANGE[0]}-{FORECAST_DATE_RANGE[-1]}.png"
+        f"{PATH_OUT}fig-07.png"
     )
 
 # =============================================================================
@@ -669,15 +667,15 @@ def add_panel_titles(axes, event_dates):
 def add_colorbar(fig, mesh, cbar_ax):
     """Add vertical precipitation colorbar beside the map panels."""
     cbar = fig.colorbar(mesh, cax=cbar_ax, orientation="vertical")
-    cbar.set_label("precipitation (mm)", fontsize=AXIS_LABELSIZE)
+    cbar.set_label("Precipitation [mm]", fontsize=AXIS_LABELSIZE)
     cbar.ax.tick_params(labelsize=TICK_LABELSIZE)
 
 def get_snow_legend_handle():
     """Return a legend handle for the selected snow overlay."""
     if SNOW_OVERLAY_VARIABLE == "snowmelt":
-        label = rf"Daily $\Delta$SWE < {SNOWMELT_THRESHOLD:g} mm"
+        label = rf"Daily $\Delta$SWE < {SNOWMELT_THRESHOLD:g} [mm]"
     elif SNOW_OVERLAY_VARIABLE == "snow_depth":
-        label = rf"SWE > {SNOW_DEPTH_THRESHOLD:g} mm"
+        label = rf"Snow water equivalent > {SNOW_DEPTH_THRESHOLD:g} [mm]"
     else:
         raise ValueError("SNOW_OVERLAY_VARIABLE must be 'snowmelt' or 'snow_depth'.")
     if SNOW_OVERLAY_STYLE == "hatching":
@@ -705,7 +703,7 @@ def add_legend(axes, catchment_label):
             [0],
             color=MSL_CONTOUR_COLOR,
             linewidth=MSL_CONTOUR_LINEWIDTH,
-            label="Mean sea level pressure (hPa)",
+            label="Mean sea level pressure [hPa]",
         ),
         get_snow_legend_handle(),
     ]

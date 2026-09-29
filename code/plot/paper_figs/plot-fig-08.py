@@ -46,7 +46,7 @@ EVENT_DATES = [
 TIMESERIES_N_DAYS_BEFORE = 3
 TIMESERIES_M_DAYS_LEAD = 6
 PLOT_MSL_CONTOURS = True
-WRITE_TO_FILE = True
+WRITE_TO_FILE = False
 
 
 # =============================================================================
@@ -86,7 +86,7 @@ PRECIP_SENORGE_PATH = (
     / PRECIP_SENORGE_VAR
 )
 PRECIP_SENORGE_FILE_PATTERN = f"{PRECIP_SENORGE_VAR}" + "_{year}.nc"
-OUTPUT_FILENAME = PATH_OUT / "fig-06.png"
+OUTPUT_FILENAME = PATH_OUT / "fig-08.png"
 
 
 # =============================================================================
@@ -1034,14 +1034,14 @@ def plot_precipitation_timeseries(
         senorge,
         color=PRECIP_SENORGE_COLOR,
         linewidth=PRECIP_LINEWIDTH,
-        label="SeNorge Storm Hans",
+        label="Storm Hans",
     )
     ax.set_title(
-        f"e) {catchment_label} precipitation",
+        f"e) {catchment_label}",
         fontsize=TITLE_FONTSIZE,
         pad=5,
     )
-    ax.set_ylabel("mm", fontsize=AXIS_LABELSIZE)
+    ax.set_ylabel("Precipitation [mm]", fontsize=AXIS_LABELSIZE)
     ax.set_xlabel(
         "Date",
         fontsize=AXIS_LABELSIZE,
@@ -1115,7 +1115,7 @@ def add_colorbar(fig, mesh, cbar_ax):
         orientation="vertical",
     )
     cbar.set_label(
-        "Precipitation (mm)",
+        "Precipitation [mm]",
         fontsize=AXIS_LABELSIZE,
     )
     cbar.ax.tick_params(labelsize=TICK_LABELSIZE)
@@ -1140,7 +1140,7 @@ def add_map_legend(map_axes, catchment_label):
                 [0],
                 color=MSL_CONTOUR_COLOR,
                 linewidth=MSL_CONTOUR_LINEWIDTH,
-                label="Mean sea level pressure (hPa)",
+                label="Mean sea level pressure [hPa]",
             )
         )
 
