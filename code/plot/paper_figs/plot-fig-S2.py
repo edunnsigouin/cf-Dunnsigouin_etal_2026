@@ -128,7 +128,7 @@ METHODS = ["GEV", "Gumbel", "GenEx"]
 POOLED_GROUP = "pooled"
 BALANCED_GROUP = "equal_year"
 RESAMPLING_GROUPS = [POOLED_GROUP, BALANCED_GROUP]
-GROUP_COLORS = {POOLED_GROUP: "tab:blue", BALANCED_GROUP: "tab:orange"}
+GROUP_COLORS = {POOLED_GROUP: "tab:blue", BALANCED_GROUP: "tab:pink"}
 GROUP_LABELS = {POOLED_GROUP: 'Pooled bootstrap', BALANCED_GROUP: 'Equal year-weighted bootstrap'}
 
 

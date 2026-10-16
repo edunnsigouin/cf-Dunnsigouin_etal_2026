@@ -75,7 +75,7 @@ INCLUDE_STORM_HANS_IN_FIT = True
 
 # Bootstrap uncertainty (also used for the printed interval-width ratios)
 BOOTSTRAP_METHOD = "nonparametric"  # "nonparametric" or "parametric"
-NUMBER_OF_BOOTSTRAPS = 100
+NUMBER_OF_BOOTSTRAPS = 20
 CONFIDENCE_LEVEL = 0.95
 MIN_SUCCESSFUL_BOOTSTRAP_FRACTION = 0.90
 RANDOM_SEED = 42
@@ -104,7 +104,7 @@ PRECIPITATION_YMAX = 200.0
 # =============================================================================
 # FIGURE OUTPUT — edit the directory or filename here
 # =============================================================================
-WRITE_TO_FILE = True
+WRITE_TO_FILE = False
 SHOW_FIGURE = True
 FIGURE_DPI = 300
 OUTPUT_DIRECTORY = Path(config.dirs["fig"])
@@ -133,6 +133,10 @@ OBSERVATION_COLOR = "tab:orange"
 MODEL_COLORS = {
     "raw": "tab:blue",
     "mm_1step": "tab:cyan",
+    "q_doy": "tab:brown",
+    "q": "tab:olive",
+    "doy": "tab:purple",
+    "ld": "tab:pink",
 }
 STORM_HANS_COLOR = "grey"
 RECORD_COLOR = "grey"
