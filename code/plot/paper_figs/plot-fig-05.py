@@ -50,7 +50,7 @@ REFERENCE_FILE_YEARS = [1957, 2025]  # Year range encoded in the reference filen
 FORECAST_DATE_RANGE = ["2020-01-02", "2023-12-28"]
 
 # Model processing and sampling
-MODEL_DATA_METHOD = "raw"  # "raw", "mm_1step", "mm_2step", "q", "ld", "doy", "q_doy"
+MODEL_DATA_METHOD = "mm_1step"  # "raw", "mm_1step", "mm_2step", "q", "ld", "doy", "q_doy"
 MODEL_VARIABLE = "tp24"
 MODEL_SAMPLING_GROUP = "full"  # "full", "split1", "split2", ...
 FIRST_INPUT_LEAD = 16
@@ -97,7 +97,7 @@ PRECIPITATION_YMAX = 200.0
 # =============================================================================
 # FIGURE OUTPUT — edit the directory or filename here
 # =============================================================================
-WRITE_TO_FILE = True
+WRITE_TO_FILE = False
 SHOW_FIGURE = True
 FIGURE_DPI = 300
 OUTPUT_DIRECTORY = Path(config.dirs["fig"])
