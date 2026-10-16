@@ -41,7 +41,7 @@ from Dunnsigouin_etal_2026 import config
 # =============================================================================
 CATCHMENT_NAME = "drammen"  # options: "drammen", "glomma"
 EVENT_MONTH = 5
-EVENT_RANK = 1
+EVENT_RANK = 2
 FORECAST_DATE_RANGE = ["2020-01-02", "2023-12-28"]
 OBSERVATION_YEARS = ["1957", "2025"]
 ACCUMULATION_DAYS = 2
@@ -65,7 +65,7 @@ SNOW_VAR = "sd"
 SNOW_OVERLAY_VARIABLE = "snow_depth"  # options: "snowmelt", "snow_depth"
 SNOWMELT_THRESHOLD = 0.0
 SNOW_DEPTH_THRESHOLD = 0.0
-WRITE_TO_FILE = True
+WRITE_TO_FILE = False
 
 # =============================================================================
 # Paths
