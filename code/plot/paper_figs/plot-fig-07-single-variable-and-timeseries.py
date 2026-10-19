@@ -29,7 +29,7 @@ from Dunnsigouin_etal_2026 import config
 # =============================================================================
 CATCHMENT_NAME = "drammen"  # options: "drammen", "glomma"
 EVENT_MONTH = 5
-EVENT_RANK = 1
+EVENT_RANK = 2
 FORECAST_DATE_RANGE = ["2020-01-02", "2023-12-28"]
 OBSERVATION_YEARS = ["1957", "2025"]
 ACCUMULATION_DAYS = 2
@@ -44,7 +44,7 @@ RANK_VARIABLE = "tp24"
 # User settings: plotted variable and dates
 # =============================================================================
 # Options: "tp24", "rn24", "msl", "sd", "sm", "ro24", "sro24"
-PLOT_VARIABLE = "sm"
+PLOT_VARIABLE = "sro24"
 EVENT_LAGS = [-2, -1, 0, 1]
 WRITE_TO_FILE = False
 
@@ -62,7 +62,7 @@ S2S_BASE_DIR = Path("/nird/datapeak/NS9873K/etdu/raw/s2s/mars/ecmwf")
 FIG_WIDTH_IN = 9.4
 FIG_HEIGHT_IN = 11.2
 #MAP_EXTENT = [-10, 25, 50, 70]
-MAP_EXTENT = [5, 15, 58, 62] 
+MAP_EXTENT = [5, 12, 58, 62] 
 MAP_WSPACE = 0.02
 MAP_HSPACE = 0.10
 TIMESERIES_HSPACE = 0.10
