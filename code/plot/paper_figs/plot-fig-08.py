@@ -97,7 +97,7 @@ MM_PER_DAY = r"[mm/day]"
 VARIABLE_DEFAULTS = {
     "tp24":   {"title": "Precipitation", "ylabel": MM_PER_DAY, "color": "#1f5fa8",
                "range_color": None, "ylim": (0, None), "zero_line": False, "yticks": None},
-    "t2m24":  {"title": "Daily-mean 2 m temperature", "ylabel": r"[$^{\circ}$C]", "color": "#b2182b",
+    "t2m24":  {"title": "2 m temperature", "ylabel": r"[$^{\circ}$C]", "color": "#b2182b",
                "range_color": None, "ylim": (None, None), "zero_line": True, "yticks": None},
     "sd":     {"title": "Snow water equivalent", "ylabel": "[mm]", "color": "#6a51a3",
                "range_color": None, "ylim": (0, None), "zero_line": False, "yticks": None},
@@ -824,7 +824,7 @@ def plot_panel(ax, series, settings, event_dates, index):
     )
     if SHOW_EVENT_DOTS:
         mark_event_days(ax, series, event_dates, settings["color"])
-    ax.set_title(make_panel_title(settings, index), loc="center", pad=3)
+    ax.set_title(make_panel_title(settings, index), loc="left", pad=3)
     ax.set_ylabel(settings["ylabel"])
     bottom, top = settings["ylim"]
     ax.set_ylim(bottom=bottom, top=top)
