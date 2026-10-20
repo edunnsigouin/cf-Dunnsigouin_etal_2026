@@ -1,48 +1,57 @@
 """
-Plot the catchment-mean evolution of one high-ranking S2S precipitation event as
-vertically stacked time-series panels (one per entry in PLOT_VARIABLES, up to eight).
+Stacked time-series figure of one high-ranking S2S precipitation event, shown as
+catchment means: one panel per entry in PLOT_VARIABLES (up to eight), each with
+    - the selected ensemble member (line),
+    - the central range over all hindcast dates and ensemble members (shading),
+    - dots on the event days (date_of_max + EVENT_LAGS).
 
-Event selection is unchanged from the map script: events are ranked by accumulated
-precipitation (RANK_VARIABLE) in the monthly-maximum sample file, and the
-EVENT_RANK-th event in EVENT_MONTH is selected.
+The event is the EVENT_RANK-th largest 2-day precipitation event in EVENT_MONTH,
+taken from the monthly-maximum sample file.
 
-Each panel shows one variable from PLOT_VARIABLES as a catchment-weighted spatial
-mean:
-    - the selected ensemble member (solid line), and
-    - the central 95% range over all hindcast dates and ensemble members (shading).
-The event-window days (date_of_max + EVENT_LAGS) are marked with dots on the
-selected-member line in every panel.
+Everything you normally change is in the USER SETTINGS block below, in this order:
+    1. Event         - which event to plot
+    2. Panels        - which variables, in which order, and the style of each panel
+    3. Figure        - layout, fonts, lines, date axis
+    4. Legend        - position and all legend text
+    5. Output        - figure name, folder, formats
+    6. Calculations  - climatology bands
+    7. Data sources  - file locations (from config.dirs) and units (rarely changed)
 
-Supported variables: "tp24", "rn24", "sf24", "msl", "sd", "sm", "melt", "ro24",
-"sro24", "t2m24".
+Variables available for panels
+    "tp24"   total precipitation (mm/day)       "rn24"  rainfall (mm/day)
+    "sf24"   snowfall (mm/day)                  "sd"    snow water equivalent, SWE (mm)
+    "melt"   snowmelt = sf24 - ΔSWE (mm/day)    "ro24"  total runoff (mm/day)
+    "sro24"  surface runoff (mm/day)            "t2m24" daily-mean 2 m temperature (°C)
+    "msl"    mean sea level pressure (hPa)
+Daily totals (tp24, rn24, sf24, ro24, sro24) cover 00-24 UTC on the labelled day.
+Daily snowfall "sf24" comes from the files written by convert_sf6_to_sf24.py.
 
-Daily accumulated variables (tp24, rn24, sf24, ro24, sro24) are labelled by the
-start of their 24-hour window: the value on day D covers 00-24 UTC on day D.
+Snow water equivalent change (ΔSWE) and snowmelt
+-------------------------------------------------
+The daily SWE files ("sd") hold daily means of the 6-hourly values at 00, 06, 12 and
+18 UTC, so each daily value represents the snowpack at roughly 09 UTC. The daily
+fluxes (tp24, sf24, ro24) are totals over 00-24 UTC and are labelled by the start of
+that window. ΔSWE is therefore computed "forward" and labelled by its first day:
 
-Snow variables derived from snow water equivalent (SWE, stored as "sd"):
-    "sm"   : daily change in SWE, ΔSWE (negative = net loss from the snowpack).
-    "neg_sm": -ΔSWE (positive = net loss from the snowpack), on the same sign as
-             "melt" so the two can be compared directly.
-    "melt" : snowmelt estimated from the snow budget, melt = sf24 - ΔSWE
-             (positive = melt). Unlike ΔSWE, this does not hide melt on days
-             when snow also falls.
-Daily snowfall "sf24" is read from the daily files written by convert_sf6_to_sf24.py
-(00-24 UTC on the labelled day, like tp24).
-How ΔSWE is computed is set by SWE_METHOD:
-    "daily_mean_upper" : ΔSWE(D) = SWE(D) - SWE(D-1), daily-mean SWE.
-                         Window ~09 UTC D-1 to 09 UTC D (original definition).
-    "daily_mean_lower" : ΔSWE(D) = SWE(D+1) - SWE(D), daily-mean SWE.
-                         Window ~09 UTC D to 09 UTC D+1 (closer to tp24).
-    "snapshot_00utc"   : ΔSWE(D) = SWE(00 UTC D+1) - SWE(00 UTC D), from the
-                         6-hourly SWE files. Same 00-24 UTC window as tp24 and sf24.
+    ΔSWE(D) = SWE(D+1) - SWE(D)
 
-6-hourly SWE files are assumed to be stored like the sf6 files:
-    - split into control and perturbed files, e.g. sd_CY47R3_0.5x0.5_<date>_cf.nc
-      and ..._pf.nc, combined with the control appended as the last member;
-    - a "time" coordinate that counts forecast steps as if the forecast had started
-      on 1900-01-01 00 UTC (e.g. "hours since 1900-01-16 00:00:00"), converted here
-      to valid time = forecast date + step;
-    - the control member relabelled to match the daily files (e.g. 11 -> 51).
+This is the change from ~09 UTC on day D to ~09 UTC on day D+1. It overlaps the
+00-24 UTC flux window of day D by 15 of 24 hours, and lags it by ~9 hours. The
+alternative "backward" difference, SWE(D) - SWE(D-1), covers ~09 UTC on D-1 to ~09
+UTC on D, overlaps day D by only 9 hours and leads it by ~15 hours, so it would place
+snow changes too early relative to the precipitation. An exact 00-24 UTC window
+would need 6-hourly SWE snapshots; the remaining ~9-hour offset is small compared
+with the 2-day events studied here.
+
+Snowmelt is estimated from the snow budget of each day,
+
+    ΔSWE = snowfall - melt   =>   melt = sf24 - ΔSWE
+
+so positive values are melt. Using snowfall recovers melt that ΔSWE alone hides on
+days when snow both falls and melts (e.g. 10 mm of snowfall and 10 mm of melt gives
+ΔSWE = 0 but melt = 10 mm). Small negative values mean the snowpack gained more water
+than fell as snow, typically rain retained or refrozen in the snowpack. Sublimation
+is neglected.
 """
 
 from pathlib import Path
@@ -56,121 +65,184 @@ from matplotlib.patches import Patch
 
 from Dunnsigouin_etal_2026 import config
 
+# #############################################################################
+#                               USER SETTINGS
+# #############################################################################
+
 # =============================================================================
-# User settings: event selection
+# 1. Event
 # =============================================================================
-CATCHMENT_NAME = "drammen"  # options: "drammen", "glomma"
-EVENT_MONTH = 5
-EVENT_RANK = 1
+CATCHMENT_NAME = "drammen"   # "drammen" or "glomma"
+EVENT_MONTH = 5              # Calendar month of the event (1-12)
+EVENT_RANK = 2               # 1 = largest 2-day precipitation event in that month
+EVENT_LAGS = [-2, -1, 0, 1]  # Event days marked with dots, relative to the 2-day maximum
+
+# =============================================================================
+# 2. Panels
+# =============================================================================
+# Variables to plot, top to bottom (one panel each, up to eight).
+PLOT_VARIABLES = ["tp24", "t2m24", "sd", "melt", "ro24"]
+
+# Style of each variable's panel. Edit any entry to change that panel:
+#   "title"       panel title (the a), b), ... label is added automatically)
+#   "ylabel"      y-axis label
+#   "color"       colour of the selected-member line and dots
+#   "range_color" colour of the climatology bands and median; None = CLIMATOLOGY_COLOR
+#   "ylim"        (bottom, top); None for either end sets it from the data
+#   "zero_line"   True/False: grey reference line at 0
+#   "yticks"      list of tick positions, or None for automatic ticks
+MM_PER_DAY = r"[mm/day]"
+VARIABLE_DEFAULTS = {
+    "tp24":   {"title": "Precipitation", "ylabel": MM_PER_DAY, "color": "#1f5fa8",
+               "range_color": None, "ylim": (0, None), "zero_line": False, "yticks": None},
+    "t2m24":  {"title": "Daily-mean 2 m temperature", "ylabel": r"[$^{\circ}$C]", "color": "#b2182b",
+               "range_color": None, "ylim": (None, None), "zero_line": True, "yticks": None},
+    "sd":     {"title": "Snow water equivalent", "ylabel": "[mm]", "color": "#6a51a3",
+               "range_color": None, "ylim": (0, None), "zero_line": False, "yticks": None},
+    "melt":   {"title": r"Snowmelt (snowfall $-$ $\Delta$ snow water equivalent)",
+               "ylabel": MM_PER_DAY, "color": "#7b3294",
+               "range_color": None, "ylim": (None, None), "zero_line": True, "yticks": None},
+    "ro24":   {"title": "Total runoff", "ylabel": MM_PER_DAY, "color": "#c2571a",
+               "range_color": None, "ylim": (0, None), "zero_line": False, "yticks": None},
+    "rn24":   {"title": "Rainfall", "ylabel": MM_PER_DAY, "color": "#2a9d8f",
+               "range_color": None, "ylim": (0, None), "zero_line": False, "yticks": None},
+    "sf24":   {"title": "Snowfall", "ylabel": MM_PER_DAY, "color": "#4a7fb5",
+               "range_color": None, "ylim": (0, None), "zero_line": False, "yticks": None},
+    "sro24":  {"title": "Surface runoff", "ylabel": MM_PER_DAY, "color": "#d98a2b",
+               "range_color": None, "ylim": (0, None), "zero_line": False, "yticks": None},
+    "msl":    {"title": "Mean sea level pressure", "ylabel": "[hPa]", "color": "#555555",
+               "range_color": None, "ylim": (None, None), "zero_line": False, "yticks": None},
+}
+
+# =============================================================================
+# 3. Figure
+# =============================================================================
+# Text above the top panel; "{catchment}" is replaced by the catchment name.
+# Use None for no title.
+FIGURE_TITLE = None  # e.g. "{catchment} spatial mean"
+FIGURE_WIDTH_IN = 7.0        # 7.0 in ≈ double-column journal width
+PANEL_HEIGHT_IN = 1.75       # Height of each panel; figure height = panels x this
+PANEL_SPACING = 0.32         # Vertical space between panels (fraction of panel height)
+
+FONT_SIZE = 9                # Default for any text not set below
+TICK_LABEL_SIZE = 11          # Numbers and dates on the axes
+AXIS_LABEL_SIZE = 11          # Y-axis labels (e.g. "mm day-1")
+TITLE_FONT_SIZE = 12        # Panel titles
+FIGURE_TITLE_SIZE = 10       # Title above the top panel
+LEGEND_FONT_SIZE = 9
+
+SHOW_PANEL_LABELS = True     # Prefix titles with a), b), c) ...
+LINE_WIDTH = 1.6             # Selected-member line
+SHOW_EVENT_DOTS = True
+EVENT_DOT_SIZE = 30
+ZERO_LINE_COLOR = "0.45"     # Grey level or any matplotlib colour
+
+# Climatology (all hindcast dates and members): nested percentile bands + median.
+# "panel" uses each panel's colour; any matplotlib colour (e.g. "0.55" grey) uses that
+# colour in every panel, which leaves colour for the selected member only.
+CLIMATOLOGY_COLOR = "panel"
+BAND_ALPHAS = [0.15, 0.30]   # Opacity of each band in CLIMATOLOGY_BANDS (outer first)
+MEDIAN_COLOR = None          # None = same as the bands; or e.g. "0.35" for grey
+MEDIAN_LINE_STYLE = "--"
+MEDIAN_LINE_WIDTH = 1.25
+
+# Date axis
+X_LIMITS = None              # e.g. ("2023-05-12", "2023-06-10"); None = full forecast
+DATE_TICK_INTERVAL_DAYS = 5  # Spacing of labelled date ticks
+DATE_FORMAT = "%d %b"        # e.g. "12 May"
+DATE_LABEL_ROTATION = 30     # Degrees; 0 = horizontal
+DATE_LABEL_ALIGNMENT = "right"  # "left", "center" or "right" (relative to the tick)
+# True: dates only under the bottom panel. False: dates under every panel
+# (the space between panels grows by EXTRA_SPACING_FOR_DATES to fit them).
+SHARE_X_LABELS = True
+EXTRA_SPACING_FOR_DATES = 0.4
+
+# Give all mm/day panels the same y-range (panels with their own "ylim" keep it).
+SHARE_YLIM_FOR_MM_PER_DAY = False
+SHARED_YLIM = None           # (bottom, top), or None to take it from the data
+
+# =============================================================================
+# 4. Legend
+# =============================================================================
+SHOW_LEGEND = True
+LEGEND_PANEL = 0             # Panel index (0 = top) that holds the legend
+LEGEND_LOCATION = "upper right"
+# True: line and dots share one entry (LEGEND_LABELS["member_and_dots"]).
+# False: separate entries (LEGEND_LABELS["member"] and LEGEND_LABELS["event_days"]).
+COMBINE_LINE_AND_DOTS = True
+
+# All legend text. Placeholders filled in automatically:
+#   {member}  ensemble member number of the selected event
+#   {n}       number of hindcasts in the climatology (e.g. 220)
+LEGEND_LABELS = {
+    "member": "Counterfactual Storm Hans",
+    "event_days": "Event days",
+    "member_and_dots": "Counterfactual Storm Hans",
+    # One label per entry in CLIMATOLOGY_BANDS (same order), or None for an
+    # automatic label such as "95% range, all hindcasts".
+    "bands": [
+        "95% range, all hindcasts members (n=220)",
+        "25–75% range, all hindcast members",
+    ],
+    "median": "Median, all hindcast members",
+}
+
+# =============================================================================
+# 5. Output
+# =============================================================================
+SAVE_FIGURE = True
+SHOW_FIGURE = True
+FIGURE_NAME = f"fig-may-counterfactual-timeseries-0{EVENT_RANK}-event"  # File name without extension
+OUTPUT_DIR = Path(config.dirs["fig"])
+OUTPUT_FORMATS = ["png"]
+DPI = 300
+
+# =============================================================================
+# 6. Calculations
+# =============================================================================
+# Climatology bands as (lower, upper) percentiles, widest first. Examples:
+#   [(2.5, 97.5)]              one 95% band
+#   [(2.5, 97.5), (25, 75)]    95% band plus the middle 50% (interquartile range)
+#   [(5, 95), (25, 75)]        90% band plus the middle 50%
+CLIMATOLOGY_BANDS = [(2.5, 97.5), (25, 75)]
+SHOW_MEDIAN = True
+EXCLUDE_SELECTED_FROM_RANGE = False  # True: climatology from the other members only
+
+# =============================================================================
+# 7. Data sources (rarely changed)
+# =============================================================================
+# Sample file used to rank events
 FORECAST_DATE_RANGE = ["2020-01-02", "2023-12-28"]
 OBSERVATION_YEARS = ["1957", "2025"]
 ACCUMULATION_DAYS = 2
-# Options: "raw", "q", "doy", "ld", "q_doy", "mm_1step", "mm_2step"
-BIAS_CORRECTION_METHOD = "raw"
-# Options: "senorge", "era5"
-BIAS_CORRECTION_REFERENCE = "senorge"
-SAMPLE_FILENAME_OVERRIDE = None
 RANK_VARIABLE = "tp24"
+BIAS_CORRECTION_METHOD = "raw"       # "raw", "q", "doy", "ld", "q_doy", "mm_1step", "mm_2step"
+BIAS_CORRECTION_REFERENCE = "senorge"  # "senorge" or "era5"
+SAMPLE_FILENAME_OVERRIDE = None      # Full path to use instead of the constructed name
 
-# =============================================================================
-# User settings: plotted variables and dates
-# =============================================================================
-# One to eight variables, plotted top to bottom as panels a, b, c, ...
-# "t2m24" is daily-mean 2 m temperature in °C, with a 0 °C reference line.
-# Options: "tp24", "rn24", "sf24", "msl", "sd", "sm", "neg_sm", "melt", "ro24",
-#          "sro24", "t2m24"
-# e.g. ["sf24", "neg_sm", "melt", "ro24"] to check melt = snowfall + (-ΔSWE).
-PLOT_VARIABLES = ["tp24", "t2m24", "sd", "melt", "ro24"]
-# How daily ΔSWE is computed for "sm" and "melt" (see module docstring).
-# Options: "daily_mean_upper", "daily_mean_lower", "snapshot_00utc"
-SWE_METHOD = "daily_mean_lower"
-EVENT_LAGS = [-2, -1, 0, 1]  # Days relative to date_of_max; marked with dots.
-INTERVAL_PERCENTILES = (2.5, 97.5)  # Central 95% range.
-# False: range over all hindcast dates and members (as in the map script).
-# True: exclude the selected member itself from the range.
-EXCLUDE_SELECTED_FROM_RANGE = False
-# True: all mm/day panels share the same y-axis range; other units (°C, hPa, mm of
-# SWE) keep their own.
-SHARE_YLIM = False
-# Shared y-axis range as (bottom, top); None picks it from the data in all panels.
-SHARED_YLIM = None
-WRITE_TO_FILE = False
-OUTPUT_FORMATS = ["png", "pdf"]
-
-# =============================================================================
-# Paths
-# =============================================================================
-PATH_OUT = config.dirs["fig"]
-PATH_CATCHMENT = config.dirs["nve"]
+# All folders come from config.dirs. Daily model files are read from
+#   config.dirs[S2S_DAILY_DIR_KEYS[model_type]] / <variable> / <variable>_<grid>_<date>.nc
+# (the config folders already include the domain, e.g. .../daily/europe/).
+PATH_CATCHMENT = Path(config.dirs["nve"])
 PATH_S2S_PROCESSED = Path(config.dirs["s2s_processed"])
-S2S_BASE_DIR = Path("/nird/datapeak/NS9873K/etdu/raw/s2s/mars/ecmwf")
-# Sub-folders of S2S_BASE_DIR/<model_type>/sfc/ holding daily and 6-hourly files.
-DAILY_FOLDER = "daily"
-SIXHOURLY_FOLDER = "6hourly"
-DOMAIN = "europe"
-# Factor converting each stored variable to mm (or mm/day). Files written in metres
-# need 1000; set 1.0 for any variable already stored in mm.
+S2S_DAILY_DIR_KEYS = {
+    "hindcast": "s2s_hindcast_daily",
+    "forecast": "s2s_forecast_daily",
+}
+
+# Multiply stored values by these factors to get mm (1000 for files in metres).
 TO_MM_FACTORS = {
-    "tp24": 1000.0, "rn24": 1000.0, "sf24": 1000.0, "sd": 1000.0, "sd6": 1000.0,
+    "tp24": 1000.0, "rn24": 1000.0, "sf24": 1000.0, "sd": 1000.0,
     "ro24": 1000.0, "sro24": 1000.0,
 }
-# 6-hourly SWE for SWE_METHOD = "snapshot_00utc": names tried in order, each used as
-# the sub-folder and filename prefix, e.g. .../6hourly/europe/sd6/sd6_CY47R3_..._cf.nc.
-SWE_6HOURLY_NAMES = ["sd6", "sd"]
-# ECMWF model cycle in 6-hourly filenames, e.g. "CY47R3". None accepts any cycle (an
-# error is raised if more than one cycle matches the same forecast date).
-MODEL_CYCLE = None
-# 6-hourly "time" values count forecast steps from this fake start time when the time
-# units refer to a year before FAKE_TIME_YEAR_LIMIT (as in the sf6 files).
-STEP_REFERENCE = "1900-01-01T00:00"
-FAKE_TIME_YEAR_LIMIT = 1950
-# Catchment-mean daily values above this (mm/day) trigger a unit warning.
-UNIT_WARNING_THRESHOLD_MM = 500.0
+UNIT_WARNING_THRESHOLD_MM = 500.0    # Warn if a daily catchment mean exceeds this
 
-# =============================================================================
-# Figure settings (sized for a double-column journal figure)
-# =============================================================================
-FIG_WIDTH_IN = 7.0
-PANEL_HEIGHT_IN = 1.75
-FIG_DPI = 300
-FONT_SIZE = 9
-TITLE_FONTSIZE = 9.5
-LEGEND_FONTSIZE = 8
-RANGE_ALPHA = 0.22
-SELECTED_LINEWIDTH = 1.6
-EVENT_MARKER_SIZE = 22
-EVENT_MARKER_EDGEWIDTH = 0.7
-ZERO_LINE_COLOR = "0.45"
-TICK_INTERVAL_DAYS = 5
-PANEL_HSPACE = 0.32
 
-# "color" sets both the selected-member line and its shaded range.
-# "zero_line" draws a reference line at 0 (ΔSWE sign change, freezing point).
-VARIABLE_SETTINGS = {
-    "tp24": {"title": "Total precipitation", "units": r"mm day$^{-1}$",
-             "color": "#1f5fa8", "zero_line": False, "ymin": 0.0},
-    "rn24": {"title": "Rainfall", "units": r"mm day$^{-1}$",
-             "color": "#2a9d8f", "zero_line": False, "ymin": 0.0},
-    "sf24": {"title": "Snowfall", "units": r"mm day$^{-1}$",
-             "color": "#4a7fb5", "zero_line": False, "ymin": 0.0},
-    "msl": {"title": "Mean sea level pressure", "units": "hPa",
-            "color": "#555555", "zero_line": False, "ymin": None},
-    "sd": {"title": "Snow water equivalent", "units": "mm",
-           "color": "#6a51a3", "zero_line": False, "ymin": 0.0},
-    "sm": {"title": r"Daily $\Delta$SWE (negative = net snow loss)", "units": r"mm day$^{-1}$",
-           "color": "#7b3294", "zero_line": True, "ymin": None},
-    "neg_sm": {"title": r"$-\Delta$SWE (positive = net snow loss)", "units": r"mm day$^{-1}$",
-               "color": "#9e6fb8", "zero_line": True, "ymin": None},
-    "melt": {"title": r"Snowmelt (snowfall $-$ $\Delta$SWE)", "units": r"mm day$^{-1}$",
-             "color": "#7b3294", "zero_line": True, "ymin": None},
-    "ro24": {"title": "Total runoff", "units": r"mm day$^{-1}$",
-             "color": "#c2571a", "zero_line": False, "ymin": 0.0},
-    "sro24": {"title": "Surface runoff", "units": r"mm day$^{-1}$",
-              "color": "#d98a2b", "zero_line": False, "ymin": 0.0},
-    "t2m24": {"title": "Daily-mean 2 m temperature", "units": r"$^{\circ}$C",
-              "color": "#b2182b", "zero_line": True, "ymin": None},
-}
-SWE_METHODS = {"daily_mean_upper", "daily_mean_lower", "snapshot_00utc"}
+# #############################################################################
+#                         END OF USER SETTINGS
+# #############################################################################
+
+STYLE_KEYS = {"title", "ylabel", "color", "range_color", "ylim", "zero_line", "yticks"}
 PANEL_LABELS = "abcdefgh"
 CATCHMENTS = {
     "drammen": {
@@ -190,18 +262,70 @@ CATCHMENTS = {
 # =============================================================================
 
 
+def get_plot_variables():
+    """Return the variable of each panel, top to bottom."""
+    return list(PLOT_VARIABLES)
+
+
+def get_panel_settings(variable):
+    """Return the full style of one variable's panel from VARIABLE_DEFAULTS."""
+    settings = dict(VARIABLE_DEFAULTS[variable])
+    settings.setdefault("range_color", None)
+    settings.setdefault("yticks", None)
+    settings.setdefault("zero_line", False)
+    settings.setdefault("ylim", (None, None))
+    if settings["range_color"] is None:
+        settings["range_color"] = (
+            settings["color"] if CLIMATOLOGY_COLOR == "panel" else CLIMATOLOGY_COLOR
+        )
+    if settings["ylim"] is None:
+        settings["ylim"] = (None, None)
+    return settings
+
+
 def validate_settings():
     """Check user settings before reading any data."""
     if not 1 <= len(PLOT_VARIABLES) <= len(PANEL_LABELS):
         raise ValueError(f"PLOT_VARIABLES must contain 1 to {len(PANEL_LABELS)} variables.")
     for variable in PLOT_VARIABLES:
-        get_variable_settings(variable)
+        if variable not in VARIABLE_DEFAULTS:
+            raise ValueError(
+                f"'{variable}' in PLOT_VARIABLES has no entry in VARIABLE_DEFAULTS. "
+                f"Options: {', '.join(VARIABLE_DEFAULTS)}."
+            )
+    for variable, style in VARIABLE_DEFAULTS.items():
+        unknown = set(style) - STYLE_KEYS
+        if unknown:
+            raise ValueError(
+                f"Unknown key(s) {sorted(unknown)} for '{variable}' in VARIABLE_DEFAULTS. "
+                f"Allowed: {sorted(STYLE_KEYS)}."
+            )
+        missing = {"title", "ylabel", "color"} - set(style)
+        if missing:
+            raise ValueError(f"'{variable}' in VARIABLE_DEFAULTS is missing {sorted(missing)}.")
+        ylim = style.get("ylim")
+        if ylim is not None and len(ylim) != 2:
+            raise ValueError(f"'ylim' for '{variable}' must be (bottom, top).")
+    bands_labels = LEGEND_LABELS.get("bands")
+    if bands_labels is not None and len(bands_labels) != len(CLIMATOLOGY_BANDS):
+        raise ValueError(
+            "LEGEND_LABELS['bands'] needs one label per CLIMATOLOGY_BANDS entry (or None)."
+        )
+    missing_labels = {"member", "event_days", "member_and_dots", "median"} - set(LEGEND_LABELS)
+    if missing_labels:
+        raise ValueError(f"LEGEND_LABELS is missing {sorted(missing_labels)}.")
+    if not 0 <= LEGEND_PANEL < len(PLOT_VARIABLES):
+        raise ValueError("LEGEND_PANEL must be the index of an existing panel (0 = top).")
     get_catchment_settings(CATCHMENT_NAME)
-    if SWE_METHOD not in SWE_METHODS:
-        raise ValueError(f"SWE_METHOD must be one of {sorted(SWE_METHODS)}.")
-    lower, upper = INTERVAL_PERCENTILES
-    if not 0 <= lower < upper <= 100:
-        raise ValueError("INTERVAL_PERCENTILES must satisfy 0 <= lower < upper <= 100.")
+    if not CLIMATOLOGY_BANDS and not SHOW_MEDIAN:
+        raise ValueError("Set at least one CLIMATOLOGY_BANDS entry or SHOW_MEDIAN = True.")
+    for lower, upper in CLIMATOLOGY_BANDS:
+        if not 0 <= lower < upper <= 100:
+            raise ValueError("Each CLIMATOLOGY_BANDS entry must satisfy 0 <= lower < upper <= 100.")
+    if len(BAND_ALPHAS) < len(CLIMATOLOGY_BANDS):
+        raise ValueError("BAND_ALPHAS needs one opacity per CLIMATOLOGY_BANDS entry.")
+    if not FIGURE_NAME:
+        raise ValueError("FIGURE_NAME must be a non-empty file name.")
 
 
 def get_catchment_settings(catchment_name):
@@ -212,16 +336,6 @@ def get_catchment_settings(catchment_name):
             f"Unknown catchment '{catchment_name}'. Valid options are: {valid_names}."
         )
     return CATCHMENTS[catchment_name]
-
-
-def get_variable_settings(variable):
-    """Validate and return plotting settings for one variable."""
-    if variable not in VARIABLE_SETTINGS:
-        valid_variables = ", ".join(VARIABLE_SETTINGS)
-        raise ValueError(
-            f"Unknown variable '{variable}'. Valid options are: {valid_variables}."
-        )
-    return VARIABLE_SETTINGS[variable]
 
 
 def get_file_id(catchment_name):
@@ -291,17 +405,23 @@ def get_ranked_event_indices(ds, month_of_year):
     return [(int(i_indices[i]), int(number_indices[i])) for i in order]
 
 
-def make_s2s_file(event, variable, grid, folder=DAILY_FOLDER):
-    """Create the expected raw S2S file path (daily or 6-hourly)."""
-    return (
-        S2S_BASE_DIR
-        / event["model_type"]
-        / "sfc"
-        / folder
-        / DOMAIN
-        / variable
-        / f"{variable}_{grid}_{event['forecast_date']}.nc"
-    )
+def get_config_dir(key):
+    """Return config.dirs[key] as a Path, with a clear message if the key is missing."""
+    if key not in config.dirs:
+        raise KeyError(
+            f"config.dirs has no entry '{key}'. Add it to the config, or change "
+            f"S2S_DAILY_DIR_KEYS. Available keys: {', '.join(sorted(config.dirs))}"
+        )
+    return Path(config.dirs[key])
+
+
+def make_s2s_file(event, variable, grid):
+    """Return the daily model file for one variable, grid and forecast date."""
+    model_type = event["model_type"]
+    if model_type not in S2S_DAILY_DIR_KEYS:
+        raise ValueError(f"No entry for model type '{model_type}' in S2S_DAILY_DIR_KEYS.")
+    directory = get_config_dir(S2S_DAILY_DIR_KEYS[model_type]) / variable
+    return directory / f"{variable}_{grid}_{event['forecast_date']}.nc"
 
 
 def get_selected_event(catchment_name, month_of_year, event_rank):
@@ -355,19 +475,8 @@ def print_selected_event(event):
     print(f"  hdate            : {decode_hdate(event['hdate'])}")
     print(f"  ensemble_member  : {event['ensemble_member']}")
     print(f"  lead_of_max      : {event['lead_of_max']:.0f} days")
-    print(f"  plot_variables   : {', '.join(PLOT_VARIABLES)}")
-    if any(variable in ["sm", "neg_sm", "melt"] for variable in PLOT_VARIABLES):
-        print(f"  swe_method       : {SWE_METHOD}")
+    print(f"  plot_variables   : {', '.join(get_plot_variables())}")
 
-
-def make_output_stem(catchment_name, event_rank):
-    """Create the output filename stem (without extension)."""
-    variables = "-".join(PLOT_VARIABLES)
-    return (
-        f"{PATH_OUT}storyline-timeseries-{variables}-{catchment_name}-"
-        f"month-{EVENT_MONTH:02d}-rank-{event_rank:02d}-"
-        f"{FORECAST_DATE_RANGE[0]}-{FORECAST_DATE_RANGE[-1]}"
-    )
 
 # =============================================================================
 # Catchment-average helpers
@@ -377,7 +486,7 @@ def make_output_stem(catchment_name, event_rank):
 def make_catchment_weights_file(catchment_name, grid):
     """Return the predefined catchment-weight file for one S2S grid."""
     catchment = get_catchment_settings(catchment_name)
-    return Path(PATH_CATCHMENT) / f"weights_catchment_{catchment['weights_id']}_era5_{grid}.nc"
+    return PATH_CATCHMENT / f"weights_catchment_{catchment['weights_id']}_era5_{grid}.nc"
 
 
 def load_weights(filename):
@@ -456,45 +565,6 @@ def convert_units(da, variable):
     return da
 
 
-def find_files(event, variable, grid, folder, suffix):
-    """Return files in the variable's folder for this grid and forecast date.
-
-    Matches names with or without a model cycle, e.g. both
-    sf6_0.5x0.5_2023-04-27_cf.nc and sf6_CY47R3_0.5x0.5_2023-04-27_cf.nc
-    (suffix "_cf"), or sd_0.5x0.5_2023-04-27.nc (suffix "").
-    """
-    directory = make_s2s_file(event, variable, grid, folder).parent
-    if not directory.is_dir():
-        return []
-    cycle = f"{MODEL_CYCLE}_" if MODEL_CYCLE else "*"
-    pattern = f"{variable}_{cycle}{grid}_{event['forecast_date']}{suffix}.nc"
-    return sorted(directory.glob(pattern))
-
-
-def pick_one(files, description):
-    """Return the single matching file, None if there is none, or raise if ambiguous."""
-    if len(files) > 1:
-        names = ", ".join(path.name for path in files)
-        raise ValueError(
-            f"Several {description} files match ({names}). Set MODEL_CYCLE to choose one."
-        )
-    return files[0] if files else None
-
-
-def find_split_member_files(event, variable, grid, folder):
-    """Return (control, perturbed) paths for a variable stored as _cf/_pf files, or None."""
-    cf_file = pick_one(find_files(event, variable, grid, folder, "_cf"), "control (_cf)")
-    pf_file = pick_one(find_files(event, variable, grid, folder, "_pf"), "perturbed (_pf)")
-    if cf_file is None and pf_file is None:
-        return None
-    if cf_file is None or pf_file is None:
-        found = cf_file or pf_file
-        raise FileNotFoundError(f"Found {found.name} but not its matching _cf/_pf partner.")
-    if cf_file.name.replace("_cf", "") != pf_file.name.replace("_pf", ""):
-        raise ValueError(f"Control and perturbed files do not match: {cf_file.name}, {pf_file.name}")
-    return cf_file, pf_file
-
-
 def get_data_variable(ds, variable, filename):
     """Return the requested variable, or the only data variable if the name differs."""
     if variable in ds:
@@ -506,100 +576,23 @@ def get_data_variable(ds, variable, filename):
     raise KeyError(f"Variable '{variable}' not found in {filename}; has {list(ds.data_vars)}")
 
 
-def fix_6hourly_time(da, forecast_date):
-    """Convert an undecoded 6-hourly "time" coordinate to valid times.
-
-    If the time units refer to a date before FAKE_TIME_YEAR_LIMIT, the values are
-    forecast steps counted from STEP_REFERENCE, and valid time = forecast date + step.
-    Otherwise the units already give real dates and are decoded as usual.
-    """
-    units = da["time"].attrs.get("units", "")
-    if not units.startswith("hours since "):
-        raise ValueError(f"Unexpected 6-hourly time units '{units}'; expected 'hours since ...'.")
-    origin = np.datetime64(units.removeprefix("hours since ").strip().replace(" ", "T"), "h")
-    hours = da["time"].values.astype("int64")
-    if origin.astype("datetime64[Y]").astype(int) + 1970 < FAKE_TIME_YEAR_LIMIT:
-        steps = hours + (origin - np.datetime64(STEP_REFERENCE, "h")).astype(int)
-        if np.any(steps % 6 != 0) or steps.min() < 0 or steps.max() > 24 * 50:
-            raise ValueError(f"Derived forecast steps look wrong: {steps[:3]} ... {steps[-3:]} h")
-        valid = np.datetime64(forecast_date, "h") + steps.astype("timedelta64[h]")
-        print(f"  6-hourly steps {steps[0]}-{steps[-1]} h -> valid {valid[0]} to {valid[-1]}")
-    else:
-        valid = origin + hours.astype("timedelta64[h]")
-    return da.assign_coords(time=valid.astype("datetime64[ns]"))
-
-
-def combine_control_and_perturbed(da_cf, da_pf):
-    """Attach the control run as the last ensemble member, as in the download script.
-
-    Perturbed members keep their numbers (1..N); the control becomes member N+1 and is
-    concatenated after them along "number", matching how tp24 files were built.
-    """
-    member_name = get_member_coord_name(da_pf)
-    n_ensemble = da_pf[member_name].size
-    if member_name in da_cf.dims:
-        da_cf = da_cf.isel({member_name: 0}, drop=True)
-    elif member_name in da_cf.coords:
-        da_cf = da_cf.drop_vars(member_name)
-    position = da_pf.dims.index(member_name)
-    da_cf = da_cf.expand_dims({member_name: [n_ensemble + 1]}, axis=position)
-    return xr.concat([da_pf, da_cf], dim=member_name)
-
-
-def open_variable(event, variable, grid, folder):
-    """Open one variable as a lazily loaded DataArray, plus a description for printing.
-
-    Uses the single combined file when it exists; otherwise combines _cf and _pf files.
-    """
-    filename = make_s2s_file(event, variable, grid, folder)
-    if not filename.exists():
-        # Combined file whose name includes a model cycle, e.g. sd_CY47R3_0.5x0.5_<date>.nc.
-        combined = pick_one(find_files(event, variable, grid, folder, ""), "combined")
-        filename = combined if combined is not None else filename
-    sixhourly = folder == SIXHOURLY_FOLDER
-
-    def prepare(ds, path):
-        da = get_data_variable(ds, variable, path)
-        return fix_6hourly_time(da, event["forecast_date"]) if sixhourly else da
-
-    if filename.exists():
-        print("Reading:", filename)
-        ds = xr.open_dataset(filename, decode_times=not sixhourly)
-        return prepare(ds, filename), [ds]
-    split = find_split_member_files(event, variable, grid, folder)
-    if split is None:
-        raise FileNotFoundError(f"File not found: {filename} (and no _cf/_pf pair)")
-    cf_file, pf_file = split
-    print("Reading:", cf_file)
-    print("Reading:", pf_file)
-    ds_cf = xr.open_dataset(cf_file, decode_times=not sixhourly)
-    ds_pf = xr.open_dataset(pf_file, decode_times=not sixhourly)
-    da = combine_control_and_perturbed(prepare(ds_cf, cf_file), prepare(ds_pf, pf_file))
-    return da, [ds_cf, ds_pf]
-
-
-def load_catchment_mean(
-    event, catchment_name, variable, grid, folder=DAILY_FOLDER, select_00utc=False
-):
-    """Read one stored variable and return its catchment mean in plotting units.
+def load_catchment_mean(event, catchment_name, variable, grid):
+    """Read one daily variable and return its catchment mean in plotting units.
 
     Returns all hindcast dates and members. Raises FileNotFoundError if the data or
     the catchment weights for this grid do not exist.
     """
+    filename = make_s2s_file(event, variable, grid)
     weights_file = make_catchment_weights_file(catchment_name, grid)
+    if not filename.exists():
+        raise FileNotFoundError(f"File not found: {filename}")
     if not weights_file.exists():
         raise FileNotFoundError(f"Catchment weights not found: {weights_file}")
-    da, opened = open_variable(event, variable, grid, folder)
-    try:
-        weights = load_weights(weights_file)
-        if select_00utc:
-            # Keep only the 00 UTC snapshots before averaging over the catchment.
-            time_name = get_time_coord_name(da)
-            da = da.where(da[time_name].dt.hour == 0, drop=True)
+    weights = load_weights(weights_file)
+    print("Reading:", filename)
+    with xr.open_dataset(filename) as ds:
+        da = get_data_variable(ds, variable, filename)
         mean = convert_units(catchment_mean(da, weights), variable).load()
-    finally:
-        for ds in opened:
-            ds.close()
     check_units(mean, variable)
     return mean
 
@@ -609,7 +602,7 @@ def check_units(mean, variable):
     if variable not in TO_MM_FACTORS:
         return
     largest = float(np.nanmax(np.abs(mean.values)))
-    if variable in ["sd", "sd6"]:  # A state, not a daily flux, so large values are fine.
+    if variable == "sd":  # A state, not a daily flux, so large values are fine.
         return
     if largest > UNIT_WARNING_THRESHOLD_MM:
         print(
@@ -619,53 +612,18 @@ def check_units(mean, variable):
 
 
 def compute_delta_swe(event, catchment_name, grid):
-    """Return catchment-mean daily ΔSWE (mm/day) using SWE_METHOD.
+    """Return catchment-mean daily ΔSWE (mm/day): ΔSWE(D) = SWE(D+1) - SWE(D).
 
-    All methods return values on daily time stamps at 00 UTC. For "daily_mean_lower"
-    and "snapshot_00utc" the value on day D is the change during day D, matching
-    the labelling of tp24, sf24 and ro24.
+    SWE is the daily mean of the 00-18 UTC values, so ΔSWE(D) spans ~09 UTC on D to
+    ~09 UTC on D+1 and is labelled by day D, like the 00-24 UTC daily fluxes
+    (see the module docstring).
     """
-    if SWE_METHOD == "snapshot_00utc":
-        swe = load_6hourly_swe_snapshots(event, catchment_name, grid)
-        label = "lower"
-    else:
-        swe = load_catchment_mean(event, catchment_name, "sd", grid, DAILY_FOLDER)
-        label = "upper" if SWE_METHOD == "daily_mean_upper" else "lower"
+    swe = load_catchment_mean(event, catchment_name, "sd", grid)
     time_name = get_time_coord_name(swe)
-    delta = swe.diff(time_name, label=label)
-    # Snapshots are stamped at 00 UTC already; make the daily-mean stamps match too.
+    delta = swe.diff(time_name, label="lower")
     delta = delta.assign_coords({time_name: delta[time_name].dt.floor("D")})
-    delta.name = "sm"
+    delta.name = "delta_swe"
     return delta
-
-
-def load_6hourly_swe_snapshots(event, catchment_name, grid):
-    """Return catchment-mean SWE (mm) at 00 UTC from the 6-hourly files."""
-    errors = []
-    for name in SWE_6HOURLY_NAMES:
-        try:
-            return load_catchment_mean(
-                event, catchment_name, name, grid, SIXHOURLY_FOLDER, select_00utc=True
-            )
-        except (FileNotFoundError, KeyError) as error:
-            errors.append(str(error))
-    raise FileNotFoundError("No 6-hourly SWE found:\n  " + "\n  ".join(errors))
-
-
-def match_member_labels(da, reference):
-    """Copy the reference member labels when only the last (control) label differs.
-
-    The daily files label the hindcast control run 51, while combining 6-hourly
-    _cf/_pf files gives N+1 (e.g. 11). Perturbed members must match exactly.
-    """
-    member_name = get_member_coord_name(da)
-    labels, reference_labels = da[member_name].values, reference[member_name].values
-    if np.array_equal(labels, reference_labels):
-        return da
-    if labels.size == reference_labels.size and np.array_equal(labels[:-1], reference_labels[:-1]):
-        print(f"  control member relabelled {labels[-1]} -> {reference_labels[-1]}")
-        return da.assign_coords({member_name: reference_labels})
-    return da
 
 
 def describe_coords(da):
@@ -684,17 +642,9 @@ def describe_coords(da):
 
 def compute_plot_variable(event, catchment_name, variable, grid):
     """Return the catchment-mean DataArray for one plotted variable on one grid."""
-    if variable == "sm":
-        return compute_delta_swe(event, catchment_name, grid)
-    if variable == "neg_sm":
-        negative = -compute_delta_swe(event, catchment_name, grid)
-        negative.name = "neg_sm"
-        return negative
     if variable == "melt":
         snowfall = load_catchment_mean(event, catchment_name, "sf24", grid)
-        delta_swe = match_member_labels(
-            compute_delta_swe(event, catchment_name, grid), snowfall
-        )
+        delta_swe = compute_delta_swe(event, catchment_name, grid)
         time_name = get_time_coord_name(snowfall)
         snowfall = snowfall.assign_coords({time_name: snowfall[time_name].dt.floor("D")})
         aligned_snowfall, aligned_delta = xr.align(snowfall, delta_swe, join="inner")
@@ -744,9 +694,14 @@ def summarize_ensemble(mean, event, variable, grid):
         if hdate_name is not None:
             is_selected = is_selected & (mean[hdate_name] == event["hdate"])
         ensemble = mean.where(~is_selected)
-    lower_q, upper_q = (p / 100.0 for p in INTERVAL_PERCENTILES)
-    lower = ensemble.quantile(lower_q, dim=sample_dims, skipna=True).squeeze(drop=True)
-    upper = ensemble.quantile(upper_q, dim=sample_dims, skipna=True).squeeze(drop=True)
+    percentiles = sorted({p for band in CLIMATOLOGY_BANDS for p in band} | {50.0})
+    quantiles = ensemble.quantile(
+        [p / 100.0 for p in percentiles], dim=sample_dims, skipna=True
+    )
+    climatology = {
+        p: np.asarray(quantiles.isel(quantile=i).squeeze(drop=True).values, dtype=float)
+        for i, p in enumerate(percentiles)
+    }
     n_samples = int(np.prod([mean.sizes[dim] for dim in sample_dims]))
     n_samples -= int(EXCLUDE_SELECTED_FROM_RANGE)
 
@@ -754,9 +709,8 @@ def summarize_ensemble(mean, event, variable, grid):
         "variable": variable,
         "times": selected[time_name].values.astype("datetime64[ns]"),
         "selected": np.asarray(selected.values, dtype=float),
-        "range_times": lower[time_name].values.astype("datetime64[ns]"),
-        "lower": np.asarray(lower.values, dtype=float),
-        "upper": np.asarray(upper.values, dtype=float),
+        "range_times": quantiles[time_name].values.astype("datetime64[ns]"),
+        "climatology": climatology,  # {percentile: values over time}
         "n_samples": n_samples,
         "grid": grid,
     }
@@ -786,102 +740,104 @@ def apply_publication_style():
     plt.rcParams.update({
         "font.family": "sans-serif",
         "font.size": FONT_SIZE,
-        "axes.labelsize": FONT_SIZE,
-        "axes.titlesize": TITLE_FONTSIZE,
+        "axes.labelsize": AXIS_LABEL_SIZE,
+        "axes.titlesize": TITLE_FONT_SIZE,
         "axes.linewidth": 0.7,
-        "xtick.labelsize": FONT_SIZE,
-        "ytick.labelsize": FONT_SIZE,
+        "xtick.labelsize": TICK_LABEL_SIZE,
+        "ytick.labelsize": TICK_LABEL_SIZE,
         "xtick.major.width": 0.7,
         "ytick.major.width": 0.7,
         "xtick.major.size": 3,
         "ytick.major.size": 3,
         "xtick.direction": "out",
         "ytick.direction": "out",
-        "legend.fontsize": LEGEND_FONTSIZE,
+        "legend.fontsize": LEGEND_FONT_SIZE,
         "pdf.fonttype": 42,  # Editable text in vector output.
         "ps.fonttype": 42,
-        "savefig.dpi": FIG_DPI,
+        "savefig.dpi": DPI,
     })
 
 
-def get_common_time_limits(series_list):
-    """Return the time span covered by every panel (ΔSWE series are one day shorter)."""
+def get_time_limits(series_list):
+    """Return X_LIMITS, or the time span covered by every panel."""
+    if X_LIMITS is not None:
+        start, end = X_LIMITS
+        return np.datetime64(start, "ns"), np.datetime64(end, "ns")
     start = max(series["times"][0] for series in series_list)
     end = min(series["times"][-1] for series in series_list)
     return start, end
 
 
 def mark_event_days(ax, series, event_dates, color):
-    """Mark the selected member's values on the event-window days with dots."""
+    """Mark the selected member's values on the event days with dots."""
     marker_dates = event_dates.astype("datetime64[ns]")
     on_event_day = np.isin(series["times"], marker_dates)
     ax.scatter(
         series["times"][on_event_day], series["selected"][on_event_day],
-        s=EVENT_MARKER_SIZE, color=color, edgecolor="white",
-        linewidth=EVENT_MARKER_EDGEWIDTH, zorder=4, clip_on=False,
+        s=EVENT_DOT_SIZE, color=color, edgecolor="white",
+        linewidth=0.7, zorder=4, clip_on=False,
     )
 
 
-def plot_variable_panel(ax, series, event_dates, panel_label):
-    """Plot one variable: ensemble range, selected member, and event window."""
-    settings = get_variable_settings(series["variable"])
-    color = settings["color"]
+def make_panel_title(settings, index):
+    """Return the panel title, prefixed with a), b), ... when requested."""
+    if SHOW_PANEL_LABELS:
+        return f"{PANEL_LABELS[index]}) {settings['title']}"
+    return settings["title"]
+
+
+def plot_climatology(ax, series, settings):
+    """Draw the nested percentile bands and the median of all hindcasts."""
+    climatology = series["climatology"]
+    for (lower, upper), alpha in zip(CLIMATOLOGY_BANDS, BAND_ALPHAS):
+        ax.fill_between(
+            series["range_times"], climatology[float(lower)], climatology[float(upper)],
+            color=settings["range_color"], alpha=alpha, linewidth=0, zorder=2,
+        )
+    if SHOW_MEDIAN:
+        ax.plot(
+            series["range_times"], climatology[50.0],
+            color=MEDIAN_COLOR or settings["range_color"], linestyle=MEDIAN_LINE_STYLE,
+            linewidth=MEDIAN_LINE_WIDTH, zorder=2.5,
+        )
+
+def describe_band(lower, upper):
+    """Return a legend label such as '95% range' or '25-75% range'."""
+    width = upper - lower
+    if width >= 90 and np.isclose(lower, 100 - upper):
+        return f"{width:g}% range"
+    return f"{lower:g}\u2013{upper:g}% range"
+
+
+
+def plot_panel(ax, series, settings, event_dates, index):
+    """Plot one panel: ensemble range, selected member and event days."""
     if settings["zero_line"]:
         ax.axhline(0, color=ZERO_LINE_COLOR, linewidth=0.7, zorder=1)
-    ax.fill_between(
-        series["range_times"], series["lower"], series["upper"],
-        color=color, alpha=RANGE_ALPHA, linewidth=0, zorder=2,
-    )
+    plot_climatology(ax, series, settings)
     ax.plot(
         series["times"], series["selected"],
-        color=color, linewidth=SELECTED_LINEWIDTH, solid_capstyle="round", zorder=3,
+        color=settings["color"], linewidth=LINE_WIDTH, solid_capstyle="round", zorder=3,
     )
-    mark_event_days(ax, series, event_dates, color)
-    ax.set_title(f"{panel_label}) {settings['title']}", loc="left", pad=3)
-    ax.set_ylabel(settings["units"])
-    if settings["ymin"] is not None:
-        ax.set_ylim(bottom=settings["ymin"])
+    if SHOW_EVENT_DOTS:
+        mark_event_days(ax, series, event_dates, settings["color"])
+    ax.set_title(make_panel_title(settings, index), loc="left", pad=3)
+    ax.set_ylabel(settings["ylabel"])
+    bottom, top = settings["ylim"]
+    ax.set_ylim(bottom=bottom, top=top)
+    if settings["yticks"] is not None:
+        ax.set_yticks(settings["yticks"])
+    else:
+        ax.yaxis.set_major_locator(plt.MaxNLocator(4))
     ax.spines[["top", "right"]].set_visible(False)
-    ax.yaxis.set_major_locator(plt.MaxNLocator(4))
     ax.margins(x=0)
 
 
-def add_legend(ax, event, n_samples):
-    """Add one shared legend to the top panel using neutral grey handles."""
-    lower, upper = INTERVAL_PERCENTILES
-    range_label = f"{upper - lower:.0f}% range, all hindcast dates and members (n={n_samples})"
-    if EXCLUDE_SELECTED_FROM_RANGE:
-        range_label = f"{upper - lower:.0f}% range, other hindcast members (n={n_samples})"
-    handles = [
-        Line2D([0], [0], color="0.25", linewidth=SELECTED_LINEWIDTH,
-               label=f"Selected member {event['ensemble_member']}"),
-        Patch(facecolor="0.25", alpha=RANGE_ALPHA + 0.1, linewidth=0, label=range_label),
-        Line2D([0], [0], linestyle="none", marker="o", markersize=5,
-               markerfacecolor="0.25", markeredgecolor="white",
-               markeredgewidth=EVENT_MARKER_EDGEWIDTH, label="Event days"),
-    ]
-    ax.legend(handles=handles, loc="upper right", frameon=False,
-              handlelength=1.6, borderaxespad=0.2)
-
-
-def format_time_axis(ax, start, end):
-    """Format the shared date axis on the bottom panel."""
-    ax.set_xlim(start, end)
-    ax.xaxis.set_major_locator(mdates.DayLocator(interval=TICK_INTERVAL_DAYS))
-    ax.xaxis.set_minor_locator(mdates.DayLocator())
-    ax.xaxis.set_major_formatter(mdates.DateFormatter("%d %b"))
-    ax.tick_params(axis="x", which="minor", length=1.5, width=0.5)
-
-
-def apply_shared_ylim(axes, series_list):
-    """Give every water-amount panel (mm/day) the same y-axis range.
-
-    Panels in other units (e.g. temperature, pressure) keep their own range.
-    """
-    water_units = r"mm day$^{-1}$"
+def apply_shared_ylim(axes, panel_settings):
+    """Give all mm/day panels whose top y-limit is not fixed the same y-range."""
     shared = [
-        ax for ax, series in zip(axes, series_list)
-        if get_variable_settings(series["variable"])["units"] == water_units
+        ax for ax, settings in zip(axes, panel_settings)
+        if settings["ylabel"] == MM_PER_DAY and settings["ylim"][1] is None
     ]
     if not shared:
         return
@@ -892,47 +848,113 @@ def apply_shared_ylim(axes, series_list):
         top = max(ax.get_ylim()[1] for ax in shared)
     for ax in shared:
         ax.set_ylim(bottom, top)
-        ax.yaxis.set_major_locator(plt.MaxNLocator(4))
+
+
+def fill_label(text, event, n_samples):
+    """Fill the {member} and {n} placeholders of one legend label."""
+    return text.format(member=event["ensemble_member"], n=n_samples)
+
+
+def add_legend(ax, event, n_samples):
+    """Add one shared legend using neutral grey handles and LEGEND_LABELS text."""
+    band_color = "0.25" if CLIMATOLOGY_COLOR == "panel" else CLIMATOLOGY_COLOR
+    who = "other hindcasts" if EXCLUDE_SELECTED_FROM_RANGE else "all hindcasts"
+    dot_style = {"marker": "o", "markersize": 5, "markerfacecolor": "0.15",
+                 "markeredgecolor": "white", "markeredgewidth": 0.7}
+
+    if SHOW_EVENT_DOTS and COMBINE_LINE_AND_DOTS:
+        handles = [Line2D([0], [0], color="0.15", linewidth=LINE_WIDTH, **dot_style,
+                          label=fill_label(LEGEND_LABELS["member_and_dots"], event, n_samples))]
+    else:
+        handles = [Line2D([0], [0], color="0.15", linewidth=LINE_WIDTH,
+                          label=fill_label(LEGEND_LABELS["member"], event, n_samples))]
+
+    # Each band is shown as it appears on top of the wider ones.
+    band_labels = LEGEND_LABELS.get("bands") or [None] * len(CLIMATOLOGY_BANDS)
+    cumulative_alpha = 0.0
+    for index, ((lower, upper), alpha, text) in enumerate(
+        zip(CLIMATOLOGY_BANDS, BAND_ALPHAS, band_labels)
+    ):
+        cumulative_alpha = 1 - (1 - cumulative_alpha) * (1 - alpha)
+        if text is None:
+            text = f"{describe_band(lower, upper)}, {who}" + (" (n={n})" if index == 0 else "")
+        handles.append(Patch(facecolor=band_color, alpha=cumulative_alpha, linewidth=0,
+                             label=fill_label(text, event, n_samples)))
+
+    if SHOW_MEDIAN:
+        handles.append(Line2D([0], [0], color=MEDIAN_COLOR or band_color,
+                              linestyle=MEDIAN_LINE_STYLE, linewidth=MEDIAN_LINE_WIDTH,
+                              label=fill_label(LEGEND_LABELS["median"], event, n_samples)))
+    if SHOW_EVENT_DOTS and not COMBINE_LINE_AND_DOTS:
+        handles.append(Line2D([0], [0], linestyle="none", **dot_style,
+                              label=fill_label(LEGEND_LABELS["event_days"], event, n_samples)))
+    ax.legend(handles=handles, loc=LEGEND_LOCATION, frameon=False,
+              handlelength=1.6, borderaxespad=0.2)
+
+
+def format_time_axis(ax, start, end, show_labels=True):
+    """Format one panel's date axis; tick labels only when show_labels is True."""
+    ax.set_xlim(start, end)
+    ax.xaxis.set_major_locator(mdates.DayLocator(interval=DATE_TICK_INTERVAL_DAYS))
+    ax.xaxis.set_minor_locator(mdates.DayLocator())
+    ax.xaxis.set_major_formatter(mdates.DateFormatter(DATE_FORMAT))
+    ax.tick_params(axis="x", which="minor", length=1.5, width=0.5)
+    ax.tick_params(axis="x", which="major", labelbottom=show_labels)
+    if show_labels:
+        plt.setp(ax.get_xticklabels(), rotation=DATE_LABEL_ROTATION, ha=DATE_LABEL_ALIGNMENT)
 
 
 def make_figure(series_list, event, event_dates, catchment_label):
-    """Create the four-panel stacked time-series figure."""
+    """Create the stacked time-series figure."""
     apply_publication_style()
+    n_panels = len(series_list)
+    height = PANEL_HEIGHT_IN * n_panels
     fig, axes = plt.subplots(
-        len(series_list), 1, sharex=True, squeeze=False,
-        figsize=(FIG_WIDTH_IN, PANEL_HEIGHT_IN * len(series_list)),
-        gridspec_kw={"hspace": PANEL_HSPACE},
+        n_panels, 1, sharex=True, squeeze=False,
+        figsize=(FIGURE_WIDTH_IN, height),
+        gridspec_kw={
+            "hspace": PANEL_SPACING + (0 if SHARE_X_LABELS else EXTRA_SPACING_FOR_DATES)
+        },
     )
     axes = axes[:, 0]
-    for ax, series, label in zip(axes, series_list, PANEL_LABELS):
-        plot_variable_panel(ax, series, event_dates, label)
-    if SHARE_YLIM:
-        apply_shared_ylim(axes, series_list)
-    start, end = get_common_time_limits(series_list)
-    format_time_axis(axes[-1], start, end)
-    add_legend(axes[0], event, series_list[0]["n_samples"])
-    fig.suptitle(f"{catchment_label} spatial mean", x=0.5, y=0.995, fontsize=TITLE_FONTSIZE + 0.5)
+    panel_settings = [get_panel_settings(variable) for variable in PLOT_VARIABLES]
+    for index, (ax, series, settings) in enumerate(zip(axes, series_list, panel_settings)):
+        plot_panel(ax, series, settings, event_dates, index)
+    if SHARE_YLIM_FOR_MM_PER_DAY:
+        apply_shared_ylim(axes, panel_settings)
+    start, end = get_time_limits(series_list)
+    for ax in axes:
+        format_time_axis(ax, start, end, show_labels=(ax is axes[-1]) or not SHARE_X_LABELS)
+    if SHOW_LEGEND:
+        add_legend(axes[LEGEND_PANEL], event, series_list[LEGEND_PANEL]["n_samples"])
+    top_margin_in = 0.15
+    if FIGURE_TITLE:
+        title = FIGURE_TITLE.format(catchment=catchment_label)
+        fig.suptitle(title, x=0.5, y=1 - 0.05 / height, fontsize=FIGURE_TITLE_SIZE)
+        top_margin_in = 0.42
     fig.align_ylabels(axes)
-    # Keep fixed margins in inches whatever the number of panels.
-    height = PANEL_HEIGHT_IN * len(series_list)
-    fig.subplots_adjust(left=0.09, right=0.985, top=1 - 0.42 / height, bottom=0.35 / height)
+    # Fixed margins in inches, whatever the number of panels.
+    fig.subplots_adjust(left=0.09, right=0.985, top=1 - top_margin_in / height,
+                        bottom=0.35 / height)
     return fig
 
 
-def save_and_show(fig, stem):
-    """Save the figure in each requested format, then show it."""
-    if WRITE_TO_FILE:
+def save_and_show(fig):
+    """Save the figure in each requested format, then show and close it."""
+    if SAVE_FIGURE:
+        OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
         for fmt in OUTPUT_FORMATS:
-            path = f"{stem}.{fmt}"
-            fig.savefig(path, dpi=FIG_DPI, bbox_inches="tight", facecolor="white")
+            path = OUTPUT_DIR / f"{FIGURE_NAME}.{fmt}"
+            fig.savefig(path, dpi=DPI, bbox_inches="tight", facecolor="white")
             print("Saved figure:", path)
-    plt.show()
+    if SHOW_FIGURE:
+        plt.show()
     plt.close(fig)
 
 
 def print_event_values(series_list, event_dates):
-    """Print selected-member values and the ensemble range on event-window dates."""
-    print("\nCatchment-mean values in the event window (selected | range)")
+    """Print selected-member values and the ensemble range on the event days."""
+    print("\nCatchment-mean values on the event days (selected | climatology)")
     for series in series_list:
         print(f"  {series['variable']}:")
         for date in event_dates.astype("datetime64[ns]"):
@@ -940,9 +962,16 @@ def print_event_values(series_list, event_dates):
             in_range = series["range_times"] == date
             if selected.size == 0 or not in_range.any():
                 continue
+            climatology = series["climatology"]
+            parts = [f"median {climatology[50.0][in_range][0]:6.2f}"]
+            for lower, upper in CLIMATOLOGY_BANDS:
+                parts.append(
+                    f"{lower:g}-{upper:g}%: [{climatology[float(lower)][in_range][0]:6.2f}, "
+                    f"{climatology[float(upper)][in_range][0]:6.2f}]"
+                )
             print(
                 f"    {np.datetime_as_string(date, unit='D')}: {selected[0]:7.2f} | "
-                f"[{series['lower'][in_range][0]:6.2f}, {series['upper'][in_range][0]:6.2f}]"
+                + " | ".join(parts)
             )
 
 
@@ -959,11 +988,11 @@ def main():
     event_dates = get_event_dates(event)
     series_list = [
         load_variable_timeseries(event, CATCHMENT_NAME, variable)
-        for variable in PLOT_VARIABLES
+        for variable in get_plot_variables()
     ]
     print_event_values(series_list, event_dates)
     fig = make_figure(series_list, event, event_dates, catchment["label"])
-    save_and_show(fig, make_output_stem(CATCHMENT_NAME, EVENT_RANK))
+    save_and_show(fig)
 
 
 if __name__ == "__main__":
