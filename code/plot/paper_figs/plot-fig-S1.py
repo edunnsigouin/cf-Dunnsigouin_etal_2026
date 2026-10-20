@@ -58,7 +58,7 @@ random_seed = 42  # Each calendar month uses random_seed + month.
 # =============================================================================
 # FIGURE OUTPUT — edit the directory or filename here
 # =============================================================================
-write2file = False  # Set True to save the figure.
+write2file = True  # Set True to save the figure.
 show_figure = True
 output_directory = Path(config.dirs["fig"])
 output_filename = "fig-S1.png"  # Also supports .pdf and .svg.
