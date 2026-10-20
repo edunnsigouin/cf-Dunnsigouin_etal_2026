@@ -823,6 +823,7 @@ def plot_panel(ax, series, settings, event_dates, index):
         mark_event_days(ax, series, event_dates, settings["color"])
     ax.set_title(make_panel_title(settings, index), loc="left", pad=3)
     ax.set_ylabel(settings["ylabel"])
+    ax.set_xlabel("Date")
     bottom, top = settings["ylim"]
     ax.set_ylim(bottom=bottom, top=top)
     if settings["yticks"] is not None:
