@@ -74,14 +74,16 @@ from Dunnsigouin_etal_2026 import config
 # =============================================================================
 CATCHMENT_NAME = "drammen"   # "drammen" or "glomma"
 EVENT_MONTH = 5              # Calendar month of the event (1-12)
-EVENT_RANK = 1               # 1 = largest 2-day precipitation event in that month
+EVENT_RANK = 2               # 1 = largest 2-day precipitation event in that month
 EVENT_LAGS = [-2, -1, 0, 1]  # Event days marked with dots, relative to the 2-day maximum
 
 # =============================================================================
 # 2. Panels
 # =============================================================================
-# Variables to plot, top to bottom (one panel each, up to eight).
-PLOT_VARIABLES = ["tp24", "t2m24", "sd", "melt", "ro24"]
+# Variables to plot, top to bottom (one panel each, up to eight). Story order:
+# snowpack (setting) -> precipitation (trigger) -> temperature (switch to rain and
+# melt) -> snowmelt (amplifier) -> runoff (consequence).
+PLOT_VARIABLES = ["sd", "tp24", "t2m24", "melt", "ro24"]
 
 # Style of each variable's panel. Edit any entry to change that panel:
 #   "title"       panel title (the a), b), ... label is added automatically)
@@ -100,7 +102,7 @@ VARIABLE_DEFAULTS = {
     "sd":     {"title": "Snow water equivalent", "ylabel": "[mm]", "color": "#6a51a3",
                "range_color": None, "ylim": (0, None), "zero_line": False, "yticks": None},
     "melt":   {"title": r"Snowmelt (snowfall $-$ $\Delta$ snow water equivalent)",
-               "ylabel": MM_PER_DAY, "color": "#7b3294",
+               "ylabel": MM_PER_DAY, "color": "tab:brown",
                "range_color": None, "ylim": (None, None), "zero_line": True, "yticks": None},
     "ro24":   {"title": "Total runoff", "ylabel": MM_PER_DAY, "color": "#c2571a",
                "range_color": None, "ylim": (0, None), "zero_line": False, "yticks": None},
@@ -166,8 +168,8 @@ SHARED_YLIM = None           # (bottom, top), or None to take it from the data
 # 4. Legend
 # =============================================================================
 SHOW_LEGEND = True
-LEGEND_PANEL = 0             # Panel index (0 = top) that holds the legend
-LEGEND_LOCATION = "upper left"
+LEGEND_PANEL = 1             # Panel index (0 = top); 1 = precipitation, which has free space
+LEGEND_LOCATION = "upper right"
 # True: line and dots share one entry (LEGEND_LABELS["member_and_dots"]).
 # False: separate entries (LEGEND_LABELS["member"] and LEGEND_LABELS["event_days"]).
 COMBINE_LINE_AND_DOTS = True
@@ -193,7 +195,7 @@ LEGEND_LABELS = {
 # =============================================================================
 SAVE_FIGURE = True
 SHOW_FIGURE = True
-FIGURE_NAME = f"fig-may-counterfactual-timeseries-0{EVENT_RANK}-event"  # File name without extension
+FIGURE_NAME = f"fig-08"  # File name without extension
 OUTPUT_DIR = Path(config.dirs["fig"])
 OUTPUT_FORMATS = ["png"]
 DPI = 300
