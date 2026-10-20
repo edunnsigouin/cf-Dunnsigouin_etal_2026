@@ -74,7 +74,7 @@ from Dunnsigouin_etal_2026 import config
 # =============================================================================
 CATCHMENT_NAME = "drammen"   # "drammen" or "glomma"
 EVENT_MONTH = 5              # Calendar month of the event (1-12)
-EVENT_RANK = 2               # 1 = largest 2-day precipitation event in that month
+EVENT_RANK = 1               # 1 = largest 2-day precipitation event in that month
 EVENT_LAGS = [-2, -1, 0, 1]  # Event days marked with dots, relative to the 2-day maximum
 
 # =============================================================================
@@ -156,6 +156,7 @@ DATE_LABEL_ALIGNMENT = "right"  # "left", "center" or "right" (relative to the t
 # (the space between panels grows by EXTRA_SPACING_FOR_DATES to fit them).
 SHARE_X_LABELS = True
 EXTRA_SPACING_FOR_DATES = 0.4
+X_LABEL = "Date"             # Single label under the bottom panel; None for no label
 
 # Give all mm/day panels the same y-range (panels with their own "ylim" keep it).
 SHARE_YLIM_FOR_MM_PER_DAY = False
@@ -166,7 +167,7 @@ SHARED_YLIM = None           # (bottom, top), or None to take it from the data
 # =============================================================================
 SHOW_LEGEND = True
 LEGEND_PANEL = 0             # Panel index (0 = top) that holds the legend
-LEGEND_LOCATION = "upper right"
+LEGEND_LOCATION = "upper left"
 # True: line and dots share one entry (LEGEND_LABELS["member_and_dots"]).
 # False: separate entries (LEGEND_LABELS["member"] and LEGEND_LABELS["event_days"]).
 COMBINE_LINE_AND_DOTS = True
@@ -823,7 +824,6 @@ def plot_panel(ax, series, settings, event_dates, index):
         mark_event_days(ax, series, event_dates, settings["color"])
     ax.set_title(make_panel_title(settings, index), loc="left", pad=3)
     ax.set_ylabel(settings["ylabel"])
-    ax.set_xlabel("Date")
     bottom, top = settings["ylim"]
     ax.set_ylim(bottom=bottom, top=top)
     if settings["yticks"] is not None:
@@ -926,6 +926,8 @@ def make_figure(series_list, event, event_dates, catchment_label):
     start, end = get_time_limits(series_list)
     for ax in axes:
         format_time_axis(ax, start, end, show_labels=(ax is axes[-1]) or not SHARE_X_LABELS)
+    if X_LABEL:
+        axes[-1].set_xlabel(X_LABEL)  # Bottom panel only
     if SHOW_LEGEND:
         add_legend(axes[LEGEND_PANEL], event, series_list[LEGEND_PANEL]["n_samples"])
     top_margin_in = 0.15
@@ -935,8 +937,9 @@ def make_figure(series_list, event, event_dates, catchment_label):
         top_margin_in = 0.42
     fig.align_ylabels(axes)
     # Fixed margins in inches, whatever the number of panels.
+    bottom_margin_in = 0.6 if X_LABEL else 0.35  # Room for the "Date" label
     fig.subplots_adjust(left=0.09, right=0.985, top=1 - top_margin_in / height,
-                        bottom=0.35 / height)
+                        bottom=bottom_margin_in / height)
     return fig
 
 

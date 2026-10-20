@@ -7,8 +7,7 @@ Panels a-d show four consecutive dates around the selected ranked S2S event.
 Each panel contains:
     - daily precipitation as colored shading;
     - mean sea level pressure as labelled grey contours;
-    - snowmelt, defined as a negative daily change in snow water equivalent
-      (ΔSWE < 0), shown as stippling or hatching;
+    - snowmelt (or snow cover), shown as stippling or hatching;
     - the selected catchment boundary in red.
 The four dates are set relative to the event's date of maximum precipitation by
 EVENT_LAGS. For example, EVENT_LAGS = [-2, -1, 0, 1] plots two days before the
@@ -22,6 +21,15 @@ The selected event itself is controlled by:
         chooses the Nth-largest event read from the monthly_max_samples file.
 Panels a-d therefore provide a compact spatial view of how precipitation,
 pressure, and the selected snow condition evolve around one extreme S2S event.
+
+Snowmelt (SNOW_OVERLAY_VARIABLE = "snowmelt") is computed exactly as in the
+time-series figure, from the daily snow budget:
+    ΔSWE(D) = SWE(D+1) - SWE(D)        (daily-mean SWE, labelled by day D)
+    melt(D) = sf24(D) - ΔSWE(D)        (positive = melt)
+Daily-mean SWE represents the snowpack at ~09 UTC, so ΔSWE(D) spans ~09 UTC on D
+to ~09 UTC on D+1 and overlaps the 00-24 UTC precipitation and snowfall day D by
+15 h. Adding snowfall back recovers melt that ΔSWE alone hides on days when snow
+both falls and melts. Grid cells with melt > SNOWMELT_THRESHOLD are marked.
 """
 from pathlib import Path
 import cartopy.crs as ccrs
@@ -60,21 +68,29 @@ EVENT_LAGS = [-2, -1, 0, 1]  # dates relative to date_of_max
 PRECIP_VAR = "tp24"
 MSL_VAR = "msl"
 SNOW_VAR = "sd"
-# Snow overlay: "snowmelt" plots daily ΔSWE < SNOWMELT_THRESHOLD;
-# "snow_depth" plots SWE > SNOW_DEPTH_THRESHOLD.
+SNOWFALL_VAR = "sf24"  # daily snowfall, written by convert_sf6_to_sf24.py
+# Snow overlay: "snowmelt" marks melt = sf24 - ΔSWE > SNOWMELT_THRESHOLD (mm/day);
+# "snow_depth" marks SWE > SNOW_DEPTH_THRESHOLD (mm).
 SNOW_OVERLAY_VARIABLE = "snow_depth"  # options: "snowmelt", "snow_depth"
 SNOWMELT_THRESHOLD = 0.0
 SNOW_DEPTH_THRESHOLD = 0.0
-WRITE_TO_FILE = False
+WRITE_TO_FILE = True
 
 # =============================================================================
 # Paths
 
 # =============================================================================
-PATH_OUT = config.dirs["fig"]
-PATH_CATCHMENT = config.dirs["nve"]
+# All folders come from config.dirs. Daily model files are read from
+#   config.dirs[S2S_DAILY_DIR_KEYS[model_type]] / <variable> / <variable>_<grid>_<date>.nc
+# (the config folders already include the domain, e.g. .../daily/europe/).
+PATH_OUT = Path(config.dirs["fig"])
+PATH_CATCHMENT = Path(config.dirs["nve"])
 PATH_S2S_PROCESSED = Path(config.dirs["s2s_processed"])
-S2S_BASE_DIR = Path("/nird/datapeak/NS9873K/etdu/raw/s2s/mars/ecmwf")
+S2S_DAILY_DIR_KEYS = {
+    "hindcast": "s2s_hindcast_daily",
+    "forecast": "s2s_forecast_daily",
+}
+FIGURE_NAME = "fig-07.png"
 
 # =============================================================================
 # Figure settings
@@ -228,16 +244,17 @@ def get_ranked_event_indices(ds, month_of_year):
     ]
 
 def make_s2s_file(event, variable, grid):
-    """Create the expected raw S2S file path."""
-    return (
-        S2S_BASE_DIR
-        / event["model_type"]
-        / "sfc"
-        / "daily"
-        / "europe"
-        / variable
-        / f"{variable}_{grid}_{event['forecast_date']}.nc"
-    )
+    """Return the daily model file for one variable, grid and forecast date."""
+    model_type = event["model_type"]
+    if model_type not in S2S_DAILY_DIR_KEYS:
+        raise ValueError(f"No entry for model type '{model_type}' in S2S_DAILY_DIR_KEYS.")
+    key = S2S_DAILY_DIR_KEYS[model_type]
+    if key not in config.dirs:
+        raise KeyError(
+            f"config.dirs has no entry '{key}'. Available keys: {', '.join(sorted(config.dirs))}"
+        )
+    directory = Path(config.dirs[key]) / variable
+    return directory / f"{variable}_{grid}_{event['forecast_date']}.nc"
 
 def find_raw_s2s_file(event, variable):
     """Return the existing raw S2S file, checking available grids."""
@@ -315,10 +332,8 @@ def print_selected_event(event):
         )
 
 def make_output_filename(catchment_name, event_rank):
-    """Create output filename including the selected plotted variable."""
-    return (
-        f"{PATH_OUT}fig-07.png"
-    )
+    """Return the output figure path (PATH_OUT / FIGURE_NAME)."""
+    return PATH_OUT / FIGURE_NAME
 
 # =============================================================================
 # Coordinate helpers
@@ -382,6 +397,9 @@ def open_s2s_variable(filename, variable):
     elif variable == SNOW_VAR:
         ds[variable] = ds[variable] * 1000.0
         ds[variable].attrs["units"] = "mm"
+    elif variable == SNOWFALL_VAR:
+        ds[variable] = ds[variable] * 1000.0
+        ds[variable].attrs["units"] = "mm/day"
     return ds
 
 def get_raw_member_label(da, event):
@@ -451,33 +469,45 @@ def select_loaded_date(da, target_date):
     time_name = get_time_coord_name(da)
     return da.sel({time_name: np.datetime64(target_date, "ns")})
 
+def next_day(date):
+    """Return the day after a YYYY-MM-DD date, as a string."""
+    return str(np.datetime64(date, "D") + np.timedelta64(1, "D"))
+
 def get_snow_dates(event_dates):
-    """Return unique snow dates needed for the selected overlay."""
+    """Return unique SWE dates needed for the selected overlay.
+
+    Snowmelt on day D needs SWE on D and D+1 (forward difference).
+    """
     if SNOW_OVERLAY_VARIABLE == "snow_depth":
         return event_dates
     if SNOW_OVERLAY_VARIABLE != "snowmelt":
         raise ValueError("SNOW_OVERLAY_VARIABLE must be 'snowmelt' or 'snow_depth'.")
-    dates = [np.datetime64(date, "D") for date in event_dates]
-    snow_dates = dates + [date - np.timedelta64(1, "D") for date in dates]
-    return sorted({str(date) for date in snow_dates})
+    snow_dates = list(event_dates) + [next_day(date) for date in event_dates]
+    return sorted(set(snow_dates))
 
 def load_plot_data(event, event_dates):
-    """Load all S2S data needed by the four panels."""
+    """Load all S2S data needed by the four panels.
+
+    Snowfall is only needed (and only loaded) for the snowmelt overlay.
+    """
     precip = load_variable_dates(event, PRECIP_VAR, event_dates)
     msl = load_variable_dates(event, MSL_VAR, event_dates)
     snow = load_variable_dates(event, SNOW_VAR, get_snow_dates(event_dates))
-    return precip, msl, snow
+    snowfall = None
+    if SNOW_OVERLAY_VARIABLE == "snowmelt":
+        snowfall = load_variable_dates(event, SNOWFALL_VAR, event_dates)
+    return precip, msl, snow, snowfall
 
-def get_snow_overlay_field(snow, target_date):
-    """Return snow depth or daily ΔSWE for one panel date."""
+def get_snow_overlay_field(snow, snowfall, target_date):
+    """Return SWE, or snowmelt = sf24(D) - [SWE(D+1) - SWE(D)], for one panel date."""
     current = select_loaded_date(snow, target_date)
     if SNOW_OVERLAY_VARIABLE == "snow_depth":
         return current
-    previous_date = str(np.datetime64(target_date, "D") - np.timedelta64(1, "D"))
-    previous = select_loaded_date(snow, previous_date)
-    change = current - previous
-    change.attrs.update(units="mm", long_name="Daily change in snow water equivalent")
-    return change
+    following = select_loaded_date(snow, next_day(target_date))
+    delta_swe = following - current
+    melt = select_loaded_date(snowfall, target_date) - delta_swe
+    melt.attrs.update(units="mm/day", long_name="Snowmelt (snowfall minus daily change in SWE)")
+    return melt
 
 def load_catchment_outer_boundary(filename, base_dir, crs_if_missing="EPSG:4326"):
     """Load the catchment and keep only the outer boundary."""
@@ -585,7 +615,7 @@ def get_snow_overlay_mask(da):
     """Return the Boolean mask for the selected snow overlay."""
     values = da.values
     if SNOW_OVERLAY_VARIABLE == "snowmelt":
-        return np.isfinite(values) & (values < SNOWMELT_THRESHOLD)
+        return np.isfinite(values) & (values > SNOWMELT_THRESHOLD)
     if SNOW_OVERLAY_VARIABLE == "snow_depth":
         return np.isfinite(values) & (values > SNOW_DEPTH_THRESHOLD)
     raise ValueError("SNOW_OVERLAY_VARIABLE must be 'snowmelt' or 'snow_depth'.")
@@ -632,12 +662,12 @@ def plot_catchment_boundary(ax, geometry, proj_data, linewidth=CATCHMENT_LINEWID
     )
 
 def plot_event_panel(
-    ax, target_date, precip, msl, snow, catchment_boundary, proj_data
+    ax, target_date, precip, msl, snow, snowfall, catchment_boundary, proj_data
 ):
     """Plot one map panel from already-loaded data."""
     da_precip = select_loaded_date(precip, target_date)
     da_msl = select_loaded_date(msl, target_date)
-    da_snow = get_snow_overlay_field(snow, target_date)
+    da_snow = get_snow_overlay_field(snow, snowfall, target_date)
     mesh = plot_precipitation(ax, da_precip, proj_data)
     plot_msl_contours(ax, da_msl, proj_data)
     plot_snow_overlay(ax, da_snow, proj_data)
@@ -673,9 +703,9 @@ def add_colorbar(fig, mesh, cbar_ax):
 def get_snow_legend_handle():
     """Return a legend handle for the selected snow overlay."""
     if SNOW_OVERLAY_VARIABLE == "snowmelt":
-        label = rf"Daily $\Delta$SWE < {SNOWMELT_THRESHOLD:g} [mm]"
+        label = rf"Snowmelt > {SNOWMELT_THRESHOLD:g} [mm/day]"
     elif SNOW_OVERLAY_VARIABLE == "snow_depth":
-        label = rf"Snow water equivalent > {SNOW_DEPTH_THRESHOLD:g} [mm]"
+        label = rf"Snow water equivalent > {SNOW_DEPTH_THRESHOLD:g}"
     else:
         raise ValueError("SNOW_OVERLAY_VARIABLE must be 'snowmelt' or 'snow_depth'.")
     if SNOW_OVERLAY_STYLE == "hatching":
@@ -762,12 +792,12 @@ def main():
         base_dir=PATH_CATCHMENT,
         crs_if_missing=CATCHMENT_CRS_IF_MISSING,
     )
-    precip, msl, snow = load_plot_data(event, event_dates)
+    precip, msl, snow, snowfall = load_plot_data(event, event_dates)
     fig, axes, cbar_ax, proj_data = make_figure_axes()
     mesh = None
     for ax, target_date in zip(axes.flat, event_dates):
         mesh = plot_event_panel(
-            ax, target_date, precip, msl, snow, catchment_boundary, proj_data
+            ax, target_date, precip, msl, snow, snowfall, catchment_boundary, proj_data
         )
     finalize_figure(
         fig=fig,
