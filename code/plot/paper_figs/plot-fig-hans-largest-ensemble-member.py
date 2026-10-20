@@ -86,7 +86,7 @@ PRECIP_SENORGE_PATH = (
     / PRECIP_SENORGE_VAR
 )
 PRECIP_SENORGE_FILE_PATTERN = f"{PRECIP_SENORGE_VAR}" + "_{year}.nc"
-OUTPUT_FILENAME = PATH_OUT / "fig-08.png"
+OUTPUT_FILENAME = PATH_OUT / "fig-hans-forecast-largest-ensemble-member.png"
 
 
 # =============================================================================
