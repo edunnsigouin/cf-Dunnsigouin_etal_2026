@@ -35,7 +35,15 @@ fig, axes = plt.subplots(
     sharey=True,
 )
 
-axes[0].plot(ds1.date,tp1-tp3,'k')
-axes[1].plot(ds1.date,tp2-tp1,'k')
-axes[2].plot(ds1.date,tp2-tp3,'k')
+#axes[0].plot(ds1.date,tp1-tp3,'k')
+#axes[1].plot(ds1.date,tp2-tp1,'k')
+#axes[2].plot(ds1.date,tp2-tp3,'k')
+
+axes[0].plot(ds1.date,tp1,'k',label='eds')
+axes[1].plot(ds1.date,tp2,'b',label='sipa')
+axes[2].plot(ds1.date,tp1-tp2,'r',label='difference')
+axes[0].legend()
+axes[1].legend()
+axes[2].legend()
+
 plt.show()

@@ -1,55 +1,67 @@
 """
-Estimate the probability of exceeding a precipitation threshold in any calendar
-month over an N-year horizon using monthly extreme-value fits.
-For each calendar month m, one distribution is fitted to the sample of monthly
-maximum X-day precipitation values. For a threshold x, the fitted monthly
-exceedance probability is
-    p_m = P(M_m > x),
+Probability of exceeding a precipitation threshold in any calendar month as a
+function of the horizon N (years), using one monthly extreme-value distribution.
+
+For each calendar month m, the selected distribution (DISTRIBUTION) is fitted to
+the sample of monthly maximum X-day precipitation values. For a threshold x_m,
+the fitted monthly exceedance probability is
+    p_m = P(M_m > x_m),
 where M_m is the maximum precipitation in month m of a given year. Because M_m
 is already a monthly maximum, p_m is also the probability that at least one
-X-day event in that month exceeds x during that year.
+X-day event in that month exceeds x_m during that year.
 Assuming exceedances are independent between calendar months, the probability
-of no threshold exceedance anywhere in one year is
-    P(no exceedance in one year) = product_m(1 - p_m),
-so the probability of at least one exceedance in any month during one year is
+of at least one exceedance in any month during one year is
     p_year = 1 - product_m(1 - p_m).
 Assuming years are independent and have the same exceedance probabilities, the
-probability of at least one exceedance over N years is
-    P_N = 1 - (1 - p_year)^N.
-The script reports 100 * P_N as a percentage. These month-to-year and year-to-N-
-year conversions rely on the stated independence and stationarity assumptions.
+probability of at least one exceedance within N years is
+    P_N = 1 - (1 - p_year)^N,
+evaluated for every N in 1..AEP_YEARS_MAX and reported as 100 * P_N (%).
+These conversions rely on the stated independence and stationarity assumptions.
+
+Thresholds
+----------
+"storm_hans": the August 2023 Storm Hans monthly-maximum value, the same in
+every calendar month.
+"monthly_record_without_hans": each calendar month's own record in the
+configured observation period. August 2023 is excluded from the August record;
+other months in 2023, including May, remain eligible.
+Both thresholds are always taken from the reference dataset.
+
 Bootstrap uncertainty
 ---------------------
-Each month, dataset (reference/model), and fitted distribution is bootstrapped
-independently. With BOOTSTRAP_METHOD = "nonparametric", a bootstrap sample of
-the same size as the original monthly sample is drawn with replacement and the
-distribution is refitted. With BOOTSTRAP_METHOD = "parametric", a sample of the
-same size is simulated from the fitted distribution and then refitted. This is
-repeated NUMBER_OF_BOOTSTRAPS times.
-For bootstrap replicate b, the refitted distribution for each month gives
-p_m^(b). The 12 monthly probabilities from the same replicate index are then
-combined as
-    p_year^(b) = 1 - product_m(1 - p_m^(b)),
-    P_N^(b) = 1 - (1 - p_year^(b))^N.
-The figure shows fitted probabilities as points and central CONFIDENCE_LEVEL
-bootstrap intervals as vertical lines, using a separate scale for each threshold.
-With PLOT_REFERENCE = True, orange reference estimates appear to the left and
-blue model estimates to the right of each distribution tick. With False, only
-blue model estimates are shown, centered on each tick. Observations define the
-thresholds and both datasets remain available in the printed summary.
-Intervals describe sampling uncertainty conditional on each distribution and
-the assumptions above. Failed distribution fits are
-skipped; at least MIN_SUCCESSFUL_BOOTSTRAP_FRACTION of the requested fits must
-succeed for every month/dataset/distribution combination.
-Threshold options
------------------
-"storm_hans": use the August 2023 Storm Hans monthly-maximum value.
-"monthly_record_without_hans": use each calendar month's own record in the
-configured observation period as that month's threshold. Exclude August 2023
-from the August record; other months in 2023, including May, remain eligible.
+Each month and dataset is bootstrapped independently. With BOOTSTRAP_METHOD =
+"nonparametric", a sample of the same size as the monthly sample is drawn with
+replacement and refitted; with "parametric", a sample of the same size is
+simulated from the fitted distribution and refitted. For replicate b, the 12
+refitted monthly probabilities p_m^(b) give p_year^(b), and
+    P_N^(b) = 1 - (1 - p_year^(b))^N
+for every N, so each replicate is one complete curve. The band at each N is the
+central CONFIDENCE_LEVEL percentile interval of P_N^(b) across replicates.
+Because P_N increases monotonically with p_year, the band is essentially the
+annual-probability interval mapped through the same formula.
+Failed fits are skipped; at least MIN_SUCCESSFUL_BOOTSTRAP_FRACTION of the
+requested fits must succeed for every month and dataset.
+
+Datasets
+--------
+The model is always analysed. With INCLUDE_REFERENCE = True the same calculation
+is made for the reference dataset (seNorge or ERA5); with False its fits are
+skipped entirely, which halves the run time.
+
+Figure
+------
+One panel: horizon N on the x-axis, P_N on the y-axis (logarithmic by default).
+Colour identifies the dataset (orange reference, blue model). Line style and
+marker identify the threshold: Storm Hans uses solid lines with filled circles,
+the calendar-month records dashed lines with open squares. Shading shows the
+bootstrap interval. On a log axis, fitted values of exactly 0% are not drawn and
+band edges below the lower limit are drawn at the limit; the printed summary
+gives the unclipped values.
 """
 from pathlib import Path
 import matplotlib.pyplot as plt
+from matplotlib.lines import Line2D
+from matplotlib.ticker import FuncFormatter, MaxNLocator
 import numpy as np
 import xarray as xr
 from scipy.optimize import minimize
@@ -82,57 +94,62 @@ MODEL_FILENAME_OVERRIDE = None
 # =============================================================================
 # ANALYSIS SETTINGS
 # =============================================================================
-AEP_YEARS = 10  # Horizon for at least one exceedance in any calendar month.
-INCLUDE_STORM_HANS_IN_FIT = True  # August reference fit only; not the record threshold.
+DISTRIBUTION = "GEV"  # "GEV", "Gumbel", or "GenEx".
+AEP_YEARS_MAX = 10  # Horizons N = 1, 2, ..., AEP_YEARS_MAX years.
+INCLUDE_REFERENCE = True  # False analyses the model only (thresholds still from reference).
+INCLUDE_STORM_HANS_IN_FIT = True # August reference fit only; not the record threshold.
 BOOTSTRAP_METHOD = "nonparametric"  # "nonparametric" or "parametric".
 NUMBER_OF_BOOTSTRAPS = 100
 CONFIDENCE_LEVEL = 0.95
 MIN_SUCCESSFUL_BOOTSTRAP_FRACTION = 0.90
 RANDOM_SEED = 42
-METHODS = ["GEV", "Gumbel", "GenEx"]
 
 # =============================================================================
 # FIGURE OUTPUT — edit the directory or filename here
 # =============================================================================
-WRITE_TO_FILE = True  # Set True to save the figure.
+WRITE_TO_FILE = False  # Set True to save the figure.
 SHOW_FIGURE = True
 FIGURE_DPI = 300
 OUTPUT_DIRECTORY = Path(config.dirs["fig"])
-OUTPUT_FILENAME = f"fig-06.png"
+OUTPUT_FILENAME = "fig-06.png"
 OUTPUT_PATH = OUTPUT_DIRECTORY / OUTPUT_FILENAME
 
 # =============================================================================
 # FIGURE APPEARANCE
 # =============================================================================
-FIGURE_SIZE = (10.0, 4.6)  # Width and height in inches.
-PANEL_WSPACE = 0.35
-PLOT_REFERENCE = True  # False plots model only; reference calculations still run.
+FIGURE_SIZE = (7.5, 5.0)  # Width and height in inches.
+Y_SCALE = "log"  # "log" or "linear".
 
-# Limits and ticks are percentages. None selects automatic limits or ticks.
-PANEL_SETTINGS = {
+# Y-axis limits in percent. With a log axis, None for the lower limit selects
+# the decade below the smallest positive value plotted, floored at
+# MIN_AUTO_YLIM_PERCENT. With a linear axis, None for the lower limit gives 0.
+PROBABILITY_YLIM = (None, 100.0)
+MIN_AUTO_YLIM_PERCENT = 1e-4
+
+THRESHOLD_STYLES = {
     "storm_hans": {
-        "title": "Storm Hans threshold",
-        "ylim": None,
-        "yticks": None,
+        "label": "Storm Hans threshold", "marker": "o", "filled": True, "linestyle": "-",
     },
     "monthly_record_without_hans": {
-        "title": "Calendar-month record thresholds",
-        "ylim": (0, 100),
-        "yticks": None,
+        "label": "Calendar-month record thresholds", "marker": "s", "filled": False,
+        "linestyle": "--",
     },
 }
+THRESHOLD_ORDER = ["storm_hans", "monthly_record_without_hans"]
+SHOW_MARKERS = True
 SHOW_GRID = True
 GRID_ALPHA = 0.35
+BAND_ALPHA = 0.18
+BAND_X_PADDING = 0.05  # Years the shading and x-axis extend beyond the first and last horizon.
 OBSERVATION_COLOR = "tab:orange"
 MODEL_COLOR = "tab:blue"
-DATASET_OFFSET = 0.075  # Each dataset's displacement from its distribution tick.
-INTERVAL_LINEWIDTH = 1.4
-INTERVAL_CAP_WIDTH = 0.10
-FITTED_MARKER_SIZE = 6
+LINEWIDTH = 1.8
+MARKER_SIZE = 4.5
 AXIS_LABELSIZE = 11
 TICK_LABELSIZE = 11
-TITLE_FONTSIZE = 12
 LEGEND_FONTSIZE = 10
+LEGEND_LOCATION = "lower right"  # Any matplotlib legend location, e.g. "upper left".
+LEGEND_FRAME = True  # White background so the legend stays readable over bands.
 
 # =============================================================================
 # DATASET CONVENTIONS
@@ -147,6 +164,9 @@ MONTH_NAMES = [
     "January", "February", "March", "April", "May", "June",
     "July", "August", "September", "October", "November", "December",
 ]
+# Fixed order so bootstrap seeds match fig-06 for the same distribution.
+SEED_METHOD_ORDER = ["GEV", "Gumbel", "GenEx"]
+SEED_GROUP_INDEX = {"reference": 0, "model": 1}
 
 # =============================================================================
 # Validation and labels
@@ -159,17 +179,30 @@ def validate_settings():
         raise ValueError("REFERENCE_DATASET must be 'senorge' or 'era5'.")
     if MODEL_DATA_METHOD not in {"raw", "mm_1step", "mm_2step", "q", "ld", "doy", "q_doy"}:
         raise ValueError("Unsupported MODEL_DATA_METHOD.")
-    if not isinstance(PLOT_REFERENCE, bool):
-        raise TypeError("PLOT_REFERENCE must be True or False.")
-    required_panels = {"storm_hans", "monthly_record_without_hans"}
-    if set(PANEL_SETTINGS) != required_panels:
-        raise ValueError(f"PANEL_SETTINGS must contain exactly {sorted(required_panels)}.")
+    if DISTRIBUTION not in SEED_METHOD_ORDER:
+        raise ValueError(f"DISTRIBUTION must be one of {SEED_METHOD_ORDER}.")
+    if not isinstance(AEP_YEARS_MAX, int) or AEP_YEARS_MAX < 1:
+        raise ValueError("AEP_YEARS_MAX must be a positive integer.")
+    if not isinstance(INCLUDE_REFERENCE, bool):
+        raise TypeError("INCLUDE_REFERENCE must be True or False.")
+    if set(THRESHOLD_STYLES) != set(THRESHOLD_ORDER):
+        raise ValueError(f"THRESHOLD_STYLES must contain exactly {THRESHOLD_ORDER}.")
+    if Y_SCALE not in {"log", "linear"}:
+        raise ValueError("Y_SCALE must be 'log' or 'linear'.")
+    lower, upper = PROBABILITY_YLIM
+    if upper is None or not 0 < upper <= 100:
+        raise ValueError("PROBABILITY_YLIM upper limit must lie in (0, 100].")
+    if lower is not None:
+        if Y_SCALE == "log" and not 0 < lower < upper:
+            raise ValueError("With a log axis the lower limit must be positive and below the upper.")
+        if Y_SCALE == "linear" and not 0 <= lower < upper:
+            raise ValueError("PROBABILITY_YLIM lower limit must be in [0, upper).")
+    if not MIN_AUTO_YLIM_PERCENT > 0:
+        raise ValueError("MIN_AUTO_YLIM_PERCENT must be positive.")
     if BOOTSTRAP_METHOD not in {"nonparametric", "parametric"}:
         raise ValueError("BOOTSTRAP_METHOD must be 'nonparametric' or 'parametric'.")
     if OBSERVATION_YEARS[0] > OBSERVATION_YEARS[1]:
         raise ValueError("OBSERVATION_YEARS must be increasing.")
-    if AEP_YEARS < 1:
-        raise ValueError("AEP_YEARS must be at least 1.")
     if NUMBER_OF_BOOTSTRAPS < 1:
         raise ValueError("NUMBER_OF_BOOTSTRAPS must be at least 1.")
     if not 0 < CONFIDENCE_LEVEL < 1:
@@ -202,6 +235,26 @@ def get_reference_variable():
 def get_model_label():
     """Return the model display label."""
     return "Model" if MODEL_DATA_METHOD == "raw" else "Model bias corrected"
+
+
+def analysed_groups():
+    """Return the datasets analysed and plotted, in plotting order."""
+    return ["reference", "model"] if INCLUDE_REFERENCE else ["model"]
+
+
+def group_label(group):
+    """Return the display label of one dataset."""
+    return get_reference_name() if group == "reference" else get_model_label()
+
+
+def group_color(group):
+    """Return the colour of one dataset."""
+    return OBSERVATION_COLOR if group == "reference" else MODEL_COLOR
+
+
+def horizon_years():
+    """Return the evaluated horizons 1..AEP_YEARS_MAX."""
+    return np.arange(1, AEP_YEARS_MAX + 1)
 
 # =============================================================================
 # Lead selection and input filenames
@@ -251,8 +304,7 @@ def make_reference_filename():
         f"{first_year}-{last_year}.nc"
     )
     directory_key = "senorge_processed" if REFERENCE_DATASET == "senorge" else "era5_processed"
-    directory = config.dirs[directory_key]
-    return Path(directory) / filename
+    return Path(config.dirs[directory_key]) / filename
 
 
 def make_model_filename():
@@ -425,7 +477,6 @@ def simulate_distribution(parameters, method, sample_size, rng):
     if method == "GEV":
         shape, location, scale = parameters
         return genextreme.rvs(shape, loc=location, scale=scale, size=sample_size, random_state=rng)
-
     if method == "Gumbel":
         location, scale = parameters
         return gumbel_r.rvs(loc=location, scale=scale, size=sample_size, random_state=rng)
@@ -487,15 +538,8 @@ def bootstrap_distribution(values, method, random_seed, progress=None):
     return {"parameters": parameters, "bootstrap_parameters": bootstrap_parameters}
 
 # =============================================================================
-# Combine monthly exceedance probabilities
+# Monthly fits and N-year probability curves
 # =============================================================================
-
-
-def combine_monthly_probabilities(probabilities, years=AEP_YEARS):
-    """Return P(at least one exceedance in any month over the selected years)."""
-    probabilities = np.clip(np.asarray(probabilities, dtype=float), 0.0, 1.0)
-    annual_probability = 1.0 - np.prod(1.0 - probabilities)
-    return float(1.0 - (1.0 - annual_probability) ** years)
 
 
 def read_all_reference_months():
@@ -519,69 +563,90 @@ def read_all_reference_months():
 
 
 def build_all_month_analysis(progress=None):
-    """Fit reference and model distributions independently for all 12 months."""
+    """Fit the selected distribution to every analysed dataset for all 12 months."""
     reference_months, thresholds = read_all_reference_months()
+    method_index = SEED_METHOD_ORDER.index(DISTRIBUTION)
     analyses = {}
     for month_index, month in enumerate(ALL_MONTHS):
-        model_values = read_model_month(month)
-        model_values = subsample_model_values(
-            model_values, reference_months[month]["fit_values"].size,
+        samples = {}
+        if INCLUDE_REFERENCE:
+            samples["reference"] = reference_months[month]["fit_values"]
+        samples["model"] = subsample_model_values(
+            read_model_month(month), reference_months[month]["fit_values"].size,
             RANDOM_SEED + 100 * month_index,
         )
-        samples = {'reference': reference_months[month]['fit_values'], 'model': model_values}
-
-
-        for group_index, (group, values) in enumerate(samples.items()):
-            for method_index, method in enumerate(METHODS):
-                seed = RANDOM_SEED + 10000 * month_index + 1000 * group_index + method_index
-
-                analyses[(month, group, method)] = bootstrap_distribution(
-                    values, method, seed, progress
-                )
+        for group, values in samples.items():
+            seed = (RANDOM_SEED + 10000 * month_index
+                    + 1000 * SEED_GROUP_INDEX[group] + method_index)
+            analyses[(month, group)] = bootstrap_distribution(
+                values, DISTRIBUTION, seed, progress
+            )
     return thresholds, analyses
 
 
-def calculate_threshold_probabilities(monthly_thresholds, analyses):
-    """Combine monthly fitted and bootstrap probabilities for one threshold set."""
-    results = {}
-    for group in ["reference", "model"]:
-        for method in METHODS:
-            fitted_monthly = []
-            bootstrap_monthly = []
-            for month in ALL_MONTHS:
-                fit = analyses[(month, group, method)]
-                threshold = monthly_thresholds[month]["value"]
-                fitted_monthly.append(exceedance_probability(threshold, fit['parameters'], method))
+def annual_probability(monthly_probabilities):
+    """Combine monthly probabilities (last axis = month) into p_year."""
+    monthly_probabilities = np.clip(np.asarray(monthly_probabilities, dtype=float), 0.0, 1.0)
+    return 1.0 - np.prod(1.0 - monthly_probabilities, axis=-1)
 
-                bootstrap_monthly.append([
-                    exceedance_probability(threshold, parameters, method)
-                    for parameters in fit["bootstrap_parameters"]
-                ])
-            fitted = combine_monthly_probabilities(fitted_monthly)
-            n_bootstraps = min(map(len, bootstrap_monthly))
-            bootstrap = np.array([
-                combine_monthly_probabilities([values[i] for values in bootstrap_monthly])
-                for i in range(n_bootstraps)
+
+def horizon_probability(p_year, years):
+    """Return P_N = 1 - (1 - p_year)^N for every N, accurate for tiny p_year."""
+    p_year = np.clip(np.asarray(p_year, dtype=float), 0.0, 1.0)
+    with np.errstate(divide="ignore"):
+        log_survival = np.log1p(-p_year)
+    return -np.expm1(np.multiply.outer(log_survival, years))
+
+
+def calculate_threshold_curves(monthly_thresholds, analyses):
+    """Return fitted and bootstrap P_N curves (in %) for one threshold definition."""
+    years = horizon_years()
+    alpha = 1.0 - CONFIDENCE_LEVEL
+    results = {}
+    for group in analysed_groups():
+        fitted_monthly = []
+        bootstrap_monthly = []
+        for month in ALL_MONTHS:
+            fit = analyses[(month, group)]
+            threshold = monthly_thresholds[month]["value"]
+            fitted_monthly.append(exceedance_probability(threshold, fit["parameters"], DISTRIBUTION))
+            bootstrap_monthly.append([
+                exceedance_probability(threshold, parameters, DISTRIBUTION)
+                for parameters in fit["bootstrap_parameters"]
             ])
-            results[(group, method)] = {
-                "probability": 100.0 * fitted,
-                "metric_samples": 100.0 * bootstrap,
-            }
+        # Replicate b uses the b-th successful fit in every month, as in fig-06.
+        n_bootstraps = min(map(len, bootstrap_monthly))
+        bootstrap_monthly = np.array([values[:n_bootstraps] for values in bootstrap_monthly]).T
+
+        fitted_year = float(annual_probability(fitted_monthly))
+        bootstrap_year = annual_probability(bootstrap_monthly)  # (n_bootstraps,)
+        bootstrap_curves = 100.0 * horizon_probability(bootstrap_year, years)
+        lower, upper = np.percentile(
+            bootstrap_curves, [100 * alpha / 2, 100 * (1 - alpha / 2)], axis=0
+        )
+        results[group] = {
+            "annual_probability": 100.0 * fitted_year,
+            "annual_bootstrap": 100.0 * bootstrap_year,
+            "probability": 100.0 * horizon_probability(fitted_year, years),
+            "lower": lower,
+            "upper": upper,
+            "n_bootstraps": n_bootstraps,
+        }
     return results
 
 
-def calculate_all_probabilities(thresholds, analyses):
-    """Calculate results for both threshold definitions."""
+def calculate_all_curves(thresholds, analyses):
+    """Calculate P_N curves for both threshold definitions."""
     return {
-        threshold_type: calculate_threshold_probabilities(monthly_thresholds, analyses)
-        for threshold_type, monthly_thresholds in thresholds.items()
+        threshold_type: calculate_threshold_curves(thresholds[threshold_type], analyses)
+        for threshold_type in THRESHOLD_ORDER
     }
 
 
 def threshold_label(threshold_type, thresholds):
     """Return a descriptive threshold label for summaries."""
     if threshold_type == "storm_hans":
-        return f"Storm Hans, August 2023 ({thresholds[AUGUST]['value']:.1f} mm)"
+        return f"Storm Hans, August 2023 ({thresholds[AUGUST]['value']:.1f} mm) in every month"
     return "Calendar-month records; August 2023 excluded from the August record"
 
 # =============================================================================
@@ -589,74 +654,100 @@ def threshold_label(threshold_type, thresholds):
 # =============================================================================
 
 
-def draw_probability_panel(axis, results, settings, panel_label):
-    """Draw paired reference/model estimates or centered model-only estimates."""
-    alpha = 1.0 - CONFIDENCE_LEVEL
-    groups = [("model", 0.0, MODEL_COLOR, get_model_label())]
-    if PLOT_REFERENCE:
-        groups = [
-            ("reference", -DATASET_OFFSET, OBSERVATION_COLOR, get_reference_name()),
-            ("model", DATASET_OFFSET, MODEL_COLOR, get_model_label()),
-        ]
+def resolve_ylim(results):
+    """Return y-axis limits, choosing the lower limit from the data if unset."""
+    lower, upper = PROBABILITY_YLIM
+    if lower is not None:
+        return lower, upper
+    if Y_SCALE == "linear":
+        return 0.0, upper
+    values = np.concatenate([
+        np.concatenate([result["probability"], result["lower"], result["upper"]])
+        for threshold_results in results.values()
+        for result in threshold_results.values()
+    ])
+    positive = values[values > 0]
+    smallest = positive.min() if positive.size else MIN_AUTO_YLIM_PERCENT
+    lower = 10.0 ** np.floor(np.log10(smallest))
+    return max(lower, MIN_AUTO_YLIM_PERCENT), upper
 
-    maximum = 0.0
-    for method_index, method in enumerate(METHODS):
-        for group, offset, color, label in groups:
-            result = results[(group, method)]
-            estimate = result["probability"]
-            lower, upper = np.percentile(
-                result["metric_samples"], [100 * alpha / 2, 100 * (1 - alpha / 2)]
-            )
-            maximum = max(maximum, estimate, upper)
-            position = method_index + offset
-            # Keep the fitted value separate from its percentile interval.
-            axis.vlines(position, lower, upper, color=color, linewidth=INTERVAL_LINEWIDTH)
-            axis.hlines(
-                [lower, upper], position - INTERVAL_CAP_WIDTH / 2, position + INTERVAL_CAP_WIDTH / 2,
-                color=color, linewidth=INTERVAL_LINEWIDTH,
-            )
-            axis.plot(
-                position, estimate, "o", color=color, markersize=FITTED_MARKER_SIZE, zorder=3,
-                label=label if method_index == 0 else "_nolegend_",
-            )
 
-    limits = settings["ylim"]
-    if limits is None:
-        limits = (0, min(100, max(0.01, 1.25 * maximum)))
-    axis.set_ylim(*limits)
-    axis.set_xlim(-0.5, len(METHODS) - 0.5)
-    if settings["yticks"] is not None:
-        axis.set_yticks(settings["yticks"])
-    axis.set_xticks(range(len(METHODS)))
-    axis.set_xticklabels(METHODS)
-    axis.set_title(
-        f"{panel_label} {settings['title']}", loc="left",
-        fontsize=TITLE_FONTSIZE, fontweight="normal", pad=12,
+def format_percent(value, _position):
+    """Label log ticks as plain percentages (0.01, 0.1, 1, 10, 100)."""
+    if value <= 0:
+        return ""
+    exponent = np.log10(value)
+    if not np.isclose(exponent, np.round(exponent), atol=1e-10):
+        return ""
+    return f"{value:g}"
+
+def draw_curve(axis, years, result, color, style, ylim):
+    """Draw one fitted P_N curve with its bootstrap band."""
+    minimum, maximum = ylim
+    band_lower = np.clip(result["lower"], minimum, maximum)
+    band_upper = np.clip(result["upper"], minimum, maximum)
+    # Extend the band flat by BAND_X_PADDING beyond the first and last horizon.
+    band_years = np.concatenate(([years[0] - BAND_X_PADDING], years,
+                                 [years[-1] + BAND_X_PADDING]))
+    band_lower = np.concatenate(([band_lower[0]], band_lower, [band_lower[-1]]))
+    band_upper = np.concatenate(([band_upper[0]], band_upper, [band_upper[-1]]))
+    axis.fill_between(band_years, band_lower, band_upper, color=color, alpha=BAND_ALPHA,
+                      linewidth=0, zorder=2)
+    fitted = np.where(result["probability"] >= minimum, result["probability"], np.nan)
+    axis.plot(
+        years, fitted, color=color, linestyle=style["linestyle"], linewidth=LINEWIDTH,
+        marker=style["marker"] if SHOW_MARKERS else None, markersize=MARKER_SIZE,
+        markerfacecolor=color if style["filled"] else "white", markeredgecolor=color,
+        zorder=3, clip_on=False,
     )
-    axis.set_ylabel(f"{AEP_YEARS}-year exceedance probability [%]", fontsize=AXIS_LABELSIZE)
-    axis.set_xlabel("Extreme value distribution", fontsize=AXIS_LABELSIZE)
+    
+
+
+def draw_legend(axis):
+    """Explain colour (dataset) and line style (threshold) separately."""
+    handles = [
+        Line2D([0], [0], color=group_color(group), linewidth=LINEWIDTH, label=group_label(group))
+        for group in analysed_groups()
+    ]
+    for threshold_type in THRESHOLD_ORDER:
+        style = THRESHOLD_STYLES[threshold_type]
+        handles.append(Line2D(
+            [0], [0], color="0.25", linewidth=LINEWIDTH, linestyle=style["linestyle"],
+            marker=style["marker"] if SHOW_MARKERS else None, markersize=MARKER_SIZE,
+            markeredgecolor="0.25", markerfacecolor="0.25" if style["filled"] else "white",
+            label=style["label"],
+        ))
+    axis.legend(handles=handles, frameon=LEGEND_FRAME, framealpha=0.9, edgecolor="none",
+                fontsize=LEGEND_FONTSIZE, loc=LEGEND_LOCATION, ncol=1, handlelength=2.6)
+
+
+def plot_horizon_curves(results):
+    """Plot P_N against horizon N for both thresholds and the analysed datasets."""
+    figure, axis = plt.subplots(figsize=FIGURE_SIZE, constrained_layout=True)
+    years = horizon_years()
+    ylim = resolve_ylim(results)
+    for threshold_type in THRESHOLD_ORDER:
+        style = THRESHOLD_STYLES[threshold_type]
+        for group in analysed_groups():
+            draw_curve(axis, years, results[threshold_type][group], group_color(group),
+                       style, ylim)
+
+    axis.set_yscale(Y_SCALE)
+    axis.set_ylim(*ylim)
+    if Y_SCALE == "log":
+        axis.yaxis.set_major_formatter(FuncFormatter(format_percent))
+    axis.set_xlim(1 - BAND_X_PADDING, AEP_YEARS_MAX + BAND_X_PADDING)
+    axis.xaxis.set_major_locator(MaxNLocator(integer=True))
+    axis.set_xlabel("Horizon N [years]", fontsize=AXIS_LABELSIZE)
+    axis.set_ylabel("Probability of at least one monthly\nexceedance within N years [%]",
+                    fontsize=AXIS_LABELSIZE)
     axis.tick_params(axis="both", labelsize=TICK_LABELSIZE, direction="out")
     axis.spines["top"].set_visible(False)
     axis.spines["right"].set_visible(False)
     if SHOW_GRID:
-        axis.grid(axis="y", linestyle=":", linewidth=0.7, alpha=GRID_ALPHA)
+        axis.grid(axis="y", which="major", linestyle=":", linewidth=0.7, alpha=GRID_ALPHA)
         axis.set_axisbelow(True)
-
-
-def plot_all_month_probabilities(results):
-    """Plot the selected datasets for both thresholds with separate probability scales."""
-    figure, axes = plt.subplots(
-        1, 2, figsize=FIGURE_SIZE, gridspec_kw={"wspace": PANEL_WSPACE}, sharey=False,
-    )
-    panel_types = ["storm_hans", "monthly_record_without_hans"]
-    for axis, threshold_type, panel_label in zip(axes, panel_types, ["a)", "b)"]):
-        draw_probability_panel(
-            axis, results[threshold_type], PANEL_SETTINGS[threshold_type], panel_label
-        )
-    if PLOT_REFERENCE:
-        axes[0].legend(frameon=False, fontsize=LEGEND_FONTSIZE, loc="best")
-
-    figure.subplots_adjust(left=0.09, right=0.98, top=0.90, bottom=0.15)
+    draw_legend(axis)
 
     if WRITE_TO_FILE:
         filename = OUTPUT_PATH
@@ -674,51 +765,56 @@ def plot_all_month_probabilities(results):
 
 
 def print_summary(results, thresholds):
-    """Print thresholds and fitted N-year exceedance probabilities for both panels."""
+    """Print thresholds, annual probabilities, and P_N curves with intervals."""
+    alpha = 1.0 - CONFIDENCE_LEVEL
     print("Selected settings")
     print("-----------------")
-    print(f'Reference:        {get_reference_name()} {OBSERVATION_YEARS[0]}-{OBSERVATION_YEARS[1]}')
-
-
+    print(f"Distribution:     {DISTRIBUTION}")
+    print(f"Reference:        {get_reference_name()} {OBSERVATION_YEARS[0]}-{OBSERVATION_YEARS[1]}"
+          f"{'' if INCLUDE_REFERENCE else ' (thresholds only; not fitted)'}")
     print(f"Reference file:   {make_reference_filename()}")
     print(f"Model file:       {make_model_filename()}")
-    print(f"Horizon:          {AEP_YEARS} years")
+    print(f"Horizons:         1-{AEP_YEARS_MAX} years")
     print(f"Bootstrap:        {BOOTSTRAP_METHOD}, n={NUMBER_OF_BOOTSTRAPS}")
     print(f"Include Hans fit: {INCLUDE_STORM_HANS_IN_FIT}")
     print("Assumption: exceedances are independent between months and years.")
-    for threshold_type in ["storm_hans", "monthly_record_without_hans"]:
-        print()
-        print(PANEL_SETTINGS[threshold_type]["title"])
-        print("-" * len(PANEL_SETTINGS[threshold_type]["title"]))
+    for threshold_type in THRESHOLD_ORDER:
+        title = THRESHOLD_STYLES[threshold_type]["label"]
+        print(f"\n{title}\n{'-' * len(title)}")
         print(f"Threshold: {threshold_label(threshold_type, thresholds[threshold_type])}")
         if threshold_type == "monthly_record_without_hans":
             for month in ALL_MONTHS:
                 threshold = thresholds[threshold_type][month]
-                print(
-                    f"  {MONTH_NAMES[month - 1]:9s} "
-                    f"{threshold['value']:.3f} mm ({threshold['year']})"
-                )
-        for group in ["reference", "model"]:
-            print()
-            print(get_reference_name() if group == "reference" else get_model_label())
-            for method in METHODS:
-                probability = results[threshold_type][(group, method)]["probability"]
-                print(f"  {method}: {probability:.3f}%")
+                print(f"  {MONTH_NAMES[month - 1]:9s} "
+                      f"{threshold['value']:.3f} mm ({threshold['year']})")
+        for group in analysed_groups():
+            result = results[threshold_type][group]
+            annual = result["annual_probability"]
+            low, high = np.percentile(result["annual_bootstrap"],
+                                      [100 * alpha / 2, 100 * (1 - alpha / 2)])
+            period = f"{100.0 / annual:.4g} years" if annual > 0 else "unbounded"
+            print(f"\n{group_label(group)}  (bootstrap replicates: {result['n_bootstraps']})")
+            print(f"  Annual probability {annual:.4g}% [{low:.4g}, {high:.4g}]%; "
+                  f"return period {period}")
+            print(f"  {'N':>4} {'P_N [%]':>11} {'Lower':>11} {'Upper':>11}")
+            for index, years in enumerate(horizon_years()):
+                print(f"  {years:>4d} {result['probability'][index]:11.4g} "
+                      f"{result['lower'][index]:11.4g} {result['upper'][index]:11.4g}")
 
 
 def main():
-    """Run the two-panel all-calendar-month exceedance analysis."""
+    """Fit the monthly distributions and plot N-year exceedance curves."""
     validate_settings()
     print("Figure output:", OUTPUT_PATH)
 
-    total = 12 * 2 * len(METHODS) * NUMBER_OF_BOOTSTRAPS
+    total = 12 * len(analysed_groups()) * NUMBER_OF_BOOTSTRAPS
     progress = ProgressTracker(total)
-    print("Running bootstrap fits for all 12 months...")
+    print(f"Running {DISTRIBUTION} bootstrap fits for all 12 months...")
 
     thresholds, analyses = build_all_month_analysis(progress)
-    results = calculate_all_probabilities(thresholds, analyses)
+    results = calculate_all_curves(thresholds, analyses)
     print_summary(results, thresholds)
-    plot_all_month_probabilities(results)
+    plot_horizon_curves(results)
 
 
 if __name__ == "__main__":
