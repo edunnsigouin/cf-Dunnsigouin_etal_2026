@@ -738,7 +738,7 @@ def plot_horizon_curves(results):
         axis.yaxis.set_major_formatter(FuncFormatter(format_percent))
     axis.set_xlim(1 - BAND_X_PADDING, AEP_YEARS_MAX + BAND_X_PADDING)
     axis.xaxis.set_major_locator(MaxNLocator(integer=True))
-    axis.set_xlabel("Horizon N [years]", fontsize=AXIS_LABELSIZE)
+    axis.set_xlabel("years", fontsize=AXIS_LABELSIZE)
     axis.set_ylabel("Probability of at least one monthly\nexceedance within N years [%]",
                     fontsize=AXIS_LABELSIZE)
     axis.tick_params(axis="both", labelsize=TICK_LABELSIZE, direction="out")
