@@ -107,7 +107,7 @@ RANDOM_SEED = 42
 # =============================================================================
 # FIGURE OUTPUT — edit the directory or filename here
 # =============================================================================
-WRITE_TO_FILE = False  # Set True to save the figure.
+WRITE_TO_FILE = True  # Set True to save the figure.
 SHOW_FIGURE = True
 FIGURE_DPI = 300
 OUTPUT_DIRECTORY = Path(config.dirs["fig"])
