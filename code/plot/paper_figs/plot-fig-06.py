@@ -22,9 +22,9 @@ Thresholds
 ----------
 "storm_hans": the August 2023 Storm Hans monthly-maximum value, the same in
 every calendar month.
-"monthly_record_without_hans": each calendar month's own record in the
-configured observation period. August 2023 is excluded from the August record;
-other months in 2023, including May, remain eligible.
+"monthly_record": each calendar month's own record in the configured
+observation period, including 2023. The August record is therefore Storm Hans
+itself (August 2023); every other month uses its own highest value.
 Both thresholds are always taken from the reference dataset.
 
 Bootstrap uncertainty
@@ -50,10 +50,10 @@ skipped entirely, which halves the run time.
 
 Figure
 ------
-One panel: horizon N on the x-axis, P_N on the y-axis (logarithmic by default).
-Colour identifies the dataset (orange reference, blue model). Line style and
-marker identify the threshold: Storm Hans uses solid lines with filled circles,
-the calendar-month records dashed lines with open squares. Shading shows the
+Two panels, one per threshold, each on the y scale that suits it: (a) Storm
+Hans on a linear axis, (b) calendar-month records on a log axis (set in PANELS).
+Horizon N on the x-axis, P_N on the y-axis. Colour and marker identify the
+dataset (orange squares reference, blue circles model); shading shows the
 bootstrap interval. On a log axis, fitted values of exactly 0% are not drawn and
 band edges below the lower limit are drawn at the limit; the printed summary
 gives the unclipped values.
@@ -61,7 +61,9 @@ gives the unclipped values.
 from pathlib import Path
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
-from matplotlib.ticker import FuncFormatter, MaxNLocator
+from matplotlib.patches import Patch
+from matplotlib.ticker import (FixedLocator, FuncFormatter, LogLocator, MaxNLocator,
+                               NullFormatter)
 import numpy as np
 import xarray as xr
 from scipy.optimize import minimize
@@ -97,7 +99,7 @@ MODEL_FILENAME_OVERRIDE = None
 DISTRIBUTION = "GEV"  # "GEV", "Gumbel", or "GenEx".
 AEP_YEARS_MAX = 10  # Horizons N = 1, 2, ..., AEP_YEARS_MAX years.
 INCLUDE_REFERENCE = True  # False analyses the model only (thresholds still from reference).
-INCLUDE_STORM_HANS_IN_FIT = True # August reference fit only; not the record threshold.
+INCLUDE_STORM_HANS_IN_FIT = True  # August reference fit only; the record always includes Hans.
 BOOTSTRAP_METHOD = "nonparametric"  # "nonparametric" or "parametric".
 NUMBER_OF_BOOTSTRAPS = 100
 CONFIDENCE_LEVEL = 0.95
@@ -111,45 +113,63 @@ WRITE_TO_FILE = True  # Set True to save the figure.
 SHOW_FIGURE = True
 FIGURE_DPI = 300
 OUTPUT_DIRECTORY = Path(config.dirs["fig"])
-OUTPUT_FILENAME = "fig-06.png"
-OUTPUT_PATH = OUTPUT_DIRECTORY / OUTPUT_FILENAME
+FIGURE_NAME = "fig-06"
+OUTPUT_FORMATS = ["png", "pdf"]  # PDF for the journal, PNG for quick viewing.
 
 # =============================================================================
 # FIGURE APPEARANCE
 # =============================================================================
-FIGURE_SIZE = (7.5, 5.0)  # Width and height in inches.
-Y_SCALE = "log"  # "log" or "linear".
-
-# Y-axis limits in percent. With a log axis, None for the lower limit selects
-# the decade below the smallest positive value plotted, floored at
-# MIN_AUTO_YLIM_PERCENT. With a linear axis, None for the lower limit gives 0.
-PROBABILITY_YLIM = (None, 100.0)
-MIN_AUTO_YLIM_PERCENT = 1e-4
-
-THRESHOLD_STYLES = {
+# Two panels, one per threshold, each on the y scale that suits it.
+#   "y_scale": "linear" or "log".
+#   "ylim":    (lower, upper) in percent; None for either limit selects it from
+#              the data (log: the decade below/above the plotted values, the
+#              upper limit capped at 100 %; linear: 0 and the next multiple of 10).
+#   "yticks":  list of tick positions in percent, or None for automatic ticks.
+PANELS = {
     "storm_hans": {
-        "label": "Storm Hans threshold", "marker": "o", "filled": True, "linestyle": "-",
+        "title": "Storm Hans threshold",
+        "y_scale": "log",
+        "ylim": (0.001, 10.0),
+        "yticks": None,
     },
-    "monthly_record_without_hans": {
-        "label": "Calendar-month record thresholds", "marker": "s", "filled": False,
-        "linestyle": "--",
+    "monthly_record": {
+        "title": "Calendar-month record thresholds",
+        "y_scale": "linear",
+        "ylim": (0.0, 100),
+        "yticks":  [0, 20, 40, 60, 80, 100],
     },
 }
-THRESHOLD_ORDER = ["storm_hans", "monthly_record_without_hans"]
-SHOW_MARKERS = True
-SHOW_GRID = True
-GRID_ALPHA = 0.35
-BAND_ALPHA = 0.18
-BAND_X_PADDING = 0.05  # Years the shading and x-axis extend beyond the first and last horizon.
+PANEL_ORDER = ["storm_hans", "monthly_record"]
+PANEL_LAYOUT = "row"  # "row" (side by side) or "column" (stacked).
+SHOW_PANEL_LABELS = True  # Prefix titles with a), b).
+MIN_AUTO_YLIM_PERCENT = 1e-4  # Floor for an automatic lower limit on a log axis.
+
+# Size: 7.2 in is a typical two-column journal width (183 mm).
+FIGURE_WIDTH_IN = 11.5
+FIGURE_HEIGHT_IN = 5
+FONT_SIZE = 11
+TITLE_FONT_SIZE = 12
+LEGEND_FONT_SIZE = 10
+
+X_LABEL = "years"
+Y_LABEL = "Probability of at least one monthly exceedance\nwithin N years [%]"
+Y_LABEL_ON_ALL_PANELS = True  # False: y-label on the first panel only (row layout).
+
 OBSERVATION_COLOR = "tab:orange"
 MODEL_COLOR = "tab:blue"
-LINEWIDTH = 1.8
-MARKER_SIZE = 4.5
-AXIS_LABELSIZE = 11
-TICK_LABELSIZE = 11
-LEGEND_FONTSIZE = 10
-LEGEND_LOCATION = "lower right"  # Any matplotlib legend location, e.g. "upper left".
-LEGEND_FRAME = True  # White background so the legend stays readable over bands.
+DATASET_MARKERS = {"reference": "s", "model": "o"}  # Helps in greyscale print.
+SHOW_MARKERS = True
+LINEWIDTH = 1.4
+MARKER_SIZE = 5
+BAND_ALPHA = 0.20
+BAND_X_PADDING = 0.05  # Years the shading and x-axis extend beyond the first and last horizon.
+SHOW_GRID = True
+GRID_ALPHA = 0.5
+
+LEGEND_PANEL = "storm_hans"  # Panel that carries the legend.
+LEGEND_LOCATION = "lower right"
+SHOW_BAND_IN_LEGEND = False
+
 
 # =============================================================================
 # DATASET CONVENTIONS
@@ -158,6 +178,7 @@ AUGUST = 8
 ALL_MONTHS = range(1, 13)
 STORM_HANS_YEAR = 2023
 STORM_HANS_MONTH = AUGUST
+THRESHOLD_ORDER = ["storm_hans", "monthly_record"]
 SENORGE_VARIABLE = "rr"
 ERA5_VARIABLE = "tp24"
 MONTH_NAMES = [
@@ -185,18 +206,22 @@ def validate_settings():
         raise ValueError("AEP_YEARS_MAX must be a positive integer.")
     if not isinstance(INCLUDE_REFERENCE, bool):
         raise TypeError("INCLUDE_REFERENCE must be True or False.")
-    if set(THRESHOLD_STYLES) != set(THRESHOLD_ORDER):
-        raise ValueError(f"THRESHOLD_STYLES must contain exactly {THRESHOLD_ORDER}.")
-    if Y_SCALE not in {"log", "linear"}:
-        raise ValueError("Y_SCALE must be 'log' or 'linear'.")
-    lower, upper = PROBABILITY_YLIM
-    if upper is None or not 0 < upper <= 100:
-        raise ValueError("PROBABILITY_YLIM upper limit must lie in (0, 100].")
-    if lower is not None:
-        if Y_SCALE == "log" and not 0 < lower < upper:
-            raise ValueError("With a log axis the lower limit must be positive and below the upper.")
-        if Y_SCALE == "linear" and not 0 <= lower < upper:
-            raise ValueError("PROBABILITY_YLIM lower limit must be in [0, upper).")
+    if set(PANELS) != set(THRESHOLD_ORDER) or sorted(PANEL_ORDER) != sorted(THRESHOLD_ORDER):
+        raise ValueError(f"PANELS and PANEL_ORDER must contain exactly {THRESHOLD_ORDER}.")
+    if PANEL_LAYOUT not in {"row", "column"}:
+        raise ValueError("PANEL_LAYOUT must be 'row' or 'column'.")
+    if LEGEND_PANEL not in PANELS:
+        raise ValueError(f"LEGEND_PANEL must be one of {PANEL_ORDER}.")
+    for name, panel in PANELS.items():
+        if panel["y_scale"] not in {"linear", "log"}:
+            raise ValueError(f"PANELS['{name}']['y_scale'] must be 'linear' or 'log'.")
+        lower, upper = panel["ylim"]
+        if upper is not None and not 0 < upper <= 100:
+            raise ValueError(f"PANELS['{name}'] upper y-limit must lie in (0, 100].")
+        if lower is not None and panel["y_scale"] == "log" and not lower > 0:
+            raise ValueError(f"PANELS['{name}'] needs a positive lower limit on a log axis.")
+        if lower is not None and upper is not None and not lower < upper:
+            raise ValueError(f"PANELS['{name}'] lower y-limit must be below the upper.")
     if not MIN_AUTO_YLIM_PERCENT > 0:
         raise ValueError("MIN_AUTO_YLIM_PERCENT must be positive.")
     if BOOTSTRAP_METHOD not in {"nonparametric", "parametric"}:
@@ -352,13 +377,9 @@ def read_reference_month(month):
         raise ValueError(f"Fewer than 10 finite {MONTH_NAMES[month - 1]} values remain.")
 
     hans_in_range = OBSERVATION_YEARS[0] <= STORM_HANS_YEAR <= OBSERVATION_YEARS[1]
-    record_mask = np.ones(values.size, dtype=bool)
-    if month == AUGUST and hans_in_range:
-        record_mask &= years != STORM_HANS_YEAR
-    record_values = values[record_mask]
-    record_years = years[record_mask]
-    if record_values.size == 0:
-        raise ValueError(f"No values remain for the {MONTH_NAMES[month - 1]} record.")
+    # Record over all years in the observation period, including August 2023 (Hans).
+    record_values = values
+    record_years = years
 
     fit_mask = np.ones(values.size, dtype=bool)
     if month == AUGUST and hans_in_range and not INCLUDE_STORM_HANS_IN_FIT:
@@ -551,7 +572,7 @@ def read_all_reference_months():
             month: {"value": hans_value, "year": STORM_HANS_YEAR}
             for month in ALL_MONTHS
         },
-        "monthly_record_without_hans": {
+        "monthly_record": {
             month: {
                 "value": monthly[month]["record_value"],
                 "year": monthly[month]["record_year"],
@@ -647,41 +668,85 @@ def threshold_label(threshold_type, thresholds):
     """Return a descriptive threshold label for summaries."""
     if threshold_type == "storm_hans":
         return f"Storm Hans, August 2023 ({thresholds[AUGUST]['value']:.1f} mm) in every month"
-    return "Calendar-month records; August 2023 excluded from the August record"
+    august = thresholds[AUGUST]
+    return f"Calendar-month records, all years (August: {august['value']:.1f} mm in {august['year']})"
 
 # =============================================================================
 # Plotting
 # =============================================================================
 
 
-def resolve_ylim(results):
-    """Return y-axis limits, choosing the lower limit from the data if unset."""
-    lower, upper = PROBABILITY_YLIM
-    if lower is not None:
-        return lower, upper
-    if Y_SCALE == "linear":
-        return 0.0, upper
+def apply_publication_style():
+    """Set consistent, journal-friendly matplotlib defaults."""
+    plt.rcParams.update({
+        "font.family": "sans-serif",
+        "font.size": FONT_SIZE,
+        "axes.labelsize": FONT_SIZE,
+        "axes.titlesize": TITLE_FONT_SIZE,
+        "axes.linewidth": 0.7,
+        "xtick.labelsize": FONT_SIZE,
+        "ytick.labelsize": FONT_SIZE,
+        "xtick.major.width": 0.7,
+        "ytick.major.width": 0.7,
+        "xtick.minor.width": 0.5,
+        "ytick.minor.width": 0.5,
+        "xtick.major.size": 3,
+        "ytick.major.size": 3,
+        "ytick.minor.size": 1.8,
+        "xtick.direction": "out",
+        "ytick.direction": "out",
+        "legend.fontsize": LEGEND_FONT_SIZE,
+        "pdf.fonttype": 42,  # Editable text in vector output.
+        "ps.fonttype": 42,
+        "savefig.dpi": FIGURE_DPI,
+    })
+
+
+def resolve_ylim(panel, threshold_results):
+    """Return (lower, upper) y-limits for one panel, filling None from the data."""
+    lower, upper = panel["ylim"]
     values = np.concatenate([
         np.concatenate([result["probability"], result["lower"], result["upper"]])
-        for threshold_results in results.values()
         for result in threshold_results.values()
     ])
+    if panel["y_scale"] == "linear":
+        if lower is None:
+            lower = 0.0
+        if upper is None:
+            upper = min(100.0, 10.0 * np.ceil(np.nanmax(values) / 10.0))
+        return lower, upper
     positive = values[values > 0]
-    smallest = positive.min() if positive.size else MIN_AUTO_YLIM_PERCENT
-    lower = 10.0 ** np.floor(np.log10(smallest))
-    return max(lower, MIN_AUTO_YLIM_PERCENT), upper
+    if lower is None:
+        smallest = positive.min() if positive.size else MIN_AUTO_YLIM_PERCENT
+        lower = max(10.0 ** np.floor(np.log10(smallest)), MIN_AUTO_YLIM_PERCENT)
+    if upper is None:
+        largest = positive.max() if positive.size else 100.0
+        upper = min(10.0 ** np.ceil(np.log10(largest)), 100.0)
+    return lower, upper
 
 
 def format_percent(value, _position):
-    """Label log ticks as plain percentages (0.01, 0.1, 1, 10, 100)."""
-    if value <= 0:
-        return ""
-    exponent = np.log10(value)
-    if not np.isclose(exponent, np.round(exponent), atol=1e-10):
-        return ""
-    return f"{value:g}"
+    """Label ticks as plain percentages (0.01, 0.1, 1, 10, 100)."""
+    return f"{value:g}" if value > 0 else "0"
 
-def draw_curve(axis, years, result, color, style, ylim):
+
+def apply_y_scale(axis, panel, ylim):
+    """Apply one panel's y scale, limits and ticks."""
+    axis.set_yscale(panel["y_scale"])
+    axis.set_ylim(*ylim)
+    if panel["yticks"] is not None:
+        axis.yaxis.set_major_locator(FixedLocator(panel["yticks"]))
+    elif panel["y_scale"] == "log":
+        axis.yaxis.set_major_locator(LogLocator(base=10, numticks=12))
+    else:
+        axis.yaxis.set_major_locator(MaxNLocator(5))
+    if panel["y_scale"] == "log":
+        axis.yaxis.set_minor_locator(LogLocator(base=10, subs=np.arange(2, 10), numticks=12))
+        axis.yaxis.set_minor_formatter(NullFormatter())
+    axis.yaxis.set_major_formatter(FuncFormatter(format_percent))
+
+
+def draw_curve(axis, years, result, color, marker, ylim):
     """Draw one fitted P_N curve with its bootstrap band."""
     minimum, maximum = ylim
     band_lower = np.clip(result["lower"], minimum, maximum)
@@ -693,71 +758,90 @@ def draw_curve(axis, years, result, color, style, ylim):
     band_upper = np.concatenate(([band_upper[0]], band_upper, [band_upper[-1]]))
     axis.fill_between(band_years, band_lower, band_upper, color=color, alpha=BAND_ALPHA,
                       linewidth=0, zorder=2)
+    # Values below the lower limit (e.g. exactly 0 % on a log axis) are not drawn.
     fitted = np.where(result["probability"] >= minimum, result["probability"], np.nan)
     axis.plot(
-        years, fitted, color=color, linestyle=style["linestyle"], linewidth=LINEWIDTH,
-        marker=style["marker"] if SHOW_MARKERS else None, markersize=MARKER_SIZE,
-        markerfacecolor=color if style["filled"] else "white", markeredgecolor=color,
+        years, fitted, color=color, linewidth=LINEWIDTH,
+        marker=marker if SHOW_MARKERS else None, markersize=MARKER_SIZE,
+        markerfacecolor=color, markeredgecolor="white", markeredgewidth=0.5,
         zorder=3, clip_on=False,
     )
-    
 
 
 def draw_legend(axis):
-    """Explain colour (dataset) and line style (threshold) separately."""
+    """One legend: colour (and marker) identifies the dataset."""
     handles = [
-        Line2D([0], [0], color=group_color(group), linewidth=LINEWIDTH, label=group_label(group))
+        Line2D([0], [0], color=group_color(group), linewidth=LINEWIDTH,
+               marker=DATASET_MARKERS[group] if SHOW_MARKERS else None,
+               markersize=MARKER_SIZE, markerfacecolor=group_color(group),
+               markeredgecolor="white", markeredgewidth=0.5, label=group_label(group))
         for group in analysed_groups()
     ]
-    for threshold_type in THRESHOLD_ORDER:
-        style = THRESHOLD_STYLES[threshold_type]
-        handles.append(Line2D(
-            [0], [0], color="0.25", linewidth=LINEWIDTH, linestyle=style["linestyle"],
-            marker=style["marker"] if SHOW_MARKERS else None, markersize=MARKER_SIZE,
-            markeredgecolor="0.25", markerfacecolor="0.25" if style["filled"] else "white",
-            label=style["label"],
-        ))
-    axis.legend(handles=handles, frameon=LEGEND_FRAME, framealpha=0.9, edgecolor="none",
-                fontsize=LEGEND_FONTSIZE, loc=LEGEND_LOCATION, ncol=1, handlelength=2.6)
+    if SHOW_BAND_IN_LEGEND:
+        handles.append(Patch(facecolor="0.3", alpha=BAND_ALPHA + 0.1, linewidth=0,
+                             label=f"{100 * CONFIDENCE_LEVEL:.0f}% bootstrap interval"))
+    axis.legend(handles=handles, loc=LEGEND_LOCATION, frameon=True, framealpha=0.9,
+                edgecolor="none", handlelength=2.0, borderaxespad=0.4)
+
+
+def format_panel(axis, index, panel, show_ylabel, show_xlabel):
+    """Title, labels, x-axis, spines and grid for one panel."""
+    title = panel["title"]
+    if SHOW_PANEL_LABELS:
+        title = f"{'abcdefghij'[index]}) {title}"
+    axis.set_title(title, loc="left", pad=4)
+    axis.set_xlim(1 - BAND_X_PADDING, AEP_YEARS_MAX + BAND_X_PADDING)
+    if AEP_YEARS_MAX <= 12:
+        axis.set_xticks(horizon_years())
+    else:
+        axis.xaxis.set_major_locator(MaxNLocator(integer=True))
+    if show_xlabel:
+        axis.set_xlabel(X_LABEL)
+    if show_ylabel:
+        axis.set_ylabel(Y_LABEL)
+    axis.spines[["top", "right"]].set_visible(False)
+    if SHOW_GRID:
+        axis.grid(axis="y", which="major", linestyle=":", linewidth=0.6, alpha=GRID_ALPHA)
+        axis.set_axisbelow(True)
 
 
 def plot_horizon_curves(results):
-    """Plot P_N against horizon N for both thresholds and the analysed datasets."""
-    figure, axis = plt.subplots(figsize=FIGURE_SIZE, constrained_layout=True)
+    """Plot P_N against horizon N, one panel per threshold."""
+    apply_publication_style()
+    n_panels = len(PANEL_ORDER)
+    shape = (1, n_panels) if PANEL_LAYOUT == "row" else (n_panels, 1)
+    figure, axes = plt.subplots(
+        *shape, figsize=(FIGURE_WIDTH_IN, FIGURE_HEIGHT_IN),
+        sharex=PANEL_LAYOUT == "column", squeeze=False, constrained_layout=True,
+    )
+    axes = axes.ravel()
     years = horizon_years()
-    ylim = resolve_ylim(results)
-    for threshold_type in THRESHOLD_ORDER:
-        style = THRESHOLD_STYLES[threshold_type]
+    for index, (axis, threshold_type) in enumerate(zip(axes, PANEL_ORDER)):
+        panel = PANELS[threshold_type]
+        ylim = resolve_ylim(panel, results[threshold_type])
         for group in analysed_groups():
             draw_curve(axis, years, results[threshold_type][group], group_color(group),
-                       style, ylim)
-
-    axis.set_yscale(Y_SCALE)
-    axis.set_ylim(*ylim)
-    if Y_SCALE == "log":
-        axis.yaxis.set_major_formatter(FuncFormatter(format_percent))
-    axis.set_xlim(1 - BAND_X_PADDING, AEP_YEARS_MAX + BAND_X_PADDING)
-    axis.xaxis.set_major_locator(MaxNLocator(integer=True))
-    axis.set_xlabel("years", fontsize=AXIS_LABELSIZE)
-    axis.set_ylabel("Probability of at least one monthly\nexceedance within N years [%]",
-                    fontsize=AXIS_LABELSIZE)
-    axis.tick_params(axis="both", labelsize=TICK_LABELSIZE, direction="out")
-    axis.spines["top"].set_visible(False)
-    axis.spines["right"].set_visible(False)
-    if SHOW_GRID:
-        axis.grid(axis="y", which="major", linestyle=":", linewidth=0.7, alpha=GRID_ALPHA)
-        axis.set_axisbelow(True)
-    draw_legend(axis)
+                       DATASET_MARKERS[group], ylim)
+        apply_y_scale(axis, panel, ylim)
+        show_ylabel = Y_LABEL_ON_ALL_PANELS or PANEL_LAYOUT == "column" or index == 0
+        show_xlabel = PANEL_LAYOUT == "row" or index == n_panels - 1
+        format_panel(axis, index, panel, show_ylabel, show_xlabel)
+        if threshold_type == LEGEND_PANEL:
+            draw_legend(axis)
+    if PANEL_LAYOUT == "column":
+        figure.align_ylabels(axes)
 
     if WRITE_TO_FILE:
-        filename = OUTPUT_PATH
-        filename.parent.mkdir(parents=True, exist_ok=True)
-        figure.savefig(filename, dpi=FIGURE_DPI, bbox_inches="tight", facecolor="white")
-        print("Wrote:", filename)
+        OUTPUT_DIRECTORY.mkdir(parents=True, exist_ok=True)
+        for fmt in OUTPUT_FORMATS:
+            filename = OUTPUT_DIRECTORY / f"{FIGURE_NAME}.{fmt}"
+            figure.savefig(filename, dpi=FIGURE_DPI, bbox_inches="tight", facecolor="white")
+            print("Wrote:", filename)
 
     if SHOW_FIGURE:
         plt.show()
     plt.close(figure)
+
 
 # =============================================================================
 # Reporting and main workflow
@@ -779,10 +863,10 @@ def print_summary(results, thresholds):
     print(f"Include Hans fit: {INCLUDE_STORM_HANS_IN_FIT}")
     print("Assumption: exceedances are independent between months and years.")
     for threshold_type in THRESHOLD_ORDER:
-        title = THRESHOLD_STYLES[threshold_type]["label"]
+        title = PANELS[threshold_type]["title"]
         print(f"\n{title}\n{'-' * len(title)}")
         print(f"Threshold: {threshold_label(threshold_type, thresholds[threshold_type])}")
-        if threshold_type == "monthly_record_without_hans":
+        if threshold_type == "monthly_record":
             for month in ALL_MONTHS:
                 threshold = thresholds[threshold_type][month]
                 print(f"  {MONTH_NAMES[month - 1]:9s} "
@@ -805,7 +889,7 @@ def print_summary(results, thresholds):
 def main():
     """Fit the monthly distributions and plot N-year exceedance curves."""
     validate_settings()
-    print("Figure output:", OUTPUT_PATH)
+    print("Figure output:", OUTPUT_DIRECTORY / FIGURE_NAME, OUTPUT_FORMATS)
 
     total = 12 * len(analysed_groups()) * NUMBER_OF_BOOTSTRAPS
     progress = ProgressTracker(total)
