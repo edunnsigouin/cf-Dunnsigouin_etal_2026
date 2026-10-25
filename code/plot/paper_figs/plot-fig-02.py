@@ -45,7 +45,7 @@ plot_end_month = None  # Integer YYYYMM, e.g. 202212.
 # =============================================================================
 # FIGURE OUTPUT — change the output directory or filename here
 # =============================================================================
-write2file = True  # Set True to save the figure.
+write2file = False  # Set True to save the figure.
 show_figure = True
 output_directory = Path(config.dirs["fig"])
 output_filename = f"fig-02.png"

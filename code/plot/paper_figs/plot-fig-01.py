@@ -23,6 +23,15 @@ The precipitation reference is a user choice:
 Only the precipitation field changes with REFERENCE_DATASET. The pressure
 contours remain ERA5 in both cases.
 
+seNorge domain outline
+----------------------
+With seNorge, a thin dark-grey line outlines the cells that contain data, so
+the edge of the seNorge domain is visible where it differs from the national
+border. The outline is the 0.5 contour of a 0/1 mask of finite precipitation
+values for each plotted day. The mask is padded by one cell of "no data" so the
+outline also closes where data reach the edge of the grid. Toggle with
+SHOW_SENORGE_DOMAIN_OUTLINE.
+
 Panel e shows Bergheim station streamflow during 2023 together with a
 historical day-of-year climatology calculated over the user-selected
 STREAMFLOW_CLIMATOLOGY_YEARS:
@@ -56,6 +65,14 @@ ERA5 mean sea level pressure:
 
 Bergheim streamflow:
     Variable "vannforing" is read from streamflow.Bergheim.nc.
+
+Output format
+-------------
+FIGURE_FORMAT = "png" or "pdf" sets the output file type and extension. In a
+PDF, the precipitation fields are embedded as images at FIGURE_DPI (a 1 km
+seNorge grid drawn as vectors would give a very large, slow file), while text,
+contours, coastlines, outlines and the streamflow panel remain vector graphics.
+Fonts are embedded as TrueType so text stays editable.
 """
 
 from pathlib import Path
@@ -96,7 +113,9 @@ BERGHEIM_LONGITUDE_OVERRIDE = 9.231
 BERGHEIM_LATITUDE_OVERRIDE = 60.472
 
 EVENT_DATES = ["2023-08-06", "2023-08-07", "2023-08-08", "2023-08-09"]
-WRITE_TO_FILE = False
+WRITE_TO_FILE = True
+FIGURE_FORMAT = "pdf"  # "png" or "pdf".
+FIGURE_DPI = 300  # PNG resolution; in a PDF, the resolution of the precipitation images.
 
 
 # =============================================================================
@@ -119,7 +138,7 @@ ERA5_PRECIP_FILE = PATH_ERA5 / ERA5_PRECIP_VAR / f"{ERA5_PRECIP_VAR}_0.5x0.5_{YE
 
 MSL_FILE = PATH_ERA5 / MSL_VAR / f"{MSL_VAR}_0.5x0.5_{YEAR}.nc"
 STREAMFLOW_FILE = PATH_STATION / "streamflow.Bergheim.nc"
-OUTPUT_FILE = PATH_OUT / f"fig-01.png"
+OUTPUT_FILE = PATH_OUT / f"fig-01.{FIGURE_FORMAT}"
 
 
 # =============================================================================
@@ -160,6 +179,12 @@ CATCHMENT_EDGE_COLOR = "red"
 CATCHMENT_LINEWIDTH = 1.0
 CATCHMENT_CRS_IF_MISSING = "EPSG:4326"
 
+# Outline of the cells with seNorge data (seNorge reference only).
+SHOW_SENORGE_DOMAIN_OUTLINE = True
+SENORGE_OUTLINE_COLOR = "tab:orange"
+SENORGE_OUTLINE_LINEWIDTH = 0.7
+SENORGE_OUTLINE_LABEL = "seNorge domain"
+
 BERGHEIM_MARKER_COLOR = "yellow"
 BERGHEIM_MARKER_EDGE_COLOR = "black"
 BERGHEIM_MARKER_SIZE = 30
@@ -196,6 +221,12 @@ def validate_user_settings():
 
     if STREAMFLOW_CENTER_STATISTIC not in {"median", "mean"}:
         raise ValueError("STREAMFLOW_CENTER_STATISTIC must be 'median' or 'mean'.")
+
+    if FIGURE_FORMAT not in {"png", "pdf"}:
+        raise ValueError("FIGURE_FORMAT must be 'png' or 'pdf'.")
+
+    if not isinstance(SHOW_SENORGE_DOMAIN_OUTLINE, bool):
+        raise TypeError("SHOW_SENORGE_DOMAIN_OUTLINE must be True or False.")
 
     if not isinstance(PLOT_STREAMFLOW_DAILY_MAX, bool):
         raise TypeError("PLOT_STREAMFLOW_DAILY_MAX must be True or False.")
@@ -536,6 +567,7 @@ def plot_precipitation(ax, da_precip, proj_data):
             vmax=PRECIP_LEVELS.max(),
             shading="auto",
             transform=proj_data,
+            rasterized=True,
         )
     return ax.pcolormesh(
         lon.values,
@@ -546,7 +578,65 @@ def plot_precipitation(ax, da_precip, proj_data):
         vmax=PRECIP_LEVELS.max(),
         shading="auto",
         transform=proj_data,
+        rasterized=True,
     )
+
+def shows_senorge_outline():
+    """Return True when the seNorge domain outline should be drawn."""
+    return REFERENCE_DATASET == "senorge" and SHOW_SENORGE_DOMAIN_OUTLINE
+
+
+def pad_by_extrapolation(values):
+    """Add one row/column on every side by linear extrapolation of a 2-D grid."""
+    padded = np.pad(np.asarray(values, dtype=float), 1, mode="edge")
+    padded[0, :] = 2.0 * padded[1, :] - padded[2, :]
+    padded[-1, :] = 2.0 * padded[-2, :] - padded[-3, :]
+    padded[:, 0] = 2.0 * padded[:, 1] - padded[:, 2]
+    padded[:, -1] = 2.0 * padded[:, -2] - padded[:, -3]
+    return padded
+
+
+def senorge_domain_mask(da_precip):
+    """
+    Return padded 2-D longitude, latitude and 0/1 data mask for one seNorge day.
+
+    The mask is padded with zeros (no data), so the 0.5 contour forms closed
+    outlines even where data cells reach the edge of the grid.
+    """
+    lon, lat = get_lon_lat(da_precip)
+    lon, lat = np.asarray(lon.values), np.asarray(lat.values)
+    if lon.ndim == 1 and lat.ndim == 1:
+        lon, lat = np.meshgrid(lon, lat)
+    mask = np.isfinite(np.asarray(da_precip.values)).astype(float)
+    if lon.shape != mask.shape or lat.shape != mask.shape:
+        raise ValueError(
+            f"seNorge coordinates {lon.shape} do not match the data shape {mask.shape}."
+        )
+    if min(mask.shape) < 3:
+        raise ValueError("The seNorge grid is too small to outline.")
+    return (
+        pad_by_extrapolation(lon),
+        pad_by_extrapolation(lat),
+        np.pad(mask, 1, mode="constant", constant_values=0.0),
+    )
+
+
+def plot_senorge_domain_outline(ax, da_precip, proj_data):
+    """Draw one thin line around the seNorge cells that contain data."""
+    lon, lat, mask = senorge_domain_mask(da_precip)
+    if mask.max() == 0:
+        return
+    ax.contour(
+        lon,
+        lat,
+        mask,
+        levels=[0.5],
+        colors=SENORGE_OUTLINE_COLOR,
+        linewidths=SENORGE_OUTLINE_LINEWIDTH,
+        transform=proj_data,
+        zorder=5,
+    )
+
 
 def plot_msl_contours(ax, da_msl, proj_data):
     """Plot labelled ERA5 mean sea level pressure contours."""
@@ -609,6 +699,8 @@ def plot_event_map_panel(
     da_precip = load_precipitation(ds_precip, target_date)
     da_msl = load_msl(ds_msl, target_date)
     mesh = plot_precipitation(ax, da_precip, proj_data)
+    if shows_senorge_outline():
+        plot_senorge_domain_outline(ax, da_precip, proj_data)
     plot_msl_contours(ax, da_msl, proj_data)
     plot_catchment_boundary(ax, catchment_boundary, proj_data)
     plot_bergheim_station(
@@ -737,6 +829,16 @@ def add_map_legend(map_axes, catchment_label):
             label="Bergheim station",
         ),
     ]
+    if shows_senorge_outline():
+        legend_handles.append(
+            Line2D(
+                [0],
+                [0],
+                color=SENORGE_OUTLINE_COLOR,
+                linewidth=SENORGE_OUTLINE_LINEWIDTH * 1.5,
+                label=SENORGE_OUTLINE_LABEL,
+            )
+        )
     legend = map_axes[0, 0].legend(
         handles=legend_handles,
         loc="upper left",
@@ -754,7 +856,10 @@ def finalize_layout_and_save(fig, map_axes, ts_ax, savepath):
     fig.subplots_adjust(left=0.065, right=0.96, bottom=0.075, top=0.96)
     align_timeseries_axis_to_map_panels(fig, map_axes, ts_ax)
     if WRITE_TO_FILE:
-        fig.savefig(savepath, dpi=300, bbox_inches='tight')
+        savepath.parent.mkdir(parents=True, exist_ok=True)
+        with plt.rc_context({"pdf.fonttype": 42, "ps.fonttype": 42}):
+            fig.savefig(savepath, format=FIGURE_FORMAT, dpi=FIGURE_DPI,
+                        bbox_inches="tight", facecolor="white")
         print('Wrote:', savepath)
     plt.show()
     plt.close(fig)

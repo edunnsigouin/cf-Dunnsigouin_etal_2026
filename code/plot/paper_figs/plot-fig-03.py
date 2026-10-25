@@ -76,7 +76,7 @@ ks_significance_level_percent = 95.0  # Corresponds to a p-value threshold of 0.
 # =============================================================================
 # FIGURE OUTPUT — edit the directory or filename here
 # =============================================================================
-write2file = True  # Set True to save the figure.
+write2file = False  # Set True to save the figure.
 show_figure = True
 output_directory = config.dirs["fig"]
 output_filename = "fig-03.png"
