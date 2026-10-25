@@ -26,6 +26,8 @@ are:
     all leads : tp24_max
     early     : tp24_max_lead17_31
     late      : tp24_max_lead32_46
+Set figure_format to "png" or "pdf". PDFs embed fonts as TrueType so text stays
+editable; all panels are small histograms and remain vector graphics.
 """
 
 import os
@@ -76,12 +78,13 @@ ks_significance_level_percent = 95.0  # Corresponds to a p-value threshold of 0.
 # =============================================================================
 # FIGURE OUTPUT — edit the directory or filename here
 # =============================================================================
-write2file = False  # Set True to save the figure.
+write2file = True  # Set True to save the figure.
 show_figure = True
+figure_format = "pdf"  # "png" or "pdf".
 output_directory = config.dirs["fig"]
-output_filename = "fig-03.png"
+output_filename = f"fig-03.{figure_format}"
 output_path = os.path.join(output_directory, output_filename)
-figure_dpi = 300
+figure_dpi = 300  # Resolution of PNG output.
 
 # =============================================================================
 # FIGURE APPEARANCE
@@ -210,6 +213,8 @@ def get_model_calendar_month(model_ds: xr.Dataset) -> xr.DataArray:
 
 def validate_user_settings() -> None:
     """Validate settings that affect both analyses."""
+    if figure_format not in {"png", "pdf"}:
+        raise ValueError("figure_format must be 'png' or 'pdf'.")
     if selected_month not in MONTH_LABELS:
         raise ValueError("selected_month must be an integer from 1 to 12.")
     if not isinstance(EXCLUDE_STORM_HANS_FROM_REFERENCE, bool):
@@ -1593,7 +1598,9 @@ def main() -> None:
     if write2file:
         if output_directory:
             os.makedirs(output_directory, exist_ok=True)
-        figure.savefig(output_path, dpi=figure_dpi, bbox_inches='tight', facecolor='white')
+        with plt.rc_context({"pdf.fonttype": 42, "ps.fonttype": 42}):
+            figure.savefig(output_path, format=figure_format, dpi=figure_dpi,
+                           bbox_inches="tight", facecolor="white")
         print()
         print(f"Wrote figure: {output_path}")
     if show_figure:
