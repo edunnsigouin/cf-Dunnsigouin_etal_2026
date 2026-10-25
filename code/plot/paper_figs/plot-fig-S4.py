@@ -1,5 +1,5 @@
 """
-Return period of the Storm Hans threshold in every calendar month.
+Return period of the calendar-month record threshold in every calendar month.
 
 Layout
 ------
@@ -11,10 +11,16 @@ Twelve panels, one per calendar month (a) January to (l) December, arranged in
     model raw                     all raw model samples for the month, pooled
     model bias corrected          all BIAS_CORRECTION_METHOD samples, pooled
 
-The Storm Hans threshold (the reference August 2023 value) is the same in every
-panel; only the sample it is compared with changes from month to month.
+Thresholds (as the "monthly_record" threshold of fig-06)
+---------------------------------------------------------
+Each panel uses its own calendar-month record: the highest reference value of
+that calendar month in OBSERVATION_YEARS, including 2023. The August record is
+therefore Storm Hans itself (August 2023); every other month uses its own
+highest seNorge (or ERA5) value. The thresholds are always taken from the
+reference dataset and applied identically to all three series in a panel; the
+printed summary lists each month's record value and year.
 INCLUDE_STORM_HANS_IN_FIT controls whether August 2023 is part of the August
-reference fit (no effect on other months).
+reference fit (no effect on other months); the August record always includes it.
 
 Fitted estimates and uncertainty
 --------------------------------
@@ -28,15 +34,17 @@ the limit.
 Empirical estimate
 ------------------
 Solid dots without uncertainty, using the Weibull plotting position as in
-fig-05: if k of the n sample values are at least as large as the Storm Hans
-threshold, the return period is (n + 1) / k years. If k = 0 the dot is placed at
+fig-05: if k of the n sample values are at least as large as the month's record
+threshold, the return period is (n + 1) / k years. For the reference this is
+(n + 1) years by construction (k = 1, the record itself). If k = 0 the dot is placed at
 (n + 1) years, a lower bound; the printed summary flags this case.
 
 Reproducibility
 ---------------
 Bootstrap seeds follow fig-05/fig-S2 (August is month index 0, May index 1; the
 other months follow in calendar order), so the August and May panels reproduce
-the corresponding fig-05 (with the matching MODEL_DATA_METHOD) and fig-S2 values.
+the same bootstrap replicates as fig-05 (with the matching MODEL_DATA_METHOD) and
+fig-S2; the August values are identical to those (August record = Storm Hans).
 
 Output
 ------
@@ -94,7 +102,7 @@ SHOW_FIGURE = True
 FIGURE_FORMAT = "pdf"  # "png" or "pdf".
 FIGURE_DPI = 300  # Resolution of PNG output.
 OUTPUT_DIRECTORY = Path(config.dirs["fig"])
-OUTPUT_FILENAME = f"fig-S3.{FIGURE_FORMAT}"
+OUTPUT_FILENAME = f"fig-S4.{FIGURE_FORMAT}"
 OUTPUT_PATH = OUTPUT_DIRECTORY / OUTPUT_FILENAME
 
 # =============================================================================
@@ -188,7 +196,7 @@ def series_label(series):
     return {
         "reference": get_reference_name(),
         "raw": "Model raw",
-        "bias_corrected": f"Model bias corrected)",
+        "bias_corrected": "Model bias corrected",
     }[series]
 
 
@@ -230,7 +238,7 @@ def make_model_filename(data_method):
 
 
 def read_reference_months():
-    """Read the reference fit sample of every month and the Storm Hans threshold."""
+    """Read the reference fit sample and calendar-month record of every month."""
     filename = make_reference_filename()
     variable = get_reference_variable()
     if not filename.is_file():
@@ -249,10 +257,17 @@ def read_reference_months():
         }
     hans_in_observation_range = OBSERVATION_YEARS[0] <= STORM_HANS_YEAR <= OBSERVATION_YEARS[1]
     fit_values = {}
+    records = {}
     for month, data in selected.items():
         years = np.asarray(data["year"].values)
         values = np.asarray(data.values, dtype=float)
-        keep = np.isfinite(values)
+        finite = np.isfinite(values)
+        if np.count_nonzero(finite) < 10:
+            raise ValueError(f"Fewer than 10 finite {MONTH_NAMES[month - 1]} values remain.")
+        # Record over all finite years in OBSERVATION_YEARS, including August 2023 (Hans).
+        record_index = int(np.argmax(np.where(finite, values, -np.inf)))
+        records[month] = {"value": float(values[record_index]), "year": int(years[record_index])}
+        keep = finite.copy()
         if month == AUGUST and hans_in_observation_range and not INCLUDE_STORM_HANS_IN_FIT:
             keep &= years != STORM_HANS_YEAR
         if np.count_nonzero(keep) < 10:
@@ -260,7 +275,10 @@ def read_reference_months():
                 f"Fewer than 10 finite {MONTH_NAMES[month - 1]} values remain in the fit."
             )
         fit_values[month] = values[keep]
-    return {"fit_values": fit_values, "storm_hans_value": storm_hans_value}
+    if hans_in_observation_range and not np.isclose(records[AUGUST]["value"], storm_hans_value):
+        print(f"Note: the August record ({records[AUGUST]['value']:.3f} mm in "
+              f"{records[AUGUST]['year']}) is not Storm Hans ({storm_hans_value:.3f} mm).")
+    return {"fit_values": fit_values, "records": records, "storm_hans_value": storm_hans_value}
 
 
 def read_model_months(data_method):
@@ -441,7 +459,7 @@ def bootstrap_distribution(values, method, random_seed, progress=None):
 
 
 def analyse_event_return_period(fit, event_value, method):
-    """Evaluate the Storm Hans threshold with the fitted and bootstrap parameters."""
+    """Evaluate one threshold with the fitted and bootstrap parameters."""
     probability = exceedance_probability(event_value, fit["parameters"], method)
     bootstrap_return_periods = np.array(
         [
@@ -470,8 +488,8 @@ def empirical_event_metric(values, event_value):
     }
 
 
-def analyse_month(month, samples, event_value, progress=None):
-    """Fit every series and distribution for one month and evaluate Storm Hans."""
+def analyse_month(month, samples, event_value, progress=None, event_year=None):
+    """Fit every series and distribution for one month and evaluate its threshold."""
     month_index = SEED_MONTH_ORDER.index(month)
     results = {}
     for series in SERIES:
@@ -486,6 +504,7 @@ def analyse_month(month, samples, event_value, progress=None):
     return {
         "month": month,
         "event_value": event_value,
+        "event_year": event_year,
         "sample_sizes": {series: samples[series].size for series in SERIES},
         "results": results,
         "empirical": empirical,
@@ -688,11 +707,13 @@ def print_summary(panels):
     print(f"BC model file:     {make_model_filename(BIAS_CORRECTION_METHOD)}")
     print(f"Bootstraps:        {NUMBER_OF_BOOTSTRAPS} ({BOOTSTRAP_METHOD})")
     print(f"Include Hans fit:  {INCLUDE_STORM_HANS_IN_FIT}")
-    print(f"Storm Hans threshold: {panels[MONTHS[0]]['event_value']:.3f} mm")
+    print("Thresholds:        calendar-month records (August = Storm Hans)")
     for month in MONTHS:
         panel = panels[month]
         sizes = panel["sample_sizes"]
-        print(f"\n{MONTH_NAMES[month - 1]}: sample sizes "
+        print(f"\n{MONTH_NAMES[month - 1]}: record threshold {panel['event_value']:.3f} mm "
+              f"({panel['event_year']})")
+        print("  Sample sizes: "
               + ", ".join(f"{series_label(series)} {sizes[series]}" for series in SERIES))
         print(f"  {'Distribution':<13} {'Series':<32} {'Fitted':>12} {'Lower':>12} {'Upper':>12}")
         for method in METHODS:
@@ -707,7 +728,7 @@ def print_summary(panels):
             estimate = (f"no exceedances; plotted at {n + 1} years (lower bound)" if k == 0
                         else f"{empirical['return_period']:.4g} years")
             print(f"  {EMPIRICAL_LABEL:<13} {series_label(series):<32} "
-                  f"{k} of {n} values >= Storm Hans; {estimate}")
+                  f"{k} of {n} values >= record; {estimate}")
     print("\ninf = unbounded return period.")
 
 # =============================================================================
@@ -716,7 +737,7 @@ def print_summary(panels):
 
 
 def main():
-    """Fit every series for every month and plot the Storm Hans return periods."""
+    """Fit every series for every month and plot the record-threshold return periods."""
     validate_settings()
     print("Figure output:", OUTPUT_PATH)
     reference = read_reference_months()
@@ -733,8 +754,9 @@ def main():
                 "raw": raw[month],
                 "bias_corrected": bias_corrected[month],
             },
-            reference["storm_hans_value"],
+            reference["records"][month]["value"],
             progress,
+            event_year=reference["records"][month]["year"],
         )
         for month in MONTHS
     }

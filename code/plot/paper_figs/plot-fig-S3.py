@@ -1,41 +1,54 @@
 """
-Create a 3 x 2 (or optional 2 x 2) extreme-precipitation figure for August and May,
-comparing the reference data with two model data methods (raw and mm_1step).
+Return period of the Storm Hans threshold in every calendar month.
+
 Layout
 ------
-    a) August return-level distribution
-    b) May return-level distribution
-    c) August return metric for the Storm Hans threshold
-    d) May return metric for the Storm Hans threshold
-    e) August return metric for the calendar-month record
-    f) May return metric for the calendar-month record
-The reference fit uses OBSERVATION_YEARS, with a user option controlling whether
-August 2023 (Storm Hans) is included in the August fit. The option has no effect
-when 2023 is outside OBSERVATION_YEARS. Calendar-record thresholds use the same
-year range, but August 2023 is always excluded from the August record so Storm
-Hans does not define its own comparison threshold. May 2023 is retained.
-All event thresholds (Storm Hans and calendar-month records) are derived from the
-reference dataset and applied identically to every model data method.
-Panels (c)-(f) show the original fitted return metric as a dot and the central
-CONFIDENCE_LEVEL bootstrap interval as a capped vertical line (95% by default).
-Each distribution tick shows, from left to right, the reference data followed by
-each entry of MODEL_DATA_METHODS, using the same colors as panels (a)-(b):
-reference in orange, raw model in blue, and mm_1step bias-corrected model in cyan.
-Infinite return-period estimates are retained when calculating the percentiles.
-Intervals extending beyond the plotting limits end in outward arrows, not caps.
-Off-scale fitted estimates use directional triangles at the corresponding limit. Set PLOT_FIRST_FOUR_PANELS = True to display only panels (a)-(d).
-The compact model input is expected to contain sample_month(i_date) as YYYYMM and
-precipitation maxima with dimensions (number, i_date). Finite values are pooled,
-so files containing padded 51-, 101-, and 11-member samples are handled directly.
-A percentage-complete progress indicator is printed while the bootstrap fits are
-running. Progress is based on the total requested bootstrap fits across both
-months, all datasets, and all fitted distributions.
+Twelve panels, one per calendar month (a) January to (l) December, arranged in
+4 rows x 3 columns. Each panel has four ticks, GEV, Gumbel, GenEx and
+"Empirical", and at every tick three series, from left to right:
+
+    reference (seNorge or ERA5)   fitted to OBSERVATION_YEARS for that month
+    model raw                     all raw model samples for the month, pooled
+    model bias corrected          all BIAS_CORRECTION_METHOD samples, pooled
+
+The Storm Hans threshold (the reference August 2023 value) is the same in every
+panel; only the sample it is compared with changes from month to month.
+INCLUDE_STORM_HANS_IN_FIT controls whether August 2023 is part of the August
+reference fit (no effect on other months).
+
+Fitted estimates and uncertainty
+--------------------------------
+For GEV, Gumbel and GenEx, a dot shows the fitted return period and a capped
+vertical line the central CONFIDENCE_LEVEL interval of NUMBER_OF_BOOTSTRAPS
+refits (BOOTSTRAP_METHOD "nonparametric" or "parametric"). Infinite bootstrap
+return periods are retained in the percentiles. Intervals beyond the plotting
+limits end in outward arrows; off-scale fitted values are drawn as triangles at
+the limit.
+
+Empirical estimate
+------------------
+Solid dots without uncertainty, using the Weibull plotting position as in
+fig-05: if k of the n sample values are at least as large as the Storm Hans
+threshold, the return period is (n + 1) / k years. If k = 0 the dot is placed at
+(n + 1) years, a lower bound; the printed summary flags this case.
+
+Reproducibility
+---------------
+Bootstrap seeds follow fig-05/fig-S2 (August is month index 0, May index 1; the
+other months follow in calendar order), so the August and May panels reproduce
+the corresponding fig-05 (with the matching MODEL_DATA_METHOD) and fig-S2 values.
+
+Output
+------
+FIGURE_FORMAT = "png" or "pdf"; fonts are embedded as TrueType. The default size
+(7.0 x 8.6 in, about 178 x 218 mm) fits a full-page-width journal figure. A
+percentage progress indicator is printed while the bootstrap fits run.
 """
 
 from pathlib import Path
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
-from matplotlib.ticker import FuncFormatter
+from matplotlib.ticker import FixedLocator, FuncFormatter, NullLocator
 import numpy as np
 import xarray as xr
 from scipy.optimize import minimize
@@ -45,117 +58,85 @@ from Dunnsigouin_etal_2026 import config
 # =============================================================================
 # USER INPUTS — data selection and analysis
 # =============================================================================
-# Data selection
 REFERENCE_DATASET = "senorge"  # "senorge" or "era5"
 CATCHMENT = "regine_drammen"
 X_DAYS = 2
-OBSERVATION_YEARS = [1957, 2025]  # Years used for the reference fit and record thresholds.
-REFERENCE_FILE_YEARS = [1957, 2025]  # Year range encoded in the reference filename.
+OBSERVATION_YEARS = [1957, 2025]  # Years used for the reference fit.
 FORECAST_DATE_RANGE = ["2020-01-02", "2023-12-28"]
+BIAS_CORRECTION_METHOD = "mm_1step"  # "mm_1step", "mm_2step", "q", "ld", "doy", "q_doy"
+INCLUDE_STORM_HANS_IN_FIT = True  # Affects only the August reference fit.
 
-# Model processing and sampling
-# Model data methods compared in the figure, plotted in this order.
-# Supported: "raw", "mm_1step", "mm_2step", "q", "ld", "doy", "q_doy"
-MODEL_DATA_METHODS = ["raw", "mm_1step"]
-MODEL_VARIABLE = "tp24"
-MODEL_SAMPLING_GROUP = "full"  # "full", "split1", "split2", ...
-FIRST_INPUT_LEAD = 16
-LAST_INPUT_LEAD = 46
-NUMBER_OF_LEAD_BINS = 2
-SUBSAMPLE_MODEL_TO_REFERENCE_LENGTH = False
-
-# Distribution and event metric
-TOP_DISTRIBUTION = "GEV"  # Panels a-b: "GEV", "Gumbel", or "GenEx".
-PLOT_METRIC = "return_period"  # All panels: "return_period" or "aep".
-AEP_YEARS = 1  # Horizon for the "aep" metric.
-
-# Affects only the August reference fit when 2023 is in OBSERVATION_YEARS.
-# August 2023 is always excluded from the August record threshold.
-INCLUDE_STORM_HANS_IN_FIT = True
-
-# Bootstrap uncertainty (also used for the printed interval-width ratios)
+# Bootstrap uncertainty
 BOOTSTRAP_METHOD = "nonparametric"  # "nonparametric" or "parametric"
-NUMBER_OF_BOOTSTRAPS = 20
+NUMBER_OF_BOOTSTRAPS = 100
 CONFIDENCE_LEVEL = 0.95
-MIN_SUCCESSFUL_BOOTSTRAP_FRACTION = 0.90
 RANDOM_SEED = 42
-
-# Optional input paths; None uses the filenames constructed from the settings above.
-REFERENCE_FILENAME_OVERRIDE = None
-# Dict mapping a model data method to a path, e.g. {"raw": "/path/raw.nc"}; None for defaults.
-MODEL_FILENAME_OVERRIDES = None
 
 # =============================================================================
 # FIGURE APPEARANCE
 # =============================================================================
-# Figure layout
-PLOT_FIRST_FOUR_PANELS = True  # True: a-d only; False: all six panels.
-FIG_WIDTH_IN = 12
-FIG_HEIGHT_IN = 14  # Six-panel height; four panels use two-thirds of this.
+FIG_WIDTH_IN = 7.0  # Full page width (about 178 mm).
+FIG_HEIGHT_IN = 8.6
 SHOW_GRID = True
-
-# Axis ranges and return-level curve resolution
-RETURN_PERIOD_MIN = 1.0  # Shared range; converted to probability limits for "aep".
+RETURN_PERIOD_MIN = 1.0
 RETURN_PERIOD_MAX = 1.0e8
-NUMBER_OF_RETURN_PERIODS = 500
-PRECIPITATION_YMIN = 0.0
-PRECIPITATION_YMAX = 200.0
+SERIES_COLORS = {
+    "reference": "tab:orange",
+    "raw": "tab:blue",
+    "bias_corrected": "tab:grey",
+}
 
 # =============================================================================
 # FIGURE OUTPUT — edit the directory or filename here
 # =============================================================================
-WRITE_TO_FILE = False
+WRITE_TO_FILE = True
 SHOW_FIGURE = True
-FIGURE_DPI = 300
+FIGURE_FORMAT = "pdf"  # "png" or "pdf".
+FIGURE_DPI = 300  # Resolution of PNG output.
 OUTPUT_DIRECTORY = Path(config.dirs["fig"])
-OUTPUT_FILENAME = "fig-S3.png"
+OUTPUT_FILENAME = f"fig-S3.{FIGURE_FORMAT}"
 OUTPUT_PATH = OUTPUT_DIRECTORY / OUTPUT_FILENAME
 
 # =============================================================================
-# Plot constants
+# Dataset conventions (fixed; must match the input files)
 # =============================================================================
-MAY = 5
-AUGUST = 8
-PANEL_MONTHS = [AUGUST, MAY]
-STORM_HANS_YEAR = 2023
-STORM_HANS_MONTH = AUGUST
+REFERENCE_FILE_YEARS = (1957, 2025)  # Year range encoded in the reference filename.
 SENORGE_VARIABLE = "rr"
 ERA5_VARIABLE = "tp24"
+MODEL_FILE_VARIABLE = "tp24"  # Variable name in the model sample filename.
+MODEL_SAMPLE_VARIABLE = "tp24_max"  # Complete-lead monthly maxima.
+MIN_SUCCESSFUL_BOOTSTRAP_FRACTION = 0.90
+MAY = 5
+AUGUST = 8
+STORM_HANS_YEAR = 2023
+STORM_HANS_MONTH = AUGUST
+MONTHS = list(range(1, 13))  # Panel order: January to December.
+# Seed order: August and May first, as in fig-05/fig-S2, then the other months.
+SEED_MONTH_ORDER = [AUGUST, MAY] + [month for month in MONTHS if month not in (AUGUST, MAY)]
 MONTH_NAMES = [
     "January", "February", "March", "April", "May", "June",
     "July", "August", "September", "October", "November", "December",
 ]
 METHODS = ["GEV", "Gumbel", "GenEx"]
-SUPPORTED_MODEL_DATA_METHODS = {"raw", "mm_1step", "mm_2step", "q", "ld", "doy", "q_doy"}
-REFERENCE_GROUP = "reference"
-DATASET_SPACING = 0.15  # Horizontal separation between datasets at each distribution tick.
-OBSERVATION_COLOR = "tab:orange"
-MODEL_COLORS = {
-    "raw": "tab:blue",
-    "mm_1step": "tab:cyan",
-    "q_doy": "tab:brown",
-    "q": "tab:olive",
-    "doy": "tab:purple",
-    "ld": "tab:pink",
-}
-STORM_HANS_COLOR = "grey"
-RECORD_COLOR = "grey"
-STORM_HANS_LINESTYLE = "--"
-RECORD_LINESTYLE = ":"
-CONFIDENCE_ALPHA = 0.15
-CURVE_LINEWIDTH = 2.0
-REFERENCE_LINEWIDTH = 2.0
-MARKER_SIZE = 30
-MARKER_LINEWIDTH = 0.8
-INTERVAL_LINEWIDTH = 1.4
-INTERVAL_CAP_WIDTH = 0.08
-CLIPPED_ARROW_LENGTH = 14  # Points; fixed visual length on logarithmic axes.
-CLIPPED_ARROW_HEAD_SIZE = 10
-FITTED_MARKER_SIZE = 6
-AXIS_LABELSIZE = 11
-TICK_LABELSIZE = 11
-TITLE_FONTSIZE = 12
-LEGEND_FONTSIZE = 10
+EMPIRICAL_LABEL = "Empirical"
+SERIES = ["reference", "raw", "bias_corrected"]
+SERIES_SEED_GROUP = {"reference": 0, "raw": 1, "bias_corrected": 1}  # As in fig-05.
+
+# =============================================================================
+# Plot constants (sized for a 7-inch-wide figure)
+# =============================================================================
+N_ROWS = 4
+N_COLUMNS = 3
+SERIES_SPACING = 0.22  # Separation between neighbouring series at each tick.
+INTERVAL_LINEWIDTH = 1.0
+INTERVAL_CAP_WIDTH = 0.12
+CLIPPED_ARROW_LENGTH = 8  # Points; fixed visual length on logarithmic axes.
+CLIPPED_ARROW_HEAD_SIZE = 6
+FITTED_MARKER_SIZE = 3.5
+FONT_SIZE = 8
+TITLE_FONTSIZE = 8.5
+LEGEND_FONTSIZE = 8
+Y_TICK_DECADES = [0, 2, 4, 6, 8]  # Labelled powers of ten on the return-period axis.
 
 # =============================================================================
 # Validation, labels, and filenames
@@ -166,57 +147,30 @@ def validate_settings():
     """Validate user-configurable settings."""
     if REFERENCE_DATASET not in {"senorge", "era5"}:
         raise ValueError("REFERENCE_DATASET must be 'senorge' or 'era5'.")
-    if len(MODEL_DATA_METHODS) == 0:
-        raise ValueError("MODEL_DATA_METHODS must contain at least one method.")
-    if len(set(MODEL_DATA_METHODS)) != len(MODEL_DATA_METHODS):
-        raise ValueError("MODEL_DATA_METHODS must not contain duplicates.")
-    for method in MODEL_DATA_METHODS:
-        if method not in SUPPORTED_MODEL_DATA_METHODS:
-            raise ValueError(f"Unsupported model data method: {method}")
-        if method not in MODEL_COLORS:
-            raise ValueError(f"No color defined in MODEL_COLORS for '{method}'.")
-    if MODEL_FILENAME_OVERRIDES is not None and not isinstance(MODEL_FILENAME_OVERRIDES, dict):
-        raise TypeError("MODEL_FILENAME_OVERRIDES must be None or a dict.")
-    if TOP_DISTRIBUTION not in METHODS:
-        raise ValueError(f"TOP_DISTRIBUTION must be one of {METHODS}.")
-    if PLOT_METRIC not in {"return_period", "aep"}:
-        raise ValueError("PLOT_METRIC must be 'return_period' or 'aep'.")
+    if BIAS_CORRECTION_METHOD not in {"mm_1step", "mm_2step", "q", "ld", "doy", "q_doy"}:
+        raise ValueError("Unsupported BIAS_CORRECTION_METHOD.")
     if BOOTSTRAP_METHOD not in {"nonparametric", "parametric"}:
         raise ValueError("BOOTSTRAP_METHOD must be 'nonparametric' or 'parametric'.")
-    if AEP_YEARS < 1:
-        raise ValueError("AEP_YEARS must be at least 1.")
     if OBSERVATION_YEARS[0] > OBSERVATION_YEARS[1]:
         raise ValueError("OBSERVATION_YEARS must be increasing.")
+    if not REFERENCE_FILE_YEARS[0] <= OBSERVATION_YEARS[0] <= OBSERVATION_YEARS[1] <= REFERENCE_FILE_YEARS[1]:
+        raise ValueError(
+            f"OBSERVATION_YEARS must lie within {REFERENCE_FILE_YEARS[0]}-{REFERENCE_FILE_YEARS[1]}."
+        )
     if RETURN_PERIOD_MIN < 1:
         raise ValueError("RETURN_PERIOD_MIN must be at least 1.")
     if RETURN_PERIOD_MAX <= RETURN_PERIOD_MIN:
         raise ValueError("RETURN_PERIOD_MAX must exceed RETURN_PERIOD_MIN.")
-    if NUMBER_OF_RETURN_PERIODS < 2:
-        raise ValueError("NUMBER_OF_RETURN_PERIODS must be at least 2.")
     if NUMBER_OF_BOOTSTRAPS < 1:
         raise ValueError("NUMBER_OF_BOOTSTRAPS must be at least 1.")
     if not 0 < CONFIDENCE_LEVEL < 1:
         raise ValueError("CONFIDENCE_LEVEL must lie between 0 and 1.")
-    if not 0 < MIN_SUCCESSFUL_BOOTSTRAP_FRACTION <= 1:
-        raise ValueError("MIN_SUCCESSFUL_BOOTSTRAP_FRACTION must lie in (0, 1].")
     if not isinstance(INCLUDE_STORM_HANS_IN_FIT, bool):
         raise TypeError("INCLUDE_STORM_HANS_IN_FIT must be True or False.")
-    if not isinstance(PLOT_FIRST_FOUR_PANELS, bool):
-        raise TypeError("PLOT_FIRST_FOUR_PANELS must be True or False.")
-    first_usable_lead = FIRST_INPUT_LEAD + X_DAYS - 1
-    number_of_usable_leads = LAST_INPUT_LEAD - first_usable_lead + 1
-    if first_usable_lead > LAST_INPUT_LEAD:
-        raise ValueError("X_DAYS is too large for the configured lead range.")
-    if not 1 <= NUMBER_OF_LEAD_BINS <= number_of_usable_leads:
-        raise ValueError("NUMBER_OF_LEAD_BINS is invalid for the usable lead range.")
-    valid_groups = {"full", *(f"split{i}" for i in range(1, NUMBER_OF_LEAD_BINS + 1))}
-    if MODEL_SAMPLING_GROUP not in valid_groups:
-        raise ValueError(f"MODEL_SAMPLING_GROUP must be one of {sorted(valid_groups)}.")
-
-
-def get_dataset_groups():
-    """Return all dataset groups in plotting order: reference first, then models."""
-    return [REFERENCE_GROUP, *MODEL_DATA_METHODS]
+    if set(SERIES_COLORS) != set(SERIES):
+        raise ValueError(f"SERIES_COLORS must contain exactly {SERIES}.")
+    if FIGURE_FORMAT not in {"png", "pdf"}:
+        raise ValueError("FIGURE_FORMAT must be 'png' or 'pdf'.")
 
 
 def get_reference_name():
@@ -229,118 +183,54 @@ def get_reference_variable():
     return {"senorge": SENORGE_VARIABLE, "era5": ERA5_VARIABLE}[REFERENCE_DATASET]
 
 
-def get_reference_label():
-    """Return the reference label."""
-    return f"{get_reference_name()}"
+def series_label(series):
+    """Return the legend label of one series."""
+    return {
+        "reference": get_reference_name(),
+        "raw": "Model raw",
+        "bias_corrected": f"Model bias corrected)",
+    }[series]
 
 
-def get_model_label(model_data_method):
-    """Return the display label for one model data method."""
-    if model_data_method == "raw":
-        return "Model raw"
-    return f"Model bias-corrected"
-
-
-def get_group_label(group):
-    """Return the display label for a dataset group."""
-    return get_reference_label() if group == REFERENCE_GROUP else get_model_label(group)
-
-
-def get_group_color(group):
-    """Return the plotting color for a dataset group."""
-    return OBSERVATION_COLOR if group == REFERENCE_GROUP else MODEL_COLORS[group]
-
-
-def get_group_offsets():
-    """Return symmetric horizontal offsets for each dataset group."""
-    groups = get_dataset_groups()
-    centre = (len(groups) - 1) / 2
-    return {group: (index - centre) * DATASET_SPACING for index, group in enumerate(groups)}
-
-
-def get_record_label():
-    """Return the calendar-record label for the configured observation range."""
-    return "Calendar-month record"
-
-
-def get_model_file_id(catchment_name):
-    """Return the short catchment identifier used in model filenames."""
-    return catchment_name.removeprefix("regine_")
-
-
-def split_usable_leads(first_lead, last_lead, number_of_bins):
-    """Split an inclusive lead range into near-equal consecutive bins."""
-    number_of_leads = last_lead - first_lead + 1
-    base_size, remainder = divmod(number_of_leads, number_of_bins)
-    bin_sizes = [
-        base_size + int(index >= number_of_bins - remainder)
-        for index in range(number_of_bins)
-    ]
-    bins = []
-    current_start = first_lead
-    for bin_size in bin_sizes:
-        current_end = current_start + bin_size - 1
-        bins.append((current_start, current_end))
-        current_start = current_end + 1
-    return bins
-
-
-def build_lead_bins():
-    """Return configured accumulated ending-lead bins."""
-    first_usable_lead = FIRST_INPUT_LEAD + X_DAYS - 1
-    return split_usable_leads(first_usable_lead, LAST_INPUT_LEAD, NUMBER_OF_LEAD_BINS)
-
-
-def get_model_variable():
-    """Return the compact model precipitation variable to read."""
-    if MODEL_SAMPLING_GROUP == "full":
-        return "tp24_max"
-    lead_start, lead_end = build_lead_bins()[int(MODEL_SAMPLING_GROUP.removeprefix("split")) - 1]
-    return f"tp24_max_lead{lead_start}_{lead_end}"
+def series_offsets():
+    """Return the x offset of each series around a tick, left to right."""
+    centre = (len(SERIES) - 1) / 2
+    return {series: (index - centre) * SERIES_SPACING for index, series in enumerate(SERIES)}
 
 
 def make_reference_filename():
-    """Construct the selected observational input filename."""
-    if REFERENCE_FILENAME_OVERRIDE is not None:
-        return Path(REFERENCE_FILENAME_OVERRIDE)
+    """Construct the reference monthly-maximum filename."""
     first_year, last_year = REFERENCE_FILE_YEARS
-    if REFERENCE_DATASET == "senorge":
-        filename = (
-            f"monthly_max_samples_{SENORGE_VARIABLE}_{X_DAYS}dayacc_"
-            f"{CATCHMENT}_{first_year}-{last_year}.nc"
-        )
-        return Path(config.dirs["senorge_processed"]) / filename
     filename = (
-        f"monthly_max_samples_{ERA5_VARIABLE}_{X_DAYS}dayacc_{CATCHMENT}_"
-        f"{first_year}-{last_year}.nc"
+        f"monthly_max_samples_{get_reference_variable()}_{X_DAYS}dayacc_"
+        f"{CATCHMENT}_{first_year}-{last_year}.nc"
     )
-    return Path(config.dirs["era5_processed"]) / filename
+    directory = "senorge_processed" if REFERENCE_DATASET == "senorge" else "era5_processed"
+    return Path(config.dirs[directory]) / filename
 
 
-def make_model_filename(model_data_method):
-    """Construct the compact model filename written by the sample-building script."""
-    if MODEL_FILENAME_OVERRIDES is not None and model_data_method in MODEL_FILENAME_OVERRIDES:
-        return Path(MODEL_FILENAME_OVERRIDES[model_data_method])
+def make_model_filename(data_method):
+    """Construct the compact model filename for "raw" or a bias-correction method."""
     stem = (
-        f"monthly_max_samples_{MODEL_VARIABLE}_{X_DAYS}dayacc_"
-        f"{get_model_file_id(CATCHMENT)}_{FORECAST_DATE_RANGE[0]}_{FORECAST_DATE_RANGE[1]}"
+        f"monthly_max_samples_{MODEL_FILE_VARIABLE}_{X_DAYS}dayacc_"
+        f"{CATCHMENT.removeprefix('regine_')}_{FORECAST_DATE_RANGE[0]}_{FORECAST_DATE_RANGE[1]}"
     )
-    if model_data_method == "raw":
+    if data_method == "raw":
         correction_label = "raw"
     else:
         correction_label = (
-            f"bc_{model_data_method}_{REFERENCE_DATASET}_"
+            f"bc_{data_method}_{REFERENCE_DATASET}_"
             f"{OBSERVATION_YEARS[0]}-{OBSERVATION_YEARS[-1]}"
         )
     return Path(config.dirs["s2s_processed"]) / f"{stem}_{correction_label}.nc"
 
 # =============================================================================
-# Data reading
+# Data reading (each file is read once for all months)
 # =============================================================================
 
 
-def read_reference_month(month):
-    """Read a complete reference-month sample and its two event thresholds."""
+def read_reference_months():
+    """Read the reference fit sample of every month and the Storm Hans threshold."""
     filename = make_reference_filename()
     variable = get_reference_variable()
     if not filename.is_file():
@@ -348,51 +238,37 @@ def read_reference_month(month):
     with xr.open_dataset(filename) as ds:
         if variable not in ds:
             raise KeyError(f"Variable '{variable}' was not found in {filename}.")
-        selected = ds[variable].sel(
-            year=slice(OBSERVATION_YEARS[0], OBSERVATION_YEARS[1]), month=month
-        ).load()
         storm_hans_value = float(
             ds[variable].sel(year=STORM_HANS_YEAR, month=STORM_HANS_MONTH).load().values
         )
-    years = np.asarray(selected["year"].values)
-    values = np.asarray(selected.values, dtype=float)
-    finite = np.isfinite(values)
-    years, values = years[finite], values[finite]
-    if values.size < 10:
-        raise ValueError(f"Fewer than 10 finite {MONTH_NAMES[month - 1]} values remain.")
+        selected = {
+            month: ds[variable].sel(
+                year=slice(OBSERVATION_YEARS[0], OBSERVATION_YEARS[1]), month=month
+            ).load()
+            for month in MONTHS
+        }
     hans_in_observation_range = OBSERVATION_YEARS[0] <= STORM_HANS_YEAR <= OBSERVATION_YEARS[1]
-    record_mask = np.ones(values.size, dtype=bool)
-    if month == AUGUST and hans_in_observation_range:
-        record_mask &= years != STORM_HANS_YEAR
-    record_values = values[record_mask]
-    record_years = years[record_mask]
-    fit_mask = np.ones(values.size, dtype=bool)
-    if month == AUGUST and hans_in_observation_range and not INCLUDE_STORM_HANS_IN_FIT:
-        fit_mask &= years != STORM_HANS_YEAR
-    fit_values = values[fit_mask]
-    fit_years = years[fit_mask]
-    if fit_values.size < 10:
-        raise ValueError(
-            f"Fewer than 10 finite {MONTH_NAMES[month - 1]} values remain in the fit."
-        )
-    if record_values.size == 0:
-        raise ValueError(f"No values remain for the {MONTH_NAMES[month - 1]} record.")
-    record_index = int(np.argmax(record_values))
-    return {
-        "fit_values": fit_values,
-        "fit_years": fit_years,
-        "storm_hans_value": storm_hans_value,
-        "record_value": float(record_values[record_index]),
-        "record_year": int(record_years[record_index]),
-    }
+    fit_values = {}
+    for month, data in selected.items():
+        years = np.asarray(data["year"].values)
+        values = np.asarray(data.values, dtype=float)
+        keep = np.isfinite(values)
+        if month == AUGUST and hans_in_observation_range and not INCLUDE_STORM_HANS_IN_FIT:
+            keep &= years != STORM_HANS_YEAR
+        if np.count_nonzero(keep) < 10:
+            raise ValueError(
+                f"Fewer than 10 finite {MONTH_NAMES[month - 1]} values remain in the fit."
+            )
+        fit_values[month] = values[keep]
+    return {"fit_values": fit_values, "storm_hans_value": storm_hans_value}
 
 
-def read_model_month(month, model_data_method):
-    """Read one calendar-month model sample from sample_month(YYYYMM)."""
-    filename = make_model_filename(model_data_method)
-    variable = get_model_variable()
+def read_model_months(data_method):
+    """Read the pooled model sample of every calendar month from sample_month (YYYYMM)."""
+    filename = make_model_filename(data_method)
+    variable = MODEL_SAMPLE_VARIABLE
     if not filename.is_file():
-        raise FileNotFoundError(f"Model file ({model_data_method}) not found: {filename}")
+        raise FileNotFoundError(f"Model file not found: {filename}")
     with xr.open_dataset(filename, decode_timedelta=False) as ds:
         if variable not in ds:
             raise KeyError(
@@ -408,28 +284,22 @@ def read_model_month(month, model_data_method):
             )
         if ds["sample_month"].dims != ("i_date",):
             raise ValueError("'sample_month' must have dimension ('i_date',).")
-        calendar_month = ds["sample_month"] % 100
-        values = np.asarray(
-            ds[variable].where(calendar_month == month, drop=True).values, dtype=float
-        ).ravel()
-    values = values[np.isfinite(values)]
-    if values.size < 10:
-        raise ValueError(
-            f"Fewer than 10 finite {model_data_method} model values were found for month {month}."
-        )
-    return values
+        calendar_month = np.asarray(ds["sample_month"].values, dtype="int64") % 100
+        values = np.asarray(ds[variable].transpose("number", "i_date").values, dtype=float)
+    pooled = {}
+    for month in MONTHS:
+        month_values = values[:, calendar_month == month].ravel()
+        month_values = month_values[np.isfinite(month_values)]
+        if month_values.size < 10:
+            raise ValueError(
+                f"Fewer than 10 finite '{data_method}' model values were found for "
+                f"{MONTH_NAMES[month - 1]}."
+            )
+        pooled[month] = month_values
+    return pooled
 
-
-def subsample_model_values(values, reference_size, random_seed):
-    """Optionally subsample model values to the reference sample size."""
-    if not SUBSAMPLE_MODEL_TO_REFERENCE_LENGTH:
-        return values
-    if values.size < reference_size:
-        raise ValueError("The model sample is smaller than the reference sample.")
-    rng = np.random.default_rng(random_seed)
-    return values[rng.choice(values.size, size=reference_size, replace=False)]
 # =============================================================================
-# Shared distribution methods
+# Distribution methods
 # =============================================================================
 
 
@@ -475,18 +345,6 @@ def fit_distribution(values, method, initial_parameters=None):
     return parameters
 
 
-def distribution_ppf(probabilities, parameters, method):
-    """Evaluate the fitted quantile function."""
-    if method == "GEV":
-        shape, location, scale = parameters
-        return genextreme.ppf(probabilities, shape, loc=location, scale=scale)
-    if method == "Gumbel":
-        location, scale = parameters
-        return gumbel_r.ppf(probabilities, loc=location, scale=scale)
-    shape, scale = parameters
-    return -scale * np.log1p(-np.power(probabilities, 1.0 / shape))
-
-
 def exceedance_probability(event_value, parameters, method):
     """Return the fitted probability of exceeding one event value."""
     if method == "GEV":
@@ -519,37 +377,25 @@ def simulate_distribution(parameters, method, sample_size, rng):
     return -scale * np.log1p(-np.power(probabilities, 1.0 / shape))
 
 
-def make_bootstrap_sample(values, method, rng, fitted_parameters=None):
+def make_bootstrap_sample(values, method, rng, fitted_parameters):
     """Create one nonparametric or parametric bootstrap sample."""
     if BOOTSTRAP_METHOD == "nonparametric":
         return rng.choice(values, size=values.size, replace=True)
-    if fitted_parameters is None:
-        raise ValueError("Parametric bootstrap requires fitted parameters.")
     return simulate_distribution(fitted_parameters, method, values.size, rng)
-
-
-def empirical_return_periods(values):
-    """Return Weibull empirical return periods and descending values."""
-    sorted_values = np.sort(values)[::-1]
-    ranks = np.arange(1, sorted_values.size + 1)
-    return (sorted_values.size + 1) / ranks, sorted_values
 
 
 def return_period_from_probability(probability):
     """Convert annual exceedance probability to return period."""
     return np.inf if probability <= 0 else 1.0 / probability
 
+# =============================================================================
+# Bootstrap analyses
+# =============================================================================
 
-def horizon_aep(probability):
-    """Convert annual exceedance probability to AEP_YEARS exceedance probability."""
-    probability = float(np.clip(probability, 0.0, 1.0))
-    return float(-np.expm1(AEP_YEARS * np.log1p(-probability)))
-# =============================================================================
-# Shared bootstrap analyses
-# =============================================================================
 
 class ProgressTracker:
     """Print integer percentage completion for the requested bootstrap fits."""
+
     def __init__(self, total):
         self.total = total
         self.completed = 0
@@ -566,20 +412,14 @@ class ProgressTracker:
             print()
 
 
-def make_return_period_grid():
-    """Return the return-period grid used by panels a-b."""
-    grid_min = max(RETURN_PERIOD_MIN, 1.0 + np.finfo(float).eps)
-    return np.geomspace(grid_min, RETURN_PERIOD_MAX, NUMBER_OF_RETURN_PERIODS)
-
-
 def bootstrap_distribution(values, method, random_seed, progress=None):
-    """Fit one distribution and create reusable bootstrap parameter sets."""
+    """Fit one distribution and NUMBER_OF_BOOTSTRAPS bootstrap refits."""
     parameters = fit_distribution(values, method)
     rng = np.random.default_rng(random_seed)
     bootstrap_parameters = []
     for _ in range(NUMBER_OF_BOOTSTRAPS):
         try:
-            sample = make_bootstrap_sample(values, method, rng, fitted_parameters=parameters)
+            sample = make_bootstrap_sample(values, method, rng, parameters)
             fitted = fit_distribution(
                 sample,
                 method,
@@ -600,156 +440,64 @@ def bootstrap_distribution(values, method, random_seed, progress=None):
     return {"parameters": parameters, "bootstrap_parameters": bootstrap_parameters}
 
 
-def build_month_analysis(month, month_index, progress=None):
-    """Read one month and create shared reference/model bootstrap fits."""
-    reference = read_reference_month(month)
-    samples = {REFERENCE_GROUP: reference["fit_values"]}
-    for model_index, model_data_method in enumerate(MODEL_DATA_METHODS):
-        model_values = read_model_month(month, model_data_method)
-        samples[model_data_method] = subsample_model_values(
-            model_values,
-            reference["fit_values"].size,
-            RANDOM_SEED + 100 * month_index + model_index,
-        )
-
-    bootstrap = {}
-    for group_index, (group, values) in enumerate(samples.items()):
-        for method_index, method in enumerate(METHODS):
-            seed = RANDOM_SEED + 10000 * month_index + 1000 * group_index + method_index
-            bootstrap[(group, method)] = bootstrap_distribution(values, method, seed, progress)
-    return {"reference": reference, "samples": samples, "bootstrap": bootstrap}
-
-
-def evaluate_return_levels(values, fit, return_periods, method):
-    """Evaluate fitted and bootstrap return-level curves."""
-    probabilities = 1.0 - 1.0 / return_periods
-    fitted_levels = distribution_ppf(probabilities, fit["parameters"], method)
-    bootstrap_levels = np.array(
+def analyse_event_return_period(fit, event_value, method):
+    """Evaluate the Storm Hans threshold with the fitted and bootstrap parameters."""
+    probability = exceedance_probability(event_value, fit["parameters"], method)
+    bootstrap_return_periods = np.array(
         [
-            distribution_ppf(probabilities, parameters, method)
+            return_period_from_probability(exceedance_probability(event_value, parameters, method))
             for parameters in fit["bootstrap_parameters"]
-        ]
-    )
-    alpha = 1.0 - CONFIDENCE_LEVEL
-    lower = np.percentile(bootstrap_levels, 100.0 * alpha / 2.0, axis=0)
-    upper = np.percentile(bootstrap_levels, 100.0 * (1.0 - alpha / 2.0), axis=0)
-    empirical_rp, empirical_values = empirical_return_periods(values)
-    return {
-        "values": values,
-        "parameters": fit["parameters"],
-        "fitted_levels": fitted_levels,
-        "lower": lower,
-        "upper": upper,
-        "empirical_rp": empirical_rp,
-        "empirical_values": empirical_values,
-    }
-
-
-def analyse_top_month(month_analysis, return_periods):
-    """Prepare return-level analyses for every dataset group in one month."""
-    return {
-        "reference": month_analysis["reference"],
-        "analyses": {
-            group: evaluate_return_levels(
-                month_analysis["samples"][group],
-                month_analysis["bootstrap"][(group, TOP_DISTRIBUTION)],
-                return_periods,
-                TOP_DISTRIBUTION,
-            )
-            for group in get_dataset_groups()
-        },
-    }
-
-
-def metric_samples_from_probabilities(probabilities):
-    """Convert bootstrap probabilities while retaining unbounded return periods."""
-    probabilities = np.asarray(probabilities, dtype=float)
-    if PLOT_METRIC == "aep":
-        samples = 100.0 * np.array([horizon_aep(value) for value in probabilities])
-        return samples[np.isfinite(samples)]
-    samples = np.array(
-        [return_period_from_probability(value) for value in probabilities],
+        ],
         dtype=float,
     )
-    return samples[~np.isnan(samples)]
-
-
-def analyse_event_metric(fit, event_value, method):
-    """Evaluate one event threshold using reusable fitted bootstrap parameters."""
-    probability = exceedance_probability(event_value, fit["parameters"], method)
-    bootstrap_probabilities = np.array(
-        [
-            exceedance_probability(event_value, parameters, method)
-            for parameters in fit["bootstrap_parameters"]
-        ]
-    )
-    metric_samples = metric_samples_from_probabilities(bootstrap_probabilities)
-    if metric_samples.size == 0:
-        raise RuntimeError(f"{method} produced no valid bootstrap metric values.")
+    bootstrap_return_periods = bootstrap_return_periods[~np.isnan(bootstrap_return_periods)]
+    if bootstrap_return_periods.size == 0:
+        raise RuntimeError(f"{method} produced no valid bootstrap return periods.")
     return {
-        "probability": probability,
         "return_period": return_period_from_probability(probability),
-        "metric_samples": metric_samples,
+        "metric_samples": bootstrap_return_periods,
     }
 
 
-def calculate_metric_panel(month_analysis, month, threshold_type):
-    """Calculate one lower-row panel from shared bootstrap fits.
-    The event threshold always comes from the reference dataset.
-    """
-    reference = month_analysis["reference"]
-    event_value = (
-        reference["storm_hans_value"]
-        if threshold_type == "storm_hans"
-        else reference["record_value"]
-    )
+def empirical_event_metric(values, event_value):
+    """Return the Weibull empirical estimate (n + 1) / max(k, 1) for one sample."""
+    values = np.asarray(values, dtype=float)
+    exceedances = int(np.count_nonzero(values >= event_value))
+    return {
+        "return_period": (values.size + 1) / max(exceedances, 1),
+        "exceedances": exceedances,
+        "sample_size": values.size,
+    }
+
+
+def analyse_month(month, samples, event_value, progress=None):
+    """Fit every series and distribution for one month and evaluate Storm Hans."""
+    month_index = SEED_MONTH_ORDER.index(month)
     results = {}
-    for group in get_dataset_groups():
-        for method in METHODS:
-            results[(group, method)] = analyse_event_metric(
-                month_analysis["bootstrap"][(group, method)],
-                event_value,
-                method,
-            )
+    for series in SERIES:
+        for method_index, method in enumerate(METHODS):
+            seed = (RANDOM_SEED + 10000 * month_index
+                    + 1000 * SERIES_SEED_GROUP[series] + method_index)
+            fit = bootstrap_distribution(samples[series], method, seed, progress)
+            results[(series, method)] = analyse_event_return_period(fit, event_value, method)
+    empirical = {
+        series: empirical_event_metric(samples[series], event_value) for series in SERIES
+    }
     return {
         "month": month,
-        "threshold_type": threshold_type,
         "event_value": event_value,
-        "record_year": reference["record_year"],
+        "sample_sizes": {series: samples[series].size for series in SERIES},
         "results": results,
+        "empirical": empirical,
     }
+
 # =============================================================================
-# Plot formatting
+# Plotting
 # =============================================================================
-
-
-def return_period_to_aep_percent(return_period):
-    """Convert a return period to the configured multi-year AEP percentage."""
-    annual_probability = 1.0 / return_period
-    probability = -np.expm1(AEP_YEARS * np.log1p(-annual_probability))
-    return 100.0 * probability
-
-
-def top_x_values(return_periods):
-    """Convert return periods to the selected top-row x coordinate."""
-    if PLOT_METRIC == "return_period":
-        return return_periods
-    return return_period_to_aep_percent(return_periods)
-
-
-def format_power_of_ten(value, _position):
-    """Format positive logarithmic ticks as powers of ten."""
-    if value <= 0:
-        return ""
-    exponent = np.log10(value)
-    rounded_exponent = int(np.round(exponent))
-    if not np.isclose(exponent, rounded_exponent, atol=1e-10):
-        return ""
-    return rf"$10^{{{rounded_exponent}}}$"
 
 
 def format_metric_return_period(value, _position):
-    """Format lower-panel return periods and mark the configured upper limit."""
+    """Format return periods as powers of ten and mark the configured upper limit."""
     if value <= 0:
         return ""
     exponent = np.log10(value)
@@ -761,144 +509,28 @@ def format_metric_return_period(value, _position):
     return rf"$10^{{{rounded_exponent}}}$"
 
 
-def get_aep_limits():
-    """Return AEP limits equivalent to the shared return-period range."""
-    lower = return_period_to_aep_percent(RETURN_PERIOD_MAX)
-    upper = return_period_to_aep_percent(RETURN_PERIOD_MIN)
-    return lower, upper
-
-
-def format_top_axis(axis):
-    """Format a return-level panel."""
-    axis.set_xscale("log")
-    if PLOT_METRIC == "return_period":
-        axis.set_xlim(RETURN_PERIOD_MIN, RETURN_PERIOD_MAX)
-        axis.set_xlabel("Return period [years]", fontsize=AXIS_LABELSIZE)
-        axis.xaxis.set_major_formatter(FuncFormatter(format_power_of_ten))
-    else:
-        aep_min, aep_max = get_aep_limits()
-        axis.set_xlim(aep_max, aep_min)
-        axis.set_xlabel(f"{AEP_YEARS}-year exceedance probability [%]", fontsize=AXIS_LABELSIZE)
-    axis.set_ylim(PRECIPITATION_YMIN, PRECIPITATION_YMAX)
-    axis.set_ylabel(f"Monthly maximum {X_DAYS}-day precipitation [mm]", fontsize=AXIS_LABELSIZE)
-    axis.tick_params(axis="both", labelsize=TICK_LABELSIZE)
-    axis.spines["top"].set_visible(False)
-    axis.spines["right"].set_visible(False)
-
-
-def plot_top_panel(axis, panel_label, month, result, return_periods, show_legend=False):
-    """Plot one return-level distribution panel with reference data on top."""
-    x_values = top_x_values(return_periods)
-    # Models first (underneath), reference last (on top).
-    plotting_order = [*MODEL_DATA_METHODS, REFERENCE_GROUP]
-    for zorder, group in enumerate(plotting_order, start=2):
-        analysis = result["analyses"][group]
-        color = get_group_color(group)
-        axis.fill_between(
-            x_values,
-            analysis["lower"],
-            analysis["upper"],
-            color=color,
-            alpha=CONFIDENCE_ALPHA,
-            linewidth=0,
-            zorder=zorder,
-        )
-        axis.plot(
-            x_values,
-            analysis["fitted_levels"],
-            color=color,
-            linewidth=CURVE_LINEWIDTH,
-            zorder=zorder,
-        )
-        axis.scatter(
-            top_x_values(analysis["empirical_rp"]),
-            analysis["empirical_values"],
-            facecolors="none",
-            edgecolors=color,
-            linewidths=MARKER_LINEWIDTH,
-            s=MARKER_SIZE,
-            zorder=zorder,
-        )
-
-    reference = result["reference"]
-    line_zorder = len(plotting_order) + 2
-    axis.axhline(
-        reference["storm_hans_value"],
-        color=STORM_HANS_COLOR,
-        linestyle=STORM_HANS_LINESTYLE,
-        linewidth=REFERENCE_LINEWIDTH,
-        zorder=line_zorder,
-    )
-    axis.axhline(
-        reference["record_value"],
-        color=RECORD_COLOR,
-        linestyle=RECORD_LINESTYLE,
-        linewidth=REFERENCE_LINEWIDTH,
-        zorder=line_zorder,
-    )
-    format_top_axis(axis)
-    axis.set_title(
-        f"{panel_label}) {MONTH_NAMES[month - 1]}: {TOP_DISTRIBUTION} fit",
-        loc="center",
-        fontsize=TITLE_FONTSIZE,
-        fontweight="normal",
-    )
-
-    if show_legend:
-        handles = [
-            Line2D(
-                [0], [0],
-                color=get_group_color(group),
-                linewidth=CURVE_LINEWIDTH,
-                label=get_group_label(group),
-            )
-            for group in get_dataset_groups()
-        ]
-        handles += [
-            Line2D(
-                [0], [0],
-                color=STORM_HANS_COLOR,
-                linestyle=STORM_HANS_LINESTYLE,
-                linewidth=REFERENCE_LINEWIDTH,
-                label="Storm Hans",
-            ),
-            Line2D(
-                [0], [0],
-                color=RECORD_COLOR,
-                linestyle=RECORD_LINESTYLE,
-                linewidth=REFERENCE_LINEWIDTH,
-                label=get_record_label(),
-            ),
-        ]
-        axis.legend(handles=handles, frameon=False, fontsize=LEGEND_FONTSIZE, loc="upper left")
-
-
-def metric_axis_label():
-    """Return the lower-row y-axis label."""
-    if PLOT_METRIC == "aep":
-        return f"{AEP_YEARS}-year exceedance probability [%]"
-    return "Return period [years]"
-
-
-def configure_metric_axis(axis):
-    """Apply common formatting to a lower-row return-metric panel."""
+def configure_axis(axis, show_x_labels, show_y_labels):
+    """Apply common formatting to one monthly panel."""
+    tick_labels = [*METHODS, EMPIRICAL_LABEL]
     axis.set_yscale("log")
-    if PLOT_METRIC == "aep":
-        aep_min, aep_max = get_aep_limits()
-        axis.set_ylim(aep_min, aep_max)
-    else:
-        axis.set_ylim(RETURN_PERIOD_MIN, 1.15 * RETURN_PERIOD_MAX)
-        axis.yaxis.set_major_formatter(FuncFormatter(format_metric_return_period))
-    axis.set_xlim(-0.5, len(METHODS) - 0.5)
-    axis.set_xticks(range(len(METHODS)))
-    axis.set_xticklabels(METHODS)
-    axis.set_ylabel(metric_axis_label(), fontsize=AXIS_LABELSIZE)
-    axis.set_xlabel("Extreme-value distribution", fontsize=AXIS_LABELSIZE)
-    axis.tick_params(axis="both", labelsize=TICK_LABELSIZE)
+    axis.set_ylim(RETURN_PERIOD_MIN, 1.15 * RETURN_PERIOD_MAX)
+    y_ticks = [
+        10.0 ** decade for decade in Y_TICK_DECADES
+        if RETURN_PERIOD_MIN <= 10.0 ** decade <= RETURN_PERIOD_MAX
+    ]
+    axis.yaxis.set_major_locator(FixedLocator(y_ticks))
+    axis.yaxis.set_minor_locator(NullLocator())
+    axis.yaxis.set_major_formatter(FuncFormatter(format_metric_return_period))
+    axis.set_xlim(-0.5, len(tick_labels) - 0.5)
+    axis.set_xticks(range(len(tick_labels)))
+    axis.set_xticklabels(tick_labels if show_x_labels else [])
+    axis.tick_params(axis="both", labelsize=FONT_SIZE, length=2.5, pad=2)
+    axis.tick_params(axis="y", labelleft=show_y_labels)
     axis.spines["top"].set_visible(False)
     axis.spines["right"].set_visible(False)
     if SHOW_GRID:
-        axis.grid(axis="y", which="major", linestyle=":", linewidth=0.7, alpha=0.45)
+        axis.grid(axis="y", which="major", linestyle=":", linewidth=0.5, alpha=0.6)
+        axis.set_axisbelow(True)
 
 
 def percentile_preserving_infinity(values, percentile):
@@ -920,35 +552,34 @@ def percentile_preserving_infinity(values, percentile):
     return float(lower + weight * (upper - lower))
 
 
+def interval_bounds(metric_samples):
+    """Return the central CONFIDENCE_LEVEL bootstrap interval."""
+    tail_percent = 100 * (1 - CONFIDENCE_LEVEL) / 2
+    return (
+        percentile_preserving_infinity(metric_samples, tail_percent),
+        percentile_preserving_infinity(metric_samples, 100 - tail_percent),
+    )
+
+
 def clip_metric(value):
-    """Clip one plotted lower-panel metric value to the shared metric limits."""
-    if PLOT_METRIC == "aep":
-        aep_min, aep_max = get_aep_limits()
-        return float(np.clip(value, aep_min, aep_max))
+    """Clip one plotted return period to the shared limits."""
     return float(np.clip(value, RETURN_PERIOD_MIN, RETURN_PERIOD_MAX))
 
 
 def plot_metric_interval(axis, position, lower, upper, fitted, color):
-    """Show clipped intervals with arrows and off-scale estimates with triangles.
-    Caps mark actual interval endpoints only. Arrows indicate continuation beyond
-    the displayed metric range, including infinite return periods and zero AEP.
-    """
-    minimum, maximum = (
-        get_aep_limits() if PLOT_METRIC == "aep" else (RETURN_PERIOD_MIN, RETURN_PERIOD_MAX)
-    )
+    """Show clipped intervals with arrows and off-scale estimates with triangles."""
+    minimum, maximum = RETURN_PERIOD_MIN, RETURN_PERIOD_MAX
     axis.vlines(
         position, clip_metric(lower), clip_metric(upper),
-        color=color, linewidth=INTERVAL_LINEWIDTH,
+        color=color, linewidth=INTERVAL_LINEWIDTH, zorder=3,
     )
-
     visible_endpoints = [value for value in (lower, upper) if minimum <= value <= maximum]
     if visible_endpoints:
         axis.hlines(
             visible_endpoints,
             position - INTERVAL_CAP_WIDTH / 2, position + INTERVAL_CAP_WIDTH / 2,
-            color=color, linewidth=INTERVAL_LINEWIDTH,
+            color=color, linewidth=INTERVAL_LINEWIDTH, zorder=3,
         )
-
     # Arrow tails are inside the displayed range; arrowheads point outwards.
     for clipped, boundary, direction in [
         (upper > maximum, maximum, 1),
@@ -965,230 +596,150 @@ def plot_metric_interval(axis, position, lower, upper, fitted, color):
                 },
                 annotation_clip=False, zorder=4,
             )
-
-    if not np.isnan(fitted):
-        marker = "^" if fitted > maximum else "v" if fitted < minimum else "o"
-        axis.plot(
-            position, clip_metric(fitted), marker=marker, linestyle="none", color=color,
-            markersize=FITTED_MARKER_SIZE, clip_on=False, zorder=5,
-        )
-
-
-def plot_metric_panel(axis, panel_label, panel_output, show_legend=False):
-    """Plot fitted dots and central bootstrap intervals for every dataset group."""
-    tail_percent = 100 * (1 - CONFIDENCE_LEVEL) / 2
-    offsets = get_group_offsets()
-    for method_index, method in enumerate(METHODS):
-        for group in get_dataset_groups():
-            analysis = panel_output["results"][(group, method)]
-            position = method_index + offsets[group]
-            fitted = (
-                100 * horizon_aep(analysis["probability"])
-                if PLOT_METRIC == "aep" else analysis["return_period"]
-            )
-            lower = percentile_preserving_infinity(analysis["metric_samples"], tail_percent)
-            upper = percentile_preserving_infinity(analysis["metric_samples"], 100 - tail_percent)
-            # The percentile interval need not contain the fitted estimate.
-            plot_metric_interval(axis, position, lower, upper, fitted, get_group_color(group))
-
-    configure_metric_axis(axis)
-    panel_titles = {
-        "c": "August: Storm Hans threshold",
-        "d": "May: Storm Hans threshold",
-        "e": "August: record threshold excluding Storm Hans",
-        "f": "May: record threshold",
-    }
-    axis.set_title(
-        f"{panel_label}) {panel_titles[panel_label]}",
-        loc="center",
-        fontsize=TITLE_FONTSIZE,
-        fontweight="normal",
+    marker = "^" if fitted > maximum else "v" if fitted < minimum else "o"
+    axis.plot(
+        position, clip_metric(fitted), marker=marker, linestyle="none", color=color,
+        markersize=FITTED_MARKER_SIZE, markeredgewidth=0, clip_on=False, zorder=5,
     )
 
-    if show_legend:
-        handles = [
-            Line2D([0], [0], linestyle="-", marker="o", color=get_group_color(group),
-                   linewidth=INTERVAL_LINEWIDTH, label=get_group_label(group))
-            for group in get_dataset_groups()
-        ]
-        axis.legend(handles=handles, frameon=False, fontsize=LEGEND_FONTSIZE, loc="best")
-# =============================================================================
-# Figure and reporting
-# =============================================================================
 
-
-def interval_width_ratio(reference_width, model_width):
-    """Return reference/model interval width, preserving undefined and unbounded cases."""
-    if np.isnan(reference_width) or np.isnan(model_width):
-        return np.nan
-    if np.isinf(reference_width) and np.isinf(model_width):
-        return np.nan
-    if model_width == 0:
-        return np.nan if reference_width == 0 else np.inf
-    return reference_width / model_width
-
-
-def print_uncertainty_comparison(metric_results):
-    """Report untruncated bootstrap interval widths for every month and threshold."""
-    reference_name = get_reference_name()
-    tail_percent = 100 * (1 - CONFIDENCE_LEVEL) / 2
-    units = "years" if PLOT_METRIC == "return_period" else "percentage points"
-    threshold_names = {
-        "storm_hans": "Storm Hans threshold",
-        "calendar_record": "Calendar-month record threshold",
-    }
-    label_width = max(len(get_group_label(group)) for group in get_dataset_groups()) + 2
-    print(f"\n{CONFIDENCE_LEVEL:.0%} bootstrap uncertainty comparison")
-    print(f"Metric: {metric_axis_label()}; interval widths in {units}.")
-    print(f"Factor = {reference_name} interval width / model interval width (per model method).")
-    print("Factor > 1: narrower model interval; factor < 1: wider model interval.")
-    print("Widths use the original metric scale, before logarithms or plot-limit clipping.")
-    print("All thresholds are reported, including those hidden by the four-panel option.")
-    for month in PANEL_MONTHS:
-        for threshold_type, threshold_name in threshold_names.items():
-            panel = metric_results[(month, threshold_type)]
-            title = f"{MONTH_NAMES[month - 1]}: {threshold_name} ({panel['event_value']:.3f} mm)"
-            if month == AUGUST and threshold_type == "calendar_record":
-                title += "; August 2023 excluded"
-            print(f"\n{title}")
-            print(
-                f"{'Distribution':<13} {'Dataset':<{label_width}} {'Lower':>12} {'Upper':>12} "
-                f"{'Width':>12} {'Factor':>12}"
+def plot_panel(axis, panel_label, panel_output, show_x_labels, show_y_labels):
+    """Plot fitted, bootstrap and empirical estimates of every series for one month."""
+    offsets = series_offsets()
+    for method_index, method in enumerate(METHODS):
+        for series in SERIES:
+            analysis = panel_output["results"][(series, method)]
+            lower, upper = interval_bounds(analysis["metric_samples"])
+            # The percentile interval need not contain the fitted estimate.
+            plot_metric_interval(
+                axis, method_index + offsets[series], lower, upper,
+                analysis["return_period"], SERIES_COLORS[series],
             )
-            for method in METHODS:
-                intervals = {}
-                for group in get_dataset_groups():
-                    samples = panel["results"][(group, method)]["metric_samples"]
-                    lower = percentile_preserving_infinity(samples, tail_percent)
-                    upper = percentile_preserving_infinity(samples, 100 - tail_percent)
-                    # An interval [inf, inf] has no defined numerical width.
-                    width = np.nan if lower == upper == np.inf else upper - lower
-                    intervals[group] = (lower, upper, width)
-                reference_width = intervals[REFERENCE_GROUP][2]
-                for group, (lower, upper, width) in intervals.items():
-                    if group == REFERENCE_GROUP:
-                        ratio_label = ""
-                    else:
-                        factor = interval_width_ratio(reference_width, width)
-                        ratio_label = "undefined" if np.isnan(factor) else f"{factor:.4g}x"
-                    print(
-                        f"{method:<13} {get_group_label(group):<{label_width}} "
-                        f"{lower:12.5g} {upper:12.5g} {width:12.5g} {ratio_label:>12}"
-                    )
-    print("\ninf = unbounded; nan/undefined = no defined width or ratio (including 0/0).")
-    print("An infinite factor can also result from a zero model interval width.")
-
-
-def print_summary(top_results, metric_results):
-    """Print the key input and threshold information."""
-    print("Selected settings")
-    print("-----------------")
-    print(f"Reference dataset: {get_reference_label()}")
-    print(f"Reference file:    {make_reference_filename()}")
-    for model_data_method in MODEL_DATA_METHODS:
-        print(f"Model ({model_data_method}): {make_model_filename(model_data_method)}")
-    print(f"Top distribution:  {TOP_DISTRIBUTION}")
-    print(f"Metric:            {PLOT_METRIC}")
-    print(f"Bootstrap method:  {BOOTSTRAP_METHOD}")
-    print(f"Bootstraps:        {NUMBER_OF_BOOTSTRAPS}")
-    print(f"Include Hans fit:  {INCLUDE_STORM_HANS_IN_FIT}")
-    for month in PANEL_MONTHS:
-        reference = top_results[month]["reference"]
-        hans_in_observation_range = OBSERVATION_YEARS[0] <= STORM_HANS_YEAR <= OBSERVATION_YEARS[1]
-        record_range = (
-            f"{OBSERVATION_YEARS[0]}-{STORM_HANS_YEAR - 1}"
-            if month == AUGUST and hans_in_observation_range
-            else f"{OBSERVATION_YEARS[0]}-{OBSERVATION_YEARS[1]}"
+    for series in SERIES:
+        axis.plot(
+            len(METHODS) + offsets[series],
+            clip_metric(panel_output["empirical"][series]["return_period"]),
+            marker="o", linestyle="none", color=SERIES_COLORS[series],
+            markersize=FITTED_MARKER_SIZE, markeredgewidth=0, clip_on=False, zorder=5,
         )
-        print()
-        print(f"{MONTH_NAMES[month - 1]} reference fit: {reference['fit_values'].size} values")
-        for model_data_method in MODEL_DATA_METHODS:
-            size = top_results[month]["analyses"][model_data_method]["values"].size
-            print(f"{MONTH_NAMES[month - 1]} model {model_data_method}: {size} values")
-        print(
-            f"{MONTH_NAMES[month - 1]} record {record_range}: "
-            f"{reference['record_value']:.3f} mm ({reference['record_year']})"
-        )
-        print(f"Storm Hans threshold: {reference['storm_hans_value']:.3f} mm")
+    configure_axis(axis, show_x_labels, show_y_labels)
+    axis.set_title(
+        f"{panel_label}) {MONTH_NAMES[panel_output['month'] - 1]}",
+        loc="left", fontsize=TITLE_FONTSIZE, fontweight="normal", pad=3,
+    )
 
 
-def make_figure(top_results, metric_results, return_periods):
-    """Create a 2 x 2 or 3 x 2 figure according to the panel-selection flag."""
+def make_figure(panels):
+    """Create the 4 x 3 figure (January top left, December bottom right)."""
     plt.rcParams.update(
         {
             "font.family": "sans-serif",
-            "font.size": TICK_LABELSIZE,
-            "axes.linewidth": 0.8,
-            "xtick.major.width": 0.8,
-            "ytick.major.width": 0.8,
+            "font.size": FONT_SIZE,
+            "axes.linewidth": 0.6,
+            "xtick.major.width": 0.6,
+            "ytick.major.width": 0.6,
             "pdf.fonttype": 42,
             "ps.fonttype": 42,
         }
     )
-    number_of_rows = 2 if PLOT_FIRST_FOUR_PANELS else 3
-    figure_height = FIG_HEIGHT_IN * number_of_rows / 3
     figure, axes = plt.subplots(
-        number_of_rows, 2, figsize=(FIG_WIDTH_IN, figure_height), constrained_layout=True
+        N_ROWS, N_COLUMNS, figsize=(FIG_WIDTH_IN, FIG_HEIGHT_IN),
+        sharex=True, sharey=True, layout="constrained",
     )
-    # August is always the left column; May is always the right column.
-    plot_top_panel(axes[0, 0], "a", AUGUST, top_results[AUGUST], return_periods, show_legend=True)
-    plot_top_panel(axes[0, 1], "b", MAY, top_results[MAY], return_periods)
-    plot_metric_panel(axes[1, 0], "c", metric_results[(AUGUST, "storm_hans")], False)
-    plot_metric_panel(axes[1, 1], "d", metric_results[(MAY, "storm_hans")])
-    if not PLOT_FIRST_FOUR_PANELS:
-        plot_metric_panel(axes[2, 0], "e", metric_results[(AUGUST, "calendar_record")])
-        plot_metric_panel(axes[2, 1], "f", metric_results[(MAY, "calendar_record")])
-
+    figure.get_layout_engine().set(w_pad=0.04, h_pad=0.04, wspace=0.03, hspace=0.04)
+    for index, month in enumerate(MONTHS):
+        row, column = divmod(index, N_COLUMNS)
+        plot_panel(
+            axes[row, column], chr(ord("a") + index), panels[month],
+            show_x_labels=row == N_ROWS - 1, show_y_labels=column == 0,
+        )
+    figure.supylabel("Return period [years]", fontsize=FONT_SIZE + 1)
+    handles = [
+        Line2D([0], [0], linestyle="-", color=SERIES_COLORS[series], marker="o",
+               markeredgewidth=0, linewidth=INTERVAL_LINEWIDTH,
+               markersize=FITTED_MARKER_SIZE + 0.5, label=series_label(series))
+        for series in SERIES
+    ]
+    figure.legend(
+        handles=handles, loc="outside upper center", ncol=len(SERIES),
+        frameon=False, fontsize=LEGEND_FONTSIZE, handlelength=1.6, columnspacing=1.6,
+    )
     if WRITE_TO_FILE:
-        filename = OUTPUT_PATH
-        filename.parent.mkdir(parents=True, exist_ok=True)
-        figure.savefig(filename, dpi=FIGURE_DPI, bbox_inches="tight", facecolor="white")
-        print("Wrote:", filename)
-
+        OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
+        figure.savefig(OUTPUT_PATH, format=FIGURE_FORMAT, dpi=FIGURE_DPI,
+                       bbox_inches="tight", pad_inches=0.02, facecolor="white")
+        print("Wrote:", OUTPUT_PATH)
     if SHOW_FIGURE:
         plt.show()
     plt.close(figure)
+
+# =============================================================================
+# Reporting
+# =============================================================================
+
+
+def print_summary(panels):
+    """Print settings and, per month, sample sizes and fitted/empirical return periods."""
+    print("Selected settings")
+    print("-----------------")
+    print(f"Reference:         {get_reference_name()} {OBSERVATION_YEARS[0]}-{OBSERVATION_YEARS[1]}")
+    print(f"Reference file:    {make_reference_filename()}")
+    print(f"Raw model file:    {make_model_filename('raw')}")
+    print(f"BC model file:     {make_model_filename(BIAS_CORRECTION_METHOD)}")
+    print(f"Bootstraps:        {NUMBER_OF_BOOTSTRAPS} ({BOOTSTRAP_METHOD})")
+    print(f"Include Hans fit:  {INCLUDE_STORM_HANS_IN_FIT}")
+    print(f"Storm Hans threshold: {panels[MONTHS[0]]['event_value']:.3f} mm")
+    for month in MONTHS:
+        panel = panels[month]
+        sizes = panel["sample_sizes"]
+        print(f"\n{MONTH_NAMES[month - 1]}: sample sizes "
+              + ", ".join(f"{series_label(series)} {sizes[series]}" for series in SERIES))
+        print(f"  {'Distribution':<13} {'Series':<32} {'Fitted':>12} {'Lower':>12} {'Upper':>12}")
+        for method in METHODS:
+            for series in SERIES:
+                result = panel["results"][(series, method)]
+                lower, upper = interval_bounds(result["metric_samples"])
+                print(f"  {method:<13} {series_label(series):<32} "
+                      f"{result['return_period']:12.5g} {lower:12.5g} {upper:12.5g}")
+        for series in SERIES:
+            empirical = panel["empirical"][series]
+            k, n = empirical["exceedances"], empirical["sample_size"]
+            estimate = (f"no exceedances; plotted at {n + 1} years (lower bound)" if k == 0
+                        else f"{empirical['return_period']:.4g} years")
+            print(f"  {EMPIRICAL_LABEL:<13} {series_label(series):<32} "
+                  f"{k} of {n} values >= Storm Hans; {estimate}")
+    print("\ninf = unbounded return period.")
+
 # =============================================================================
 # Main
 # =============================================================================
 
 
 def main():
-    """Run the May/August analysis and plot the selected panels."""
+    """Fit every series for every month and plot the Storm Hans return periods."""
     validate_settings()
     print("Figure output:", OUTPUT_PATH)
-    return_periods = make_return_period_grid()
-    total_bootstraps = (
-        len(PANEL_MONTHS) * len(get_dataset_groups()) * len(METHODS) * NUMBER_OF_BOOTSTRAPS
-    )
-
-    progress = ProgressTracker(total_bootstraps)
+    reference = read_reference_months()
+    raw = read_model_months("raw")
+    bias_corrected = read_model_months(BIAS_CORRECTION_METHOD)
+    progress = ProgressTracker(len(MONTHS) * len(SERIES) * len(METHODS) * NUMBER_OF_BOOTSTRAPS)
     print("Running bootstrap fits...")
     print("Progress:   0%", end="\r", flush=True)
-    month_analyses = {
-        month: build_month_analysis(month, index, progress)
-        for index, month in enumerate(PANEL_MONTHS)
-    }
-    top_results = {
-        month: analyse_top_month(month_analyses[month], return_periods)
-        for month in PANEL_MONTHS
-    }
-    metric_results = {
-        (month, threshold_type): calculate_metric_panel(
-            month_analyses[month],
+    panels = {
+        month: analyse_month(
             month,
-            threshold_type,
+            {
+                "reference": reference["fit_values"][month],
+                "raw": raw[month],
+                "bias_corrected": bias_corrected[month],
+            },
+            reference["storm_hans_value"],
+            progress,
         )
-        for month, threshold_type in [
-            (MAY, "storm_hans"),
-            (AUGUST, "storm_hans"),
-            (MAY, "calendar_record"),
-            (AUGUST, "calendar_record"),
-        ]
+        for month in MONTHS
     }
-    print_summary(top_results, metric_results)
-    print_uncertainty_comparison(metric_results)
-    make_figure(top_results, metric_results, return_periods)
+    print_summary(panels)
+    make_figure(panels)
 
 
 if __name__ == "__main__":
