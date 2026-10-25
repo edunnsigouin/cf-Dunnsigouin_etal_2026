@@ -96,7 +96,7 @@ BERGHEIM_LONGITUDE_OVERRIDE = 9.231
 BERGHEIM_LATITUDE_OVERRIDE = 60.472
 
 EVENT_DATES = ["2023-08-06", "2023-08-07", "2023-08-08", "2023-08-09"]
-WRITE_TO_FILE = True
+WRITE_TO_FILE = False
 
 
 # =============================================================================
@@ -711,7 +711,7 @@ def add_panel_titles(map_axes):
 def add_precip_colorbar(fig, mesh, cbar_ax):
     """Add precipitation colorbar for the selected reference dataset."""
     colorbar = fig.colorbar(mesh, cax=cbar_ax, orientation='vertical')
-    colorbar.set_label('Precipitation [mm]', fontsize=AXIS_LABELSIZE)
+    colorbar.set_label('Precipitation [mm/day]', fontsize=AXIS_LABELSIZE)
     colorbar.ax.tick_params(labelsize=TICK_LABELSIZE)
 
 def add_map_legend(map_axes, catchment_label):
