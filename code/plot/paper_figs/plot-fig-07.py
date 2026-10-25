@@ -30,6 +30,12 @@ Daily-mean SWE represents the snowpack at ~09 UTC, so ΔSWE(D) spans ~09 UTC on 
 to ~09 UTC on D+1 and overlaps the 00-24 UTC precipitation and snowfall day D by
 15 h. Adding snowfall back recovers melt that ΔSWE alone hides on days when snow
 both falls and melts. Grid cells with melt > SNOWMELT_THRESHOLD are marked.
+
+Output
+------
+FIGURE_FORMAT = "png" or "pdf" sets the output type and extension. PDFs embed
+fonts as TrueType so text stays editable; the model fields are on coarse grids,
+so the whole figure remains vector graphics.
 """
 from pathlib import Path
 import cartopy.crs as ccrs
@@ -75,6 +81,8 @@ SNOW_OVERLAY_VARIABLE = "snow_depth"  # options: "snowmelt", "snow_depth"
 SNOWMELT_THRESHOLD = 0.0
 SNOW_DEPTH_THRESHOLD = 0.0
 WRITE_TO_FILE = True
+FIGURE_FORMAT = "pdf"  # "png" or "pdf".
+FIGURE_DPI = 300  # Resolution of PNG output.
 
 # =============================================================================
 # Paths
@@ -90,7 +98,7 @@ S2S_DAILY_DIR_KEYS = {
     "hindcast": "s2s_hindcast_daily",
     "forecast": "s2s_forecast_daily",
 }
-FIGURE_NAME = "fig-07.png"
+FIGURE_NAME = f"fig-07.{FIGURE_FORMAT}"
 
 # =============================================================================
 # Figure settings
@@ -269,6 +277,8 @@ def find_raw_s2s_file(event, variable):
 
 def get_selected_event(catchment_name, month_of_year, event_rank):
     """Read the sample file and return metadata for the Nth ranked event."""
+    if FIGURE_FORMAT not in {"png", "pdf"}:
+        raise ValueError("FIGURE_FORMAT must be 'png' or 'pdf'.")
     if not 1 <= month_of_year <= 12:
         raise ValueError("EVENT_MONTH must be between 1 and 12.")
     if event_rank < 1:
@@ -766,7 +776,10 @@ def finalize_figure(
     top = 1.0 - FIG_TOP_IN / FIG_HEIGHT_IN
     fig.subplots_adjust(left=FIG_LEFT, right=FIG_RIGHT, bottom=bottom, top=top)
     if WRITE_TO_FILE:
-        fig.savefig(savepath, dpi=300, bbox_inches="tight")
+        savepath.parent.mkdir(parents=True, exist_ok=True)
+        with plt.rc_context({"pdf.fonttype": 42, "ps.fonttype": 42}):
+            fig.savefig(savepath, format=FIGURE_FORMAT, dpi=FIGURE_DPI,
+                        bbox_inches="tight", facecolor="white")
         print("Saved figure:", savepath)
     plt.show()
     plt.close(fig)

@@ -1,826 +1,746 @@
-#!/usr/bin/env python3
 """
-Plot one high-ranking S2S precipitation event as a four-panel map figure.
-Figure idea
------------
-Panels a-d show four consecutive dates around the selected ranked S2S event.
-Each panel contains:
-    - daily precipitation as colored shading;
-    - mean sea level pressure as labelled grey contours;
-    - snowmelt (or snow cover), shown as stippling or hatching;
-    - the selected catchment boundary in red.
-The four dates are set relative to the event's date of maximum precipitation by
-EVENT_LAGS. For example, EVENT_LAGS = [-2, -1, 0, 1] plots two days before the
-maximum, one day before, the maximum day, and one day after.
-The selected event itself is controlled by:
-    CATCHMENT_NAME
-        chooses the catchment.
-    EVENT_MONTH
-        chooses the calendar month used for event ranking.
-    EVENT_RANK
-        chooses the Nth-largest event read from the monthly_max_samples file.
-Panels a-d therefore provide a compact spatial view of how precipitation,
-pressure, and the selected snow condition evolve around one extreme S2S event.
+Return period of the Storm Hans threshold in every calendar month.
 
-Snowmelt (SNOW_OVERLAY_VARIABLE = "snowmelt") is computed exactly as in the
-time-series figure, from the daily snow budget:
-    ΔSWE(D) = SWE(D+1) - SWE(D)        (daily-mean SWE, labelled by day D)
-    melt(D) = sf24(D) - ΔSWE(D)        (positive = melt)
-Daily-mean SWE represents the snowpack at ~09 UTC, so ΔSWE(D) spans ~09 UTC on D
-to ~09 UTC on D+1 and overlaps the 00-24 UTC precipitation and snowfall day D by
-15 h. Adding snowfall back recovers melt that ΔSWE alone hides on days when snow
-both falls and melts. Grid cells with melt > SNOWMELT_THRESHOLD are marked.
+Layout
+------
+Twelve panels, one per calendar month (a) January to (l) December, arranged in
+4 rows x 3 columns. Each panel has four ticks, GEV, Gumbel, GenEx and
+"Empirical", and at every tick three series, from left to right:
+
+    reference (seNorge or ERA5)   fitted to OBSERVATION_YEARS for that month
+    model raw                     all raw model samples for the month, pooled
+    model bias corrected          all BIAS_CORRECTION_METHOD samples, pooled
+
+The Storm Hans threshold (the reference August 2023 value) is the same in every
+panel; only the sample it is compared with changes from month to month.
+INCLUDE_STORM_HANS_IN_FIT controls whether August 2023 is part of the August
+reference fit (no effect on other months).
+
+Fitted estimates and uncertainty
+--------------------------------
+For GEV, Gumbel and GenEx, a dot shows the fitted return period and a capped
+vertical line the central CONFIDENCE_LEVEL interval of NUMBER_OF_BOOTSTRAPS
+refits (BOOTSTRAP_METHOD "nonparametric" or "parametric"). Infinite bootstrap
+return periods are retained in the percentiles. Intervals beyond the plotting
+limits end in outward arrows; off-scale fitted values are drawn as triangles at
+the limit.
+
+Empirical estimate
+------------------
+Solid dots without uncertainty, using the Weibull plotting position as in
+fig-05: if k of the n sample values are at least as large as the Storm Hans
+threshold, the return period is (n + 1) / k years. If k = 0 the dot is placed at
+(n + 1) years, a lower bound; the printed summary flags this case.
+
+Reproducibility
+---------------
+Bootstrap seeds follow fig-05/fig-S2 (August is month index 0, May index 1; the
+other months follow in calendar order), so the August and May panels reproduce
+the corresponding fig-05 (with the matching MODEL_DATA_METHOD) and fig-S2 values.
 
 Output
 ------
-FIGURE_FORMAT = "png" or "pdf" sets the output type and extension. PDFs embed
-fonts as TrueType so text stays editable; the model fields are on coarse grids,
-so the whole figure remains vector graphics.
+FIGURE_FORMAT = "png" or "pdf"; fonts are embedded as TrueType. The default size
+(7.0 x 8.6 in, about 178 x 218 mm) fits a full-page-width journal figure. A
+percentage progress indicator is printed while the bootstrap fits run.
 """
+
 from pathlib import Path
-import cartopy.crs as ccrs
-import geopandas as gpd
 import matplotlib.pyplot as plt
+from matplotlib.lines import Line2D
+from matplotlib.ticker import FixedLocator, FuncFormatter, NullLocator
 import numpy as np
 import xarray as xr
-from matplotlib.gridspec import GridSpec
-from matplotlib.lines import Line2D
-from matplotlib.patches import Patch
-from shapely.geometry import MultiPolygon, Polygon
+from scipy.optimize import minimize
+from scipy.stats import genextreme, gumbel_r
 from Dunnsigouin_etal_2026 import config
 
 # =============================================================================
-# User settings: event selection
-
+# USER INPUTS — data selection and analysis
 # =============================================================================
-CATCHMENT_NAME = "drammen"  # options: "drammen", "glomma"
-EVENT_MONTH = 5
-EVENT_RANK = 2
+REFERENCE_DATASET = "senorge"  # "senorge" or "era5"
+CATCHMENT = "regine_drammen"
+X_DAYS = 2
+OBSERVATION_YEARS = [1957, 2025]  # Years used for the reference fit.
 FORECAST_DATE_RANGE = ["2020-01-02", "2023-12-28"]
-OBSERVATION_YEARS = ["1957", "2025"]
-ACCUMULATION_DAYS = 2
-RANK_VARIABLE = "tp24"
-# Options: "raw", "q", "doy", "ld", "q_doy", "mm_1step", "mm_2step"
-BIAS_CORRECTION_METHOD = "raw"
-# Options: "senorge", "era5"
-BIAS_CORRECTION_REFERENCE = "senorge"
-SAMPLE_FILENAME_OVERRIDE = None
+BIAS_CORRECTION_METHOD = "mm_1step"  # "mm_1step", "mm_2step", "q", "ld", "doy", "q_doy"
+INCLUDE_STORM_HANS_IN_FIT = True  # Affects only the August reference fit.
+
+# Bootstrap uncertainty
+BOOTSTRAP_METHOD = "nonparametric"  # "nonparametric" or "parametric"
+NUMBER_OF_BOOTSTRAPS = 100
+CONFIDENCE_LEVEL = 0.95
+RANDOM_SEED = 42
 
 # =============================================================================
-# User settings: plotted variables and dates
+# FIGURE APPEARANCE
+# =============================================================================
+FIG_WIDTH_IN = 7.0  # Full page width (about 178 mm).
+FIG_HEIGHT_IN = 8.6
+SHOW_GRID = True
+RETURN_PERIOD_MIN = 1.0
+RETURN_PERIOD_MAX = 1.0e8
+SERIES_COLORS = {
+    "reference": "tab:orange",
+    "raw": "tab:blue",
+    "bias_corrected": "tab:grey",
+}
 
 # =============================================================================
-EVENT_LAGS = [-2, -1, 0, 1]  # dates relative to date_of_max
-PRECIP_VAR = "tp24"
-MSL_VAR = "msl"
-SNOW_VAR = "sd"
-SNOWFALL_VAR = "sf24"  # daily snowfall, written by convert_sf6_to_sf24.py
-# Snow overlay: "snowmelt" marks melt = sf24 - ΔSWE > SNOWMELT_THRESHOLD (mm/day);
-# "snow_depth" marks SWE > SNOW_DEPTH_THRESHOLD (mm).
-SNOW_OVERLAY_VARIABLE = "snow_depth"  # options: "snowmelt", "snow_depth"
-SNOWMELT_THRESHOLD = 0.0
-SNOW_DEPTH_THRESHOLD = 0.0
+# FIGURE OUTPUT — edit the directory or filename here
+# =============================================================================
 WRITE_TO_FILE = True
+SHOW_FIGURE = True
 FIGURE_FORMAT = "pdf"  # "png" or "pdf".
 FIGURE_DPI = 300  # Resolution of PNG output.
+OUTPUT_DIRECTORY = Path(config.dirs["fig"])
+OUTPUT_FILENAME = f"fig-S3.{FIGURE_FORMAT}"
+OUTPUT_PATH = OUTPUT_DIRECTORY / OUTPUT_FILENAME
 
 # =============================================================================
-# Paths
+# Dataset conventions (fixed; must match the input files)
+# =============================================================================
+REFERENCE_FILE_YEARS = (1957, 2025)  # Year range encoded in the reference filename.
+SENORGE_VARIABLE = "rr"
+ERA5_VARIABLE = "tp24"
+MODEL_FILE_VARIABLE = "tp24"  # Variable name in the model sample filename.
+MODEL_SAMPLE_VARIABLE = "tp24_max"  # Complete-lead monthly maxima.
+MIN_SUCCESSFUL_BOOTSTRAP_FRACTION = 0.90
+MAY = 5
+AUGUST = 8
+STORM_HANS_YEAR = 2023
+STORM_HANS_MONTH = AUGUST
+MONTHS = list(range(1, 13))  # Panel order: January to December.
+# Seed order: August and May first, as in fig-05/fig-S2, then the other months.
+SEED_MONTH_ORDER = [AUGUST, MAY] + [month for month in MONTHS if month not in (AUGUST, MAY)]
+MONTH_NAMES = [
+    "January", "February", "March", "April", "May", "June",
+    "July", "August", "September", "October", "November", "December",
+]
+METHODS = ["GEV", "Gumbel", "GenEx"]
+EMPIRICAL_LABEL = "Empirical"
+SERIES = ["reference", "raw", "bias_corrected"]
+SERIES_SEED_GROUP = {"reference": 0, "raw": 1, "bias_corrected": 1}  # As in fig-05.
 
 # =============================================================================
-# All folders come from config.dirs. Daily model files are read from
-#   config.dirs[S2S_DAILY_DIR_KEYS[model_type]] / <variable> / <variable>_<grid>_<date>.nc
-# (the config folders already include the domain, e.g. .../daily/europe/).
-PATH_OUT = Path(config.dirs["fig"])
-PATH_CATCHMENT = Path(config.dirs["nve"])
-PATH_S2S_PROCESSED = Path(config.dirs["s2s_processed"])
-S2S_DAILY_DIR_KEYS = {
-    "hindcast": "s2s_hindcast_daily",
-    "forecast": "s2s_forecast_daily",
-}
-FIGURE_NAME = f"fig-07.{FIGURE_FORMAT}"
+# Plot constants (sized for a 7-inch-wide figure)
+# =============================================================================
+N_ROWS = 4
+N_COLUMNS = 3
+SERIES_SPACING = 0.22  # Separation between neighbouring series at each tick.
+INTERVAL_LINEWIDTH = 1.0
+INTERVAL_CAP_WIDTH = 0.12
+CLIPPED_ARROW_LENGTH = 8  # Points; fixed visual length on logarithmic axes.
+CLIPPED_ARROW_HEAD_SIZE = 6
+FITTED_MARKER_SIZE = 3.5
+FONT_SIZE = 8
+TITLE_FONTSIZE = 8.5
+LEGEND_FONTSIZE = 8
+Y_TICK_DECADES = [0, 2, 4, 6, 8]  # Labelled powers of ten on the return-period axis.
 
 # =============================================================================
-# Figure settings
-
-# =============================================================================
-FIG_WIDTH_IN = 9.4
-FIG_HEIGHT_IN = 9.183464285714285
-MAP_EXTENT = [-10, 25, 50, 70]
-MAP_WSPACE = 0.02
-MAP_HSPACE = 0.08166666666666667
-CENTRAL_LON = 10.0
-CENTRAL_LAT = 62.0
-TICK_LABELSIZE = 12
-AXIS_LABELSIZE = 11
-TITLE_FONTSIZE = 13
-CONTOUR_LABELSIZE = 9
-# Preserve the exact physical panel geometry used in Script 1.
-FIG_LEFT = 0.065
-FIG_RIGHT = 0.96
-FIG_BOTTOM_IN = 0.84
-FIG_TOP_IN = 0.448
-
-# =============================================================================
-# Plot styling
-
-# =============================================================================
-PRECIP_LEVELS = np.arange(5, 65, 5)
-PRECIP_ZERO_THRESHOLD = 5.0
-PRECIP_CMAP = plt.get_cmap("GnBu").copy()
-PRECIP_CMAP.set_under("white")
-MSL_CONTOUR_LEVELS = np.arange(975, 1045, 5)
-MSL_CONTOUR_COLOR = "0.7"
-MSL_CONTOUR_LINEWIDTH = 1.5
-CATCHMENT_EDGE_COLOR = "red"
-CATCHMENT_LINEWIDTH = 1.0
-CATCHMENT_CRS_IF_MISSING = "EPSG:4326"
-SNOW_OVERLAY_STYLE = "stippling"  # options: "stippling", "hatching"
-SNOW_DOT_COLOR = "orange"
-SNOW_DOT_SIZE = 5
-SNOW_DOT_ALPHA = 1.0
-SNOW_DOT_STRIDE = 1
-SNOW_HATCH_PATTERN = "////"
-SNOW_HATCH_COLOR = "orange"
-SNOW_HATCH_LINEWIDTH = 1.5
-SNOW_ZORDER = 10
-
-# =============================================================================
-# Catchment and event metadata
-
-# =============================================================================
-CATCHMENTS = {
-    "drammen": {
-        "filename": "catchment_nve_regine_drammen.geojson",
-        "weights_id": "regine_drammen",
-        "label": "Drammen catchment",
-    },
-    "glomma": {
-        "filename": "catchment_nve_regine_glomma.geojson",
-        "weights_id": "regine_glomma",
-        "label": "Glomma catchment",
-    },
-}
-
-# =============================================================================
-# Metadata helpers
-
+# Validation, labels, and filenames
 # =============================================================================
 
-def get_catchment_settings(catchment_name):
-    """Return settings for the selected catchment."""
-    if catchment_name not in CATCHMENTS:
-        valid_names = ", ".join(CATCHMENTS)
+
+def validate_settings():
+    """Validate user-configurable settings."""
+    if REFERENCE_DATASET not in {"senorge", "era5"}:
+        raise ValueError("REFERENCE_DATASET must be 'senorge' or 'era5'.")
+    if BIAS_CORRECTION_METHOD not in {"mm_1step", "mm_2step", "q", "ld", "doy", "q_doy"}:
+        raise ValueError("Unsupported BIAS_CORRECTION_METHOD.")
+    if BOOTSTRAP_METHOD not in {"nonparametric", "parametric"}:
+        raise ValueError("BOOTSTRAP_METHOD must be 'nonparametric' or 'parametric'.")
+    if OBSERVATION_YEARS[0] > OBSERVATION_YEARS[1]:
+        raise ValueError("OBSERVATION_YEARS must be increasing.")
+    if not REFERENCE_FILE_YEARS[0] <= OBSERVATION_YEARS[0] <= OBSERVATION_YEARS[1] <= REFERENCE_FILE_YEARS[1]:
         raise ValueError(
-            f"Unknown catchment '{catchment_name}'. "
-            f"Valid options are: {valid_names}."
+            f"OBSERVATION_YEARS must lie within {REFERENCE_FILE_YEARS[0]}-{REFERENCE_FILE_YEARS[1]}."
         )
-    return CATCHMENTS[catchment_name]
+    if RETURN_PERIOD_MIN < 1:
+        raise ValueError("RETURN_PERIOD_MIN must be at least 1.")
+    if RETURN_PERIOD_MAX <= RETURN_PERIOD_MIN:
+        raise ValueError("RETURN_PERIOD_MAX must exceed RETURN_PERIOD_MIN.")
+    if NUMBER_OF_BOOTSTRAPS < 1:
+        raise ValueError("NUMBER_OF_BOOTSTRAPS must be at least 1.")
+    if not 0 < CONFIDENCE_LEVEL < 1:
+        raise ValueError("CONFIDENCE_LEVEL must lie between 0 and 1.")
+    if not isinstance(INCLUDE_STORM_HANS_IN_FIT, bool):
+        raise TypeError("INCLUDE_STORM_HANS_IN_FIT must be True or False.")
+    if set(SERIES_COLORS) != set(SERIES):
+        raise ValueError(f"SERIES_COLORS must contain exactly {SERIES}.")
+    if FIGURE_FORMAT not in {"png", "pdf"}:
+        raise ValueError("FIGURE_FORMAT must be 'png' or 'pdf'.")
 
-def get_file_id(catchment_name):
-    """Return the short catchment label used in S2S filenames."""
-    if catchment_name.startswith("regine_"):
-        return catchment_name.replace("regine_", "", 1)
-    return catchment_name
 
-def make_sample_filename(catchment_name):
-    """Return the monthly-maximum sample filename used for ranking."""
-    if SAMPLE_FILENAME_OVERRIDE is not None:
-        return Path(SAMPLE_FILENAME_OVERRIDE)
-    if BIAS_CORRECTION_METHOD == "raw":
+def get_reference_name():
+    """Return the display name of the selected reference dataset."""
+    return {"senorge": "seNorge", "era5": "ERA5"}[REFERENCE_DATASET]
+
+
+def get_reference_variable():
+    """Return the variable name in the selected reference dataset."""
+    return {"senorge": SENORGE_VARIABLE, "era5": ERA5_VARIABLE}[REFERENCE_DATASET]
+
+
+def series_label(series):
+    """Return the legend label of one series."""
+    return {
+        "reference": get_reference_name(),
+        "raw": "Model raw",
+        "bias_corrected": f"Model bias corrected)",
+    }[series]
+
+
+def series_offsets():
+    """Return the x offset of each series around a tick, left to right."""
+    centre = (len(SERIES) - 1) / 2
+    return {series: (index - centre) * SERIES_SPACING for index, series in enumerate(SERIES)}
+
+
+def make_reference_filename():
+    """Construct the reference monthly-maximum filename."""
+    first_year, last_year = REFERENCE_FILE_YEARS
+    filename = (
+        f"monthly_max_samples_{get_reference_variable()}_{X_DAYS}dayacc_"
+        f"{CATCHMENT}_{first_year}-{last_year}.nc"
+    )
+    directory = "senorge_processed" if REFERENCE_DATASET == "senorge" else "era5_processed"
+    return Path(config.dirs[directory]) / filename
+
+
+def make_model_filename(data_method):
+    """Construct the compact model filename for "raw" or a bias-correction method."""
+    stem = (
+        f"monthly_max_samples_{MODEL_FILE_VARIABLE}_{X_DAYS}dayacc_"
+        f"{CATCHMENT.removeprefix('regine_')}_{FORECAST_DATE_RANGE[0]}_{FORECAST_DATE_RANGE[1]}"
+    )
+    if data_method == "raw":
         correction_label = "raw"
     else:
         correction_label = (
-            f"bc_{BIAS_CORRECTION_METHOD}_{BIAS_CORRECTION_REFERENCE}_"
-            f"{OBSERVATION_YEARS[0]}-{OBSERVATION_YEARS[1]}"
+            f"bc_{data_method}_{REFERENCE_DATASET}_"
+            f"{OBSERVATION_YEARS[0]}-{OBSERVATION_YEARS[-1]}"
         )
-    return PATH_S2S_PROCESSED / (
-        f"monthly_max_samples_{RANK_VARIABLE}_{ACCUMULATION_DAYS}dayacc_"
-        f"{get_file_id(catchment_name)}_"
-        f"{FORECAST_DATE_RANGE[0]}_{FORECAST_DATE_RANGE[1]}_"
-        f"{correction_label}.nc"
-    )
+    return Path(config.dirs["s2s_processed"]) / f"{stem}_{correction_label}.nc"
 
-def validate_sample_dataset(ds):
-    """Check variables needed to identify and verify the ranked event."""
-    max_var = f"{RANK_VARIABLE}_max"
-    required = {
-        max_var,
-        "date_of_max",
-        "lead_of_max",
-        "sample_month",
-        "model_type",
-        "hdate",
-    }
-    missing = required - set(ds.variables)
-    if missing:
-        raise ValueError(f"Sample file is missing variables: {sorted(missing)}")
-    if set(ds[max_var].dims) != {"number", "i_date"}:
-        raise ValueError(f"{max_var} must have dimensions number and i_date.")
-    if set(ds["sample_month"].dims) != {"i_date"}:
-        raise ValueError("sample_month must have dimension i_date.")
+# =============================================================================
+# Data reading (each file is read once for all months)
+# =============================================================================
 
-def format_date(value):
-    """Return a compact YYYY-MM-DD date string."""
-    value = np.asarray(value).astype("datetime64[ns]")
-    if np.isnat(value):
-        return "-"
-    return np.datetime_as_string(value.astype("datetime64[D]"), unit="D")
 
-def decode_hdate(value):
-    """Return YYYY-MM-DD for hindcast hdate, or '-' for forecast rows."""
-    if value is None or int(value) == 0:
-        return "-"
-    text = f"{int(value):08d}"
-    return f"{text[:4]}-{text[4:6]}-{text[6:8]}"
-
-def get_ranked_event_indices(ds, month_of_year):
-    """Return positional event indices ranked from largest to smallest."""
-    max_var = f"{RANK_VARIABLE}_max"
-    values = ds[max_var].transpose("i_date", "number").values
-    sample_month = ds["sample_month"].values.astype("int64")
-    month_mask = sample_month % 100 == month_of_year
-    valid = np.isfinite(values) & month_mask[:, np.newaxis]
-    i_indices, number_indices = np.where(valid)
-    if i_indices.size == 0:
-        return []
-    event_values = values[i_indices, number_indices]
-    order = np.argsort(event_values)[::-1]
-    return [
-        (int(i_indices[index]), int(number_indices[index]))
-        for index in order
-    ]
-
-def make_s2s_file(event, variable, grid):
-    """Return the daily model file for one variable, grid and forecast date."""
-    model_type = event["model_type"]
-    if model_type not in S2S_DAILY_DIR_KEYS:
-        raise ValueError(f"No entry for model type '{model_type}' in S2S_DAILY_DIR_KEYS.")
-    key = S2S_DAILY_DIR_KEYS[model_type]
-    if key not in config.dirs:
-        raise KeyError(
-            f"config.dirs has no entry '{key}'. Available keys: {', '.join(sorted(config.dirs))}"
-        )
-    directory = Path(config.dirs[key]) / variable
-    return directory / f"{variable}_{grid}_{event['forecast_date']}.nc"
-
-def find_raw_s2s_file(event, variable):
-    """Return the existing raw S2S file, checking available grids."""
-    candidates = [
-        make_s2s_file(event, variable, grid)
-        for grid in ["0.5x0.5", "0.25x0.25"]
-    ]
-    for filename in candidates:
-        if filename.is_file():
-            return filename
-    return candidates[0]
-
-def get_selected_event(catchment_name, month_of_year, event_rank):
-    """Read the sample file and return metadata for the Nth ranked event."""
-    if FIGURE_FORMAT not in {"png", "pdf"}:
-        raise ValueError("FIGURE_FORMAT must be 'png' or 'pdf'.")
-    if not 1 <= month_of_year <= 12:
-        raise ValueError("EVENT_MONTH must be between 1 and 12.")
-    if event_rank < 1:
-        raise ValueError("EVENT_RANK must be at least 1.")
-    filename = make_sample_filename(catchment_name)
+def read_reference_months():
+    """Read the reference fit sample of every month and the Storm Hans threshold."""
+    filename = make_reference_filename()
+    variable = get_reference_variable()
     if not filename.is_file():
-        raise FileNotFoundError(f"Sample file not found: {filename}")
-    print("Reading:", filename)
-    with xr.open_dataset(filename, decode_timedelta=False) as opened:
-        ds = opened.load()
-    validate_sample_dataset(ds)
-    ranked_indices = get_ranked_event_indices(ds, month_of_year)
-    if event_rank > len(ranked_indices):
-        raise ValueError(
-            f"EVENT_RANK={event_rank} exceeds the {len(ranked_indices)} "
-            f"valid events available for month {month_of_year}."
+        raise FileNotFoundError(f"Reference file not found: {filename}")
+    with xr.open_dataset(filename) as ds:
+        if variable not in ds:
+            raise KeyError(f"Variable '{variable}' was not found in {filename}.")
+        storm_hans_value = float(
+            ds[variable].sel(year=STORM_HANS_YEAR, month=STORM_HANS_MONTH).load().values
         )
-    i_index, number_index = ranked_indices[event_rank - 1]
-    sample = ds.isel(i_date=i_index, number=number_index)
-    max_var = f"{RANK_VARIABLE}_max"
-    hdate = int(ds["hdate"].isel(i_date=i_index).item())
-    event = {
-        "rank": event_rank,
-        "max_value": float(sample[max_var].item()),
-        "date_of_max": format_date(sample["date_of_max"].values),
-        "model_type": str(ds["model_type"].isel(i_date=i_index).item()),
-        "forecast_date": format_date(ds["i_date"].isel(i_date=i_index).values),
-        "hdate": None if hdate == 0 else hdate,
-        # Sample members are zero-based; logical ECMWF members are 1-11.
-        "ensemble_member": int(ds["number"].isel(number=number_index).item()) + 1,
-        "lead_of_max": float(sample["lead_of_max"].item()),
-    }
-    event["source_file"] = find_raw_s2s_file(event, RANK_VARIABLE)
-    return event
-
-def get_event_dates(event):
-    """Return dates to plot as strings."""
-    date_of_max = np.datetime64(event["date_of_max"], "D")
-    return [
-        str(date_of_max + np.timedelta64(lag, "D"))
-        for lag in EVENT_LAGS
-    ]
-
-def print_selected_event(event):
-    """Print ranked-event metadata and plotted lead/valid dates."""
-    print(f"\nRank {event['rank']}")
-    print(f"  max_value        : {event['max_value']:.2f} mm")
-    print(f"  date_of_max      : {event['date_of_max']}")
-    print(f"  model_type       : {event['model_type']}")
-    print(f"  forecast_date    : {event['forecast_date']}")
-    print(f"  hdate            : {decode_hdate(event['hdate'])}")
-    print(f"  ensemble_member  : {event['ensemble_member']}")
-    print(f"  lead_of_max      : {event['lead_of_max']:.0f} days")
-    print(f"  source_file      : {event['source_file']}")
-    print("\nDates used for plotting")
-    for lag, valid_date in zip(EVENT_LAGS, get_event_dates(event)):
-        lead_day = event["lead_of_max"] + lag
-        print(
-            f"  lag {lag:+d}: lead_day {lead_day:.0f}, "
-            f"valid_date {valid_date}"
-        )
-
-def make_output_filename(catchment_name, event_rank):
-    """Return the output figure path (PATH_OUT / FIGURE_NAME)."""
-    return PATH_OUT / FIGURE_NAME
-
-# =============================================================================
-# Coordinate helpers
-
-# =============================================================================
-
-def get_time_coord_name(da):
-    """Return the time coordinate name used by the DataArray."""
-    for name in ["time", "valid_time"]:
-        if name in da.dims or name in da.coords:
-            return name
-    raise ValueError("Could not identify time coordinate.")
-
-def get_lon_lat(da):
-    """Return longitude and latitude coordinates."""
-    lon = da["longitude"] if "longitude" in da.coords else da["lon"]
-    lat = da["latitude"] if "latitude" in da.coords else da["lat"]
-    return lon, lat
-
-def get_member_coord_name(da):
-    """Return ensemble member coordinate name."""
-    for name in ["number", "member", "ensemble_member", "realization"]:
-        if name in da.dims or name in da.coords:
-            return name
-    raise ValueError("Could not identify ensemble member coordinate.")
-
-def centers_to_edges(centers):
-    """Convert 1D grid-cell center coordinates to grid-cell edges."""
-    centers = np.asarray(centers)
-    if centers.ndim != 1:
-        raise ValueError("centers must be 1D.")
-    if centers.size < 2:
-        raise ValueError("Need at least two centers to infer edges.")
-    edges = np.empty(centers.size + 1)
-    edges[1:-1] = 0.5 * (centers[:-1] + centers[1:])
-    edges[0] = centers[0] - 0.5 * (centers[1] - centers[0])
-    edges[-1] = centers[-1] + 0.5 * (centers[-1] - centers[-2])
-    return edges
-
-# =============================================================================
-# Data loading
-
-# =============================================================================
-
-def open_s2s_variable(filename, variable):
-    """Open one S2S variable and convert it to plotting units."""
-    filename = Path(filename)
-    if not filename.exists():
-        raise FileNotFoundError(f"File not found: {filename}")
-    print("Reading:", filename)
-    ds = xr.open_dataset(filename)
-    if variable not in ds:
-        ds.close()
-        raise KeyError(f"Variable '{variable}' not found in {filename}")
-    if variable == PRECIP_VAR:
-        ds[variable] = ds[variable] * 1000.0
-        ds[variable].attrs["units"] = "mm/day"
-    elif variable == MSL_VAR:
-        ds[variable] = ds[variable] / 100.0
-        ds[variable].attrs["units"] = "hPa"
-    elif variable == SNOW_VAR:
-        ds[variable] = ds[variable] * 1000.0
-        ds[variable].attrs["units"] = "mm"
-    elif variable == SNOWFALL_VAR:
-        ds[variable] = ds[variable] * 1000.0
-        ds[variable].attrs["units"] = "mm/day"
-    return ds
-
-def get_raw_member_label(da, event):
-    """Return the member label available in the current raw S2S variable."""
-    member = int(event["ensemble_member"])
-    member_name = get_member_coord_name(da)
-    available = np.asarray(da[member_name].values)
-    if member in available:
-        return member
-    if event["model_type"] == "hindcast" and member == 11 and 51 in available:
-        return 51
-    raise KeyError(
-        f"Could not find ensemble member {member} in raw {member_name} "
-        f"coordinate. Available values: {available.tolist()}"
-    )
-
-def select_event_member(ds, event, variable):
-    """Select hindcast date and ensemble member from one opened S2S dataset."""
-    da = ds[variable]
-    if event["model_type"] == "hindcast":
-        for name in ["hdate", "hindcast_date"]:
-            if name in da.dims or name in da.coords:
-                da = da.sel({name: event["hdate"]})
-                break
-    member_name = get_member_coord_name(da)
-    raw_member = get_raw_member_label(da, event)
-    if raw_member != event["ensemble_member"]:
-        print(
-            f"Using raw {variable} {member_name}={raw_member} "
-            f"for logical ensemble member {event['ensemble_member']}."
-        )
-    return da.sel({member_name: raw_member})
-
-def load_variable_dates(event, variable, target_dates):
-    """Load all requested dates for one variable with minimal file opens."""
-    target_dates = [np.datetime64(date, "ns") for date in target_dates]
-    remaining = target_dates.copy()
-    loaded = []
-    for grid in ["0.5x0.5", "0.25x0.25"]:
-        filename = make_s2s_file(event, variable, grid)
-        if not filename.exists() or not remaining:
-            continue
-        ds = open_s2s_variable(filename, variable)
-        try:
-            da = select_event_member(ds, event, variable)
-            time_name = get_time_coord_name(da)
-            available = da[time_name].values.astype("datetime64[ns]")
-            present = [date for date in remaining if date in available]
-            if present:
-                loaded.append(da.sel({time_name: present}).load())
-                remaining = [date for date in remaining if date not in present]
-        finally:
-            ds.close()
-    if remaining:
-        missing = ", ".join(np.datetime_as_string(date, unit="D") for date in remaining)
-        raise ValueError(
-            f"Could not find {variable} for dates {missing} "
-            "in either 0.5x0.5 or 0.25x0.25 files."
-        )
-    if len(loaded) == 1:
-        return loaded[0]
-    time_name = get_time_coord_name(loaded[0])
-    return xr.concat(loaded, dim=time_name).sortby(time_name)
-
-def select_loaded_date(da, target_date):
-    """Select one date from data already loaded into memory."""
-    time_name = get_time_coord_name(da)
-    return da.sel({time_name: np.datetime64(target_date, "ns")})
-
-def next_day(date):
-    """Return the day after a YYYY-MM-DD date, as a string."""
-    return str(np.datetime64(date, "D") + np.timedelta64(1, "D"))
-
-def get_snow_dates(event_dates):
-    """Return unique SWE dates needed for the selected overlay.
-
-    Snowmelt on day D needs SWE on D and D+1 (forward difference).
-    """
-    if SNOW_OVERLAY_VARIABLE == "snow_depth":
-        return event_dates
-    if SNOW_OVERLAY_VARIABLE != "snowmelt":
-        raise ValueError("SNOW_OVERLAY_VARIABLE must be 'snowmelt' or 'snow_depth'.")
-    snow_dates = list(event_dates) + [next_day(date) for date in event_dates]
-    return sorted(set(snow_dates))
-
-def load_plot_data(event, event_dates):
-    """Load all S2S data needed by the four panels.
-
-    Snowfall is only needed (and only loaded) for the snowmelt overlay.
-    """
-    precip = load_variable_dates(event, PRECIP_VAR, event_dates)
-    msl = load_variable_dates(event, MSL_VAR, event_dates)
-    snow = load_variable_dates(event, SNOW_VAR, get_snow_dates(event_dates))
-    snowfall = None
-    if SNOW_OVERLAY_VARIABLE == "snowmelt":
-        snowfall = load_variable_dates(event, SNOWFALL_VAR, event_dates)
-    return precip, msl, snow, snowfall
-
-def get_snow_overlay_field(snow, snowfall, target_date):
-    """Return SWE, or snowmelt = sf24(D) - [SWE(D+1) - SWE(D)], for one panel date."""
-    current = select_loaded_date(snow, target_date)
-    if SNOW_OVERLAY_VARIABLE == "snow_depth":
-        return current
-    following = select_loaded_date(snow, next_day(target_date))
-    delta_swe = following - current
-    melt = select_loaded_date(snowfall, target_date) - delta_swe
-    melt.attrs.update(units="mm/day", long_name="Snowmelt (snowfall minus daily change in SWE)")
-    return melt
-
-def load_catchment_outer_boundary(filename, base_dir, crs_if_missing="EPSG:4326"):
-    """Load the catchment and keep only the outer boundary."""
-    plot_crs = "EPSG:4326"
-    metric_crs = "EPSG:32633"
-    catchment_path = Path(base_dir) / filename
-    print("Reading:", catchment_path)
-    gdf = gpd.read_file(catchment_path)
-    if gdf.crs is None:
-        gdf = gdf.set_crs(crs_if_missing)
-    union_geom = gdf.to_crs(metric_crs).geometry.union_all()
-    if isinstance(union_geom, Polygon):
-        outer_geom = Polygon(union_geom.exterior)
-    elif isinstance(union_geom, MultiPolygon):
-        outer_geom = MultiPolygon([Polygon(poly.exterior) for poly in union_geom.geoms])
-    else:
-        outer_geom = union_geom
-    outer_gdf = gpd.GeoDataFrame(geometry=[outer_geom], crs=metric_crs).to_crs(plot_crs)
-    return outer_gdf.geometry.iloc[0]
-
-# =============================================================================
-# Figure setup
-
-# =============================================================================
-
-def make_figure_axes():
-    """Create four map panels and one vertical precipitation colorbar."""
-    proj_map = ccrs.LambertConformal(
-        central_longitude=CENTRAL_LON, central_latitude=CENTRAL_LAT
-    )
-    proj_data = ccrs.PlateCarree()
-    fig = plt.figure(figsize=(FIG_WIDTH_IN, FIG_HEIGHT_IN))
-    gs = GridSpec(
-        2,
-        3,
-        figure=fig,
-        width_ratios=[1.0, 1.0, 0.045],
-        height_ratios=[1.0, 1.0],
-        wspace=MAP_WSPACE,
-        hspace=MAP_HSPACE,
-    )
-    axes = np.empty((2, 2), dtype=object)
-    axes[0, 0] = fig.add_subplot(gs[0, 0], projection=proj_map)
-    axes[0, 1] = fig.add_subplot(gs[0, 1], projection=proj_map)
-    axes[1, 0] = fig.add_subplot(gs[1, 0], projection=proj_map)
-    axes[1, 1] = fig.add_subplot(gs[1, 1], projection=proj_map)
-    cbar_ax = fig.add_subplot(gs[:, 2])
-    for ax in axes.flat:
-        ax.coastlines(resolution="10m", linewidth=0.5)
-        ax.set_extent(MAP_EXTENT, crs=proj_data)
-    return fig, axes, cbar_ax, proj_data
-
-# =============================================================================
-# Plotting functions
-
-# =============================================================================
-
-def plot_precipitation(ax, da_precip, proj_data):
-    """Plot daily precipitation as shaded grid cells."""
-    lon, lat = get_lon_lat(da_precip)
-    precip = da_precip.values
-    lon_edges = centers_to_edges(lon.values)
-    lat_edges = centers_to_edges(lat.values)
-    if lat_edges[0] > lat_edges[-1]:
-        lat_edges = lat_edges[::-1]
-        precip = precip[::-1, :]
-    if lon_edges[0] > lon_edges[-1]:
-        lon_edges = lon_edges[::-1]
-        precip = precip[:, ::-1]
-    lon_edges_2d, lat_edges_2d = np.meshgrid(lon_edges, lat_edges)
-    return ax.pcolormesh(
-        lon_edges_2d,
-        lat_edges_2d,
-        precip,
-        cmap=PRECIP_CMAP,
-        vmin=PRECIP_ZERO_THRESHOLD,
-        vmax=PRECIP_LEVELS.max(),
-        shading="auto",
-        transform=proj_data,
-    )
-
-def plot_msl_contours(ax, da_msl, proj_data):
-    """Plot labelled mean sea level pressure contours."""
-    lon, lat = get_lon_lat(da_msl)
-    contour = ax.contour(
-        lon.values,
-        lat.values,
-        da_msl.values,
-        levels=MSL_CONTOUR_LEVELS,
-        colors=MSL_CONTOUR_COLOR,
-        linewidths=MSL_CONTOUR_LINEWIDTH,
-        transform=proj_data,
-        zorder=6,
-    )
-    ax.clabel(
-        contour,
-        inline=True,
-        inline_spacing=4,
-        fontsize=CONTOUR_LABELSIZE,
-        fmt="%d",
-        colors=MSL_CONTOUR_COLOR,
-    )
-
-def get_snow_overlay_mask(da):
-    """Return the Boolean mask for the selected snow overlay."""
-    values = da.values
-    if SNOW_OVERLAY_VARIABLE == "snowmelt":
-        return np.isfinite(values) & (values > SNOWMELT_THRESHOLD)
-    if SNOW_OVERLAY_VARIABLE == "snow_depth":
-        return np.isfinite(values) & (values > SNOW_DEPTH_THRESHOLD)
-    raise ValueError("SNOW_OVERLAY_VARIABLE must be 'snowmelt' or 'snow_depth'.")
-
-def plot_snow_overlay(ax, da, proj_data):
-    """Plot the selected snow condition as stippling or hatching."""
-    lon, lat = get_lon_lat(da)
-    mask = get_snow_overlay_mask(da)
-    if SNOW_OVERLAY_STYLE == "stippling":
-        iy, ix = np.where(mask)
-        if SNOW_DOT_STRIDE > 1:
-            iy, ix = iy[::SNOW_DOT_STRIDE], ix[::SNOW_DOT_STRIDE]
-        ax.scatter(
-            lon.values[ix], lat.values[iy], s=SNOW_DOT_SIZE, c=SNOW_DOT_COLOR,
-            alpha=SNOW_DOT_ALPHA, transform=proj_data, zorder=SNOW_ZORDER,
-            linewidths=0,
-        )
-    elif SNOW_OVERLAY_STYLE == "hatching":
-        old_color = plt.rcParams["hatch.color"]
-        old_linewidth = plt.rcParams["hatch.linewidth"]
-        try:
-            plt.rcParams["hatch.color"] = SNOW_HATCH_COLOR
-            plt.rcParams["hatch.linewidth"] = SNOW_HATCH_LINEWIDTH
-            ax.contourf(
-                lon.values, lat.values, mask.astype(int), levels=[0.5, 1.5],
-                colors="none", hatches=[SNOW_HATCH_PATTERN],
-                transform=proj_data, zorder=SNOW_ZORDER,
+        selected = {
+            month: ds[variable].sel(
+                year=slice(OBSERVATION_YEARS[0], OBSERVATION_YEARS[1]), month=month
+            ).load()
+            for month in MONTHS
+        }
+    hans_in_observation_range = OBSERVATION_YEARS[0] <= STORM_HANS_YEAR <= OBSERVATION_YEARS[1]
+    fit_values = {}
+    for month, data in selected.items():
+        years = np.asarray(data["year"].values)
+        values = np.asarray(data.values, dtype=float)
+        keep = np.isfinite(values)
+        if month == AUGUST and hans_in_observation_range and not INCLUDE_STORM_HANS_IN_FIT:
+            keep &= years != STORM_HANS_YEAR
+        if np.count_nonzero(keep) < 10:
+            raise ValueError(
+                f"Fewer than 10 finite {MONTH_NAMES[month - 1]} values remain in the fit."
             )
+        fit_values[month] = values[keep]
+    return {"fit_values": fit_values, "storm_hans_value": storm_hans_value}
+
+
+def read_model_months(data_method):
+    """Read the pooled model sample of every calendar month from sample_month (YYYYMM)."""
+    filename = make_model_filename(data_method)
+    variable = MODEL_SAMPLE_VARIABLE
+    if not filename.is_file():
+        raise FileNotFoundError(f"Model file not found: {filename}")
+    with xr.open_dataset(filename, decode_timedelta=False) as ds:
+        if variable not in ds:
+            raise KeyError(
+                f"Variable '{variable}' was not found in {filename}. "
+                f"Available variables: {list(ds.data_vars)}"
+            )
+        if "sample_month" not in ds:
+            raise KeyError(f"Variable 'sample_month' was not found in {filename}.")
+        if set(ds[variable].dims) != {"number", "i_date"}:
+            raise ValueError(
+                f"'{variable}' must have dimensions ('number', 'i_date'); "
+                f"found {ds[variable].dims}."
+            )
+        if ds["sample_month"].dims != ("i_date",):
+            raise ValueError("'sample_month' must have dimension ('i_date',).")
+        calendar_month = np.asarray(ds["sample_month"].values, dtype="int64") % 100
+        values = np.asarray(ds[variable].transpose("number", "i_date").values, dtype=float)
+    pooled = {}
+    for month in MONTHS:
+        month_values = values[:, calendar_month == month].ravel()
+        month_values = month_values[np.isfinite(month_values)]
+        if month_values.size < 10:
+            raise ValueError(
+                f"Fewer than 10 finite '{data_method}' model values were found for "
+                f"{MONTH_NAMES[month - 1]}."
+            )
+        pooled[month] = month_values
+    return pooled
+
+# =============================================================================
+# Distribution methods
+# =============================================================================
+
+
+def genex_negative_log_likelihood(log_parameters, values):
+    """Return the GenEx negative log-likelihood."""
+    shape, scale = np.exp(log_parameters)
+    if shape <= 0 or scale <= 0 or np.any(values < 0):
+        return np.inf
+    z = values / scale
+    log_pdf = np.log(shape) - np.log(scale) - z + (shape - 1.0) * np.log(-np.expm1(-z))
+    return np.inf if not np.isfinite(log_pdf).all() else -np.sum(log_pdf)
+
+
+def fit_distribution(values, method, initial_parameters=None):
+    """Fit one supported extreme-value distribution."""
+    if method == "GEV":
+        parameters = genextreme.fit(values)
+    elif method == "Gumbel":
+        parameters = gumbel_r.fit(values)
+    elif method == "GenEx":
+        positive = values[values > 0]
+        if np.any(values < 0) or positive.size == 0:
+            raise ValueError("GenEx requires non-negative values with at least one positive value.")
+        initial_parameters = (
+            initial_parameters
+            if initial_parameters is not None
+            else (1.0, np.mean(positive))
+        )
+        result = minimize(
+            genex_negative_log_likelihood,
+            x0=np.log(initial_parameters),
+            args=(values,),
+            method="Nelder-Mead",
+            options={"maxiter": 5000},
+        )
+        if not result.success:
+            raise RuntimeError(f"GenEx fit failed: {result.message}")
+        parameters = tuple(np.exp(result.x))
+    else:
+        raise ValueError(f"Unsupported distribution: {method}")
+    if not np.isfinite(parameters).all() or parameters[-1] <= 0:
+        raise RuntimeError(f"{method} fit returned invalid parameters.")
+    return parameters
+
+
+def exceedance_probability(event_value, parameters, method):
+    """Return the fitted probability of exceeding one event value."""
+    if method == "GEV":
+        shape, location, scale = parameters
+        probability = genextreme.sf(event_value, shape, loc=location, scale=scale)
+    elif method == "Gumbel":
+        location, scale = parameters
+        probability = gumbel_r.sf(event_value, loc=location, scale=scale)
+    else:
+        shape, scale = parameters
+        probability = (
+            1.0 if event_value < 0
+            else 1.0 - (1.0 - np.exp(-event_value / scale)) ** shape
+        )
+    if not np.isfinite(probability):
+        raise RuntimeError(f"{method} produced a non-finite exceedance probability.")
+    return float(np.clip(probability, 0.0, 1.0))
+
+
+def simulate_distribution(parameters, method, sample_size, rng):
+    """Simulate from one fitted distribution."""
+    if method == "GEV":
+        shape, location, scale = parameters
+        return genextreme.rvs(shape, loc=location, scale=scale, size=sample_size, random_state=rng)
+    if method == "Gumbel":
+        location, scale = parameters
+        return gumbel_r.rvs(loc=location, scale=scale, size=sample_size, random_state=rng)
+    shape, scale = parameters
+    probabilities = rng.random(sample_size)
+    return -scale * np.log1p(-np.power(probabilities, 1.0 / shape))
+
+
+def make_bootstrap_sample(values, method, rng, fitted_parameters):
+    """Create one nonparametric or parametric bootstrap sample."""
+    if BOOTSTRAP_METHOD == "nonparametric":
+        return rng.choice(values, size=values.size, replace=True)
+    return simulate_distribution(fitted_parameters, method, values.size, rng)
+
+
+def return_period_from_probability(probability):
+    """Convert annual exceedance probability to return period."""
+    return np.inf if probability <= 0 else 1.0 / probability
+
+# =============================================================================
+# Bootstrap analyses
+# =============================================================================
+
+
+class ProgressTracker:
+    """Print integer percentage completion for the requested bootstrap fits."""
+
+    def __init__(self, total):
+        self.total = total
+        self.completed = 0
+        self.last_percent = -1
+
+    def update(self):
+        """Advance one bootstrap fit and print when the integer percentage changes."""
+        self.completed += 1
+        percent = min(100, int(100 * self.completed / self.total))
+        if percent != self.last_percent:
+            print(f"Progress: {percent:3d}%", end="\r", flush=True)
+            self.last_percent = percent
+        if self.completed == self.total:
+            print()
+
+
+def bootstrap_distribution(values, method, random_seed, progress=None):
+    """Fit one distribution and NUMBER_OF_BOOTSTRAPS bootstrap refits."""
+    parameters = fit_distribution(values, method)
+    rng = np.random.default_rng(random_seed)
+    bootstrap_parameters = []
+    for _ in range(NUMBER_OF_BOOTSTRAPS):
+        try:
+            sample = make_bootstrap_sample(values, method, rng, parameters)
+            fitted = fit_distribution(
+                sample,
+                method,
+                initial_parameters=parameters if method == "GenEx" else None,
+            )
+            bootstrap_parameters.append(fitted)
+        except (RuntimeError, ValueError, FloatingPointError):
+            pass
         finally:
-            plt.rcParams["hatch.color"] = old_color
-            plt.rcParams["hatch.linewidth"] = old_linewidth
-    else:
-        raise ValueError("SNOW_OVERLAY_STYLE must be 'stippling' or 'hatching'.")
+            if progress is not None:
+                progress.update()
+    minimum = int(np.ceil(MIN_SUCCESSFUL_BOOTSTRAP_FRACTION * NUMBER_OF_BOOTSTRAPS))
+    if len(bootstrap_parameters) < minimum:
+        raise RuntimeError(
+            f"Only {len(bootstrap_parameters)} of {NUMBER_OF_BOOTSTRAPS} "
+            f"{method} bootstrap fits succeeded."
+        )
+    return {"parameters": parameters, "bootstrap_parameters": bootstrap_parameters}
 
-def plot_catchment_boundary(ax, geometry, proj_data, linewidth=CATCHMENT_LINEWIDTH):
-    """Overlay the selected catchment boundary."""
-    ax.add_geometries(
-        [geometry],
-        crs=proj_data,
-        facecolor="none",
-        edgecolor=CATCHMENT_EDGE_COLOR,
-        linewidth=linewidth,
-        zorder=9,
+
+def analyse_event_return_period(fit, event_value, method):
+    """Evaluate the Storm Hans threshold with the fitted and bootstrap parameters."""
+    probability = exceedance_probability(event_value, fit["parameters"], method)
+    bootstrap_return_periods = np.array(
+        [
+            return_period_from_probability(exceedance_probability(event_value, parameters, method))
+            for parameters in fit["bootstrap_parameters"]
+        ],
+        dtype=float,
     )
+    bootstrap_return_periods = bootstrap_return_periods[~np.isnan(bootstrap_return_periods)]
+    if bootstrap_return_periods.size == 0:
+        raise RuntimeError(f"{method} produced no valid bootstrap return periods.")
+    return {
+        "return_period": return_period_from_probability(probability),
+        "metric_samples": bootstrap_return_periods,
+    }
 
-def plot_event_panel(
-    ax, target_date, precip, msl, snow, snowfall, catchment_boundary, proj_data
-):
-    """Plot one map panel from already-loaded data."""
-    da_precip = select_loaded_date(precip, target_date)
-    da_msl = select_loaded_date(msl, target_date)
-    da_snow = get_snow_overlay_field(snow, snowfall, target_date)
-    mesh = plot_precipitation(ax, da_precip, proj_data)
-    plot_msl_contours(ax, da_msl, proj_data)
-    plot_snow_overlay(ax, da_snow, proj_data)
-    plot_catchment_boundary(ax, catchment_boundary, proj_data)
-    return mesh
+
+def empirical_event_metric(values, event_value):
+    """Return the Weibull empirical estimate (n + 1) / max(k, 1) for one sample."""
+    values = np.asarray(values, dtype=float)
+    exceedances = int(np.count_nonzero(values >= event_value))
+    return {
+        "return_period": (values.size + 1) / max(exceedances, 1),
+        "exceedances": exceedances,
+        "sample_size": values.size,
+    }
+
+
+def analyse_month(month, samples, event_value, progress=None):
+    """Fit every series and distribution for one month and evaluate Storm Hans."""
+    month_index = SEED_MONTH_ORDER.index(month)
+    results = {}
+    for series in SERIES:
+        for method_index, method in enumerate(METHODS):
+            seed = (RANDOM_SEED + 10000 * month_index
+                    + 1000 * SERIES_SEED_GROUP[series] + method_index)
+            fit = bootstrap_distribution(samples[series], method, seed, progress)
+            results[(series, method)] = analyse_event_return_period(fit, event_value, method)
+    empirical = {
+        series: empirical_event_metric(samples[series], event_value) for series in SERIES
+    }
+    return {
+        "month": month,
+        "event_value": event_value,
+        "sample_sizes": {series: samples[series].size for series in SERIES},
+        "results": results,
+        "empirical": empirical,
+    }
 
 # =============================================================================
-# Figure finishing
-
+# Plotting
 # =============================================================================
 
-def format_panel_date(date):
-    """Format a date as 'Jun 4' for panel titles."""
-    date_object = np.datetime64(date).astype("datetime64[D]").astype(object)
-    return f"{date_object.strftime('%B')} {date_object.day}"
 
-def add_panel_titles(axes, event_dates):
-    """Add panel labels and calendar dates."""
-    panel_labels = ["a)", "b)", "c)", "d)"]
-    for ax, panel_label, date in zip(axes, panel_labels, event_dates):
-        ax.set_title(
-            f"{panel_label} {format_panel_date(date)}",
-            fontsize=TITLE_FONTSIZE,
-            pad=3,
-        )
+def format_metric_return_period(value, _position):
+    """Format return periods as powers of ten and mark the configured upper limit."""
+    if value <= 0:
+        return ""
+    exponent = np.log10(value)
+    rounded_exponent = int(np.round(exponent))
+    if not np.isclose(exponent, rounded_exponent, atol=1e-10):
+        return ""
+    if np.isclose(value, RETURN_PERIOD_MAX):
+        return rf"$>10^{{{rounded_exponent}}}$"
+    return rf"$10^{{{rounded_exponent}}}$"
 
-def add_colorbar(fig, mesh, cbar_ax):
-    """Add vertical precipitation colorbar beside the map panels."""
-    cbar = fig.colorbar(mesh, cax=cbar_ax, orientation="vertical")
-    cbar.set_label("Precipitation [mm/day]", fontsize=AXIS_LABELSIZE)
-    cbar.ax.tick_params(labelsize=TICK_LABELSIZE)
 
-def get_snow_legend_handle():
-    """Return a legend handle for the selected snow overlay."""
-    if SNOW_OVERLAY_VARIABLE == "snowmelt":
-        label = rf"Snowmelt > {SNOWMELT_THRESHOLD:g} [mm/day]"
-    elif SNOW_OVERLAY_VARIABLE == "snow_depth":
-        label = rf"Snow water equivalent > {SNOW_DEPTH_THRESHOLD:g}"
-    else:
-        raise ValueError("SNOW_OVERLAY_VARIABLE must be 'snowmelt' or 'snow_depth'.")
-    if SNOW_OVERLAY_STYLE == "hatching":
-        return Patch(
-            facecolor="white", edgecolor=SNOW_HATCH_COLOR,
-            hatch=SNOW_HATCH_PATTERN, label=label,
-        )
-    return Line2D(
-        [0], [0], marker="o", color="none", markerfacecolor=SNOW_DOT_COLOR,
-        markersize=5, label=label,
-    )
-
-def add_legend(axes, catchment_label):
-    """Add map legend inside the upper-left panel."""
-    legend_handles = [
-        Line2D(
-            [0],
-            [0],
-            color=CATCHMENT_EDGE_COLOR,
-            linewidth=2,
-            label=catchment_label,
-        ),
-        Line2D(
-            [0],
-            [0],
-            color=MSL_CONTOUR_COLOR,
-            linewidth=MSL_CONTOUR_LINEWIDTH,
-            label="Mean sea level pressure [hPa]",
-        ),
-        get_snow_legend_handle(),
+def configure_axis(axis, show_x_labels, show_y_labels):
+    """Apply common formatting to one monthly panel."""
+    tick_labels = [*METHODS, EMPIRICAL_LABEL]
+    axis.set_yscale("log")
+    axis.set_ylim(RETURN_PERIOD_MIN, 1.15 * RETURN_PERIOD_MAX)
+    y_ticks = [
+        10.0 ** decade for decade in Y_TICK_DECADES
+        if RETURN_PERIOD_MIN <= 10.0 ** decade <= RETURN_PERIOD_MAX
     ]
-    legend = axes[0, 0].legend(
-        handles=legend_handles,
-        loc="upper left",
-        frameon=True,
-        fontsize=9,
+    axis.yaxis.set_major_locator(FixedLocator(y_ticks))
+    axis.yaxis.set_minor_locator(NullLocator())
+    axis.yaxis.set_major_formatter(FuncFormatter(format_metric_return_period))
+    axis.set_xlim(-0.5, len(tick_labels) - 0.5)
+    axis.set_xticks(range(len(tick_labels)))
+    axis.set_xticklabels(tick_labels if show_x_labels else [])
+    axis.tick_params(axis="both", labelsize=FONT_SIZE, length=2.5, pad=2)
+    axis.tick_params(axis="y", labelleft=show_y_labels)
+    axis.spines["top"].set_visible(False)
+    axis.spines["right"].set_visible(False)
+    if SHOW_GRID:
+        axis.grid(axis="y", which="major", linestyle=":", linewidth=0.5, alpha=0.6)
+        axis.set_axisbelow(True)
+
+
+def percentile_preserving_infinity(values, percentile):
+    """Calculate a percentile without discarding positive infinity."""
+    values = np.sort(np.asarray(values, dtype=float))
+    values = values[~np.isnan(values)]
+    if values.size == 0:
+        raise ValueError("Cannot calculate a percentile from an empty sample.")
+    position = (values.size - 1) * percentile / 100.0
+    lower_index = int(np.floor(position))
+    upper_index = int(np.ceil(position))
+    lower = values[lower_index]
+    upper = values[upper_index]
+    if lower_index == upper_index:
+        return float(lower)
+    if np.isposinf(upper):
+        return np.inf
+    weight = position - lower_index
+    return float(lower + weight * (upper - lower))
+
+
+def interval_bounds(metric_samples):
+    """Return the central CONFIDENCE_LEVEL bootstrap interval."""
+    tail_percent = 100 * (1 - CONFIDENCE_LEVEL) / 2
+    return (
+        percentile_preserving_infinity(metric_samples, tail_percent),
+        percentile_preserving_infinity(metric_samples, 100 - tail_percent),
     )
-    legend.get_frame().set_facecolor("white")
-    legend.get_frame().set_edgecolor("black")
-    legend.get_frame().set_linewidth(0.8)
-    legend.get_frame().set_alpha(1.0)
-    legend.set_zorder(100)
 
-def finalize_figure(
-    fig,
-    axes,
-    cbar_ax,
-    mesh,
-    event_dates,
-    catchment_label,
-    savepath,
-):
-    """Add titles, colorbar, legend, save the figure, and show it."""
-    add_panel_titles(axes.flat, event_dates)
-    add_colorbar(fig, mesh, cbar_ax)
-    add_legend(axes, catchment_label)
-    bottom = FIG_BOTTOM_IN / FIG_HEIGHT_IN
-    top = 1.0 - FIG_TOP_IN / FIG_HEIGHT_IN
-    fig.subplots_adjust(left=FIG_LEFT, right=FIG_RIGHT, bottom=bottom, top=top)
+
+def clip_metric(value):
+    """Clip one plotted return period to the shared limits."""
+    return float(np.clip(value, RETURN_PERIOD_MIN, RETURN_PERIOD_MAX))
+
+
+def plot_metric_interval(axis, position, lower, upper, fitted, color):
+    """Show clipped intervals with arrows and off-scale estimates with triangles."""
+    minimum, maximum = RETURN_PERIOD_MIN, RETURN_PERIOD_MAX
+    axis.vlines(
+        position, clip_metric(lower), clip_metric(upper),
+        color=color, linewidth=INTERVAL_LINEWIDTH, zorder=3,
+    )
+    visible_endpoints = [value for value in (lower, upper) if minimum <= value <= maximum]
+    if visible_endpoints:
+        axis.hlines(
+            visible_endpoints,
+            position - INTERVAL_CAP_WIDTH / 2, position + INTERVAL_CAP_WIDTH / 2,
+            color=color, linewidth=INTERVAL_LINEWIDTH, zorder=3,
+        )
+    # Arrow tails are inside the displayed range; arrowheads point outwards.
+    for clipped, boundary, direction in [
+        (upper > maximum, maximum, 1),
+        (lower < minimum, minimum, -1),
+    ]:
+        if clipped:
+            axis.annotate(
+                "", xy=(position, boundary), xycoords="data",
+                xytext=(0, -direction * CLIPPED_ARROW_LENGTH), textcoords="offset points",
+                arrowprops={
+                    "arrowstyle": "-|>", "color": color,
+                    "lw": INTERVAL_LINEWIDTH, "mutation_scale": CLIPPED_ARROW_HEAD_SIZE,
+                    "shrinkA": 0, "shrinkB": 0,
+                },
+                annotation_clip=False, zorder=4,
+            )
+    marker = "^" if fitted > maximum else "v" if fitted < minimum else "o"
+    axis.plot(
+        position, clip_metric(fitted), marker=marker, linestyle="none", color=color,
+        markersize=FITTED_MARKER_SIZE, markeredgewidth=0, clip_on=False, zorder=5,
+    )
+
+
+def plot_panel(axis, panel_label, panel_output, show_x_labels, show_y_labels):
+    """Plot fitted, bootstrap and empirical estimates of every series for one month."""
+    offsets = series_offsets()
+    for method_index, method in enumerate(METHODS):
+        for series in SERIES:
+            analysis = panel_output["results"][(series, method)]
+            lower, upper = interval_bounds(analysis["metric_samples"])
+            # The percentile interval need not contain the fitted estimate.
+            plot_metric_interval(
+                axis, method_index + offsets[series], lower, upper,
+                analysis["return_period"], SERIES_COLORS[series],
+            )
+    for series in SERIES:
+        axis.plot(
+            len(METHODS) + offsets[series],
+            clip_metric(panel_output["empirical"][series]["return_period"]),
+            marker="o", linestyle="none", color=SERIES_COLORS[series],
+            markersize=FITTED_MARKER_SIZE, markeredgewidth=0, clip_on=False, zorder=5,
+        )
+    configure_axis(axis, show_x_labels, show_y_labels)
+    axis.set_title(
+        f"{panel_label}) {MONTH_NAMES[panel_output['month'] - 1]}",
+        loc="left", fontsize=TITLE_FONTSIZE, fontweight="normal", pad=3,
+    )
+
+
+def make_figure(panels):
+    """Create the 4 x 3 figure (January top left, December bottom right)."""
+    plt.rcParams.update(
+        {
+            "font.family": "sans-serif",
+            "font.size": FONT_SIZE,
+            "axes.linewidth": 0.6,
+            "xtick.major.width": 0.6,
+            "ytick.major.width": 0.6,
+            "pdf.fonttype": 42,
+            "ps.fonttype": 42,
+        }
+    )
+    figure, axes = plt.subplots(
+        N_ROWS, N_COLUMNS, figsize=(FIG_WIDTH_IN, FIG_HEIGHT_IN),
+        sharex=True, sharey=True, layout="constrained",
+    )
+    figure.get_layout_engine().set(w_pad=0.04, h_pad=0.04, wspace=0.03, hspace=0.04)
+    for index, month in enumerate(MONTHS):
+        row, column = divmod(index, N_COLUMNS)
+        plot_panel(
+            axes[row, column], chr(ord("a") + index), panels[month],
+            show_x_labels=row == N_ROWS - 1, show_y_labels=column == 0,
+        )
+    figure.supylabel("Return period [years]", fontsize=FONT_SIZE + 1)
+    handles = [
+        Line2D([0], [0], linestyle="-", color=SERIES_COLORS[series], marker="o",
+               markeredgewidth=0, linewidth=INTERVAL_LINEWIDTH,
+               markersize=FITTED_MARKER_SIZE + 0.5, label=series_label(series))
+        for series in SERIES
+    ]
+    figure.legend(
+        handles=handles, loc="outside upper center", ncol=len(SERIES),
+        frameon=False, fontsize=LEGEND_FONTSIZE, handlelength=1.6, columnspacing=1.6,
+    )
     if WRITE_TO_FILE:
-        savepath.parent.mkdir(parents=True, exist_ok=True)
-        with plt.rc_context({"pdf.fonttype": 42, "ps.fonttype": 42}):
-            fig.savefig(savepath, format=FIGURE_FORMAT, dpi=FIGURE_DPI,
-                        bbox_inches="tight", facecolor="white")
-        print("Saved figure:", savepath)
-    plt.show()
-    plt.close(fig)
+        OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
+        figure.savefig(OUTPUT_PATH, format=FIGURE_FORMAT, dpi=FIGURE_DPI,
+                       bbox_inches="tight", pad_inches=0.02, facecolor="white")
+        print("Wrote:", OUTPUT_PATH)
+    if SHOW_FIGURE:
+        plt.show()
+    plt.close(figure)
 
 # =============================================================================
-# Main workflow
+# Reporting
+# =============================================================================
+
+
+def print_summary(panels):
+    """Print settings and, per month, sample sizes and fitted/empirical return periods."""
+    print("Selected settings")
+    print("-----------------")
+    print(f"Reference:         {get_reference_name()} {OBSERVATION_YEARS[0]}-{OBSERVATION_YEARS[1]}")
+    print(f"Reference file:    {make_reference_filename()}")
+    print(f"Raw model file:    {make_model_filename('raw')}")
+    print(f"BC model file:     {make_model_filename(BIAS_CORRECTION_METHOD)}")
+    print(f"Bootstraps:        {NUMBER_OF_BOOTSTRAPS} ({BOOTSTRAP_METHOD})")
+    print(f"Include Hans fit:  {INCLUDE_STORM_HANS_IN_FIT}")
+    print(f"Storm Hans threshold: {panels[MONTHS[0]]['event_value']:.3f} mm")
+    for month in MONTHS:
+        panel = panels[month]
+        sizes = panel["sample_sizes"]
+        print(f"\n{MONTH_NAMES[month - 1]}: sample sizes "
+              + ", ".join(f"{series_label(series)} {sizes[series]}" for series in SERIES))
+        print(f"  {'Distribution':<13} {'Series':<32} {'Fitted':>12} {'Lower':>12} {'Upper':>12}")
+        for method in METHODS:
+            for series in SERIES:
+                result = panel["results"][(series, method)]
+                lower, upper = interval_bounds(result["metric_samples"])
+                print(f"  {method:<13} {series_label(series):<32} "
+                      f"{result['return_period']:12.5g} {lower:12.5g} {upper:12.5g}")
+        for series in SERIES:
+            empirical = panel["empirical"][series]
+            k, n = empirical["exceedances"], empirical["sample_size"]
+            estimate = (f"no exceedances; plotted at {n + 1} years (lower bound)" if k == 0
+                        else f"{empirical['return_period']:.4g} years")
+            print(f"  {EMPIRICAL_LABEL:<13} {series_label(series):<32} "
+                  f"{k} of {n} values >= Storm Hans; {estimate}")
+    print("\ninf = unbounded return period.")
 
 # =============================================================================
+# Main
+# =============================================================================
+
 
 def main():
-    """Run the full plotting workflow."""
-    catchment = get_catchment_settings(CATCHMENT_NAME)
-    event = get_selected_event(
-        catchment_name=catchment["weights_id"],
-        month_of_year=EVENT_MONTH,
-        event_rank=EVENT_RANK,
-    )
-    print_selected_event(event)
-    event_dates = get_event_dates(event)
-    savepath = make_output_filename(CATCHMENT_NAME, EVENT_RANK)
-    catchment_boundary = load_catchment_outer_boundary(
-        filename=catchment["filename"],
-        base_dir=PATH_CATCHMENT,
-        crs_if_missing=CATCHMENT_CRS_IF_MISSING,
-    )
-    precip, msl, snow, snowfall = load_plot_data(event, event_dates)
-    fig, axes, cbar_ax, proj_data = make_figure_axes()
-    mesh = None
-    for ax, target_date in zip(axes.flat, event_dates):
-        mesh = plot_event_panel(
-            ax, target_date, precip, msl, snow, snowfall, catchment_boundary, proj_data
+    """Fit every series for every month and plot the Storm Hans return periods."""
+    validate_settings()
+    print("Figure output:", OUTPUT_PATH)
+    reference = read_reference_months()
+    raw = read_model_months("raw")
+    bias_corrected = read_model_months(BIAS_CORRECTION_METHOD)
+    progress = ProgressTracker(len(MONTHS) * len(SERIES) * len(METHODS) * NUMBER_OF_BOOTSTRAPS)
+    print("Running bootstrap fits...")
+    print("Progress:   0%", end="\r", flush=True)
+    panels = {
+        month: analyse_month(
+            month,
+            {
+                "reference": reference["fit_values"][month],
+                "raw": raw[month],
+                "bias_corrected": bias_corrected[month],
+            },
+            reference["storm_hans_value"],
+            progress,
         )
-    finalize_figure(
-        fig=fig,
-        axes=axes,
-        cbar_ax=cbar_ax,
-        mesh=mesh,
-        event_dates=event_dates,
-        catchment_label=catchment["label"],
-        savepath=savepath,
-    )
+        for month in MONTHS
+    }
+    print_summary(panels)
+    make_figure(panels)
+
 
 if __name__ == "__main__":
     main()
