@@ -697,7 +697,7 @@ def add_panel_titles(axes, event_dates):
 def add_colorbar(fig, mesh, cbar_ax):
     """Add vertical precipitation colorbar beside the map panels."""
     cbar = fig.colorbar(mesh, cax=cbar_ax, orientation="vertical")
-    cbar.set_label("Precipitation [mm]", fontsize=AXIS_LABELSIZE)
+    cbar.set_label("Precipitation [mm/day]", fontsize=AXIS_LABELSIZE)
     cbar.ax.tick_params(labelsize=TICK_LABELSIZE)
 
 def get_snow_legend_handle():

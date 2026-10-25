@@ -39,14 +39,16 @@ for every N, so each replicate is one complete curve. The band at each N is the
 central CONFIDENCE_LEVEL percentile interval of P_N^(b) across replicates.
 Because P_N increases monotonically with p_year, the band is essentially the
 annual-probability interval mapped through the same formula.
-Failed fits are skipped; at least MIN_SUCCESSFUL_BOOTSTRAP_FRACTION of the
-requested fits must succeed for every month and dataset.
+Failed fits are skipped; at least 90% of the requested fits must succeed for
+every month and dataset.
 
 Datasets
 --------
+The model sample is the complete-lead monthly-maximum sample (tp24_max) of the
+selected MODEL_DATA_METHOD; all finite values for a calendar month are pooled.
 The model is always analysed. With INCLUDE_REFERENCE = True the same calculation
-is made for the reference dataset (seNorge or ERA5); with False its fits are
-skipped entirely, which halves the run time.
+is made for the reference dataset (seNorge or ERA5, 1957-2025 file); with False
+its fits are skipped entirely, which halves the run time.
 
 Figure
 ------
@@ -77,21 +79,8 @@ REFERENCE_DATASET = "senorge"  # "senorge" or "era5".
 CATCHMENT = "regine_drammen"
 X_DAYS = 2  # Precipitation accumulation length in days.
 OBSERVATION_YEARS = [1957, 2025]  # Reference fitting period and record thresholds.
-REFERENCE_FILE_YEARS = [1957, 2025]  # Full period encoded in the reference filename.
 FORECAST_DATE_RANGE = ["2020-01-02", "2023-12-28"]
-
-# Must match the settings used to generate the model sample file.
 MODEL_DATA_METHOD = "raw"  # "raw", "mm_1step", "mm_2step", "q", "ld", "doy", "q_doy".
-MODEL_VARIABLE = "tp24"
-MODEL_SAMPLING_GROUP = "full"  # "full", "split1", "split2", ...
-FIRST_INPUT_LEAD = 16
-LAST_INPUT_LEAD = 46
-NUMBER_OF_LEAD_BINS = 2
-SUBSAMPLE_MODEL_TO_REFERENCE_LENGTH = False  # Match reference sample size in each month.
-
-# Optional explicit input paths; None builds filenames from the settings above.
-REFERENCE_FILENAME_OVERRIDE = None
-MODEL_FILENAME_OVERRIDE = None
 
 # =============================================================================
 # ANALYSIS SETTINGS
@@ -103,7 +92,6 @@ INCLUDE_STORM_HANS_IN_FIT = True  # August reference fit only; the record always
 BOOTSTRAP_METHOD = "nonparametric"  # "nonparametric" or "parametric".
 NUMBER_OF_BOOTSTRAPS = 100
 CONFIDENCE_LEVEL = 0.95
-MIN_SUCCESSFUL_BOOTSTRAP_FRACTION = 0.90
 RANDOM_SEED = 42
 
 # =============================================================================
@@ -114,7 +102,7 @@ SHOW_FIGURE = True
 FIGURE_DPI = 300
 OUTPUT_DIRECTORY = Path(config.dirs["fig"])
 FIGURE_NAME = "fig-06"
-OUTPUT_FORMATS = ["png", "pdf"]  # PDF for the journal, PNG for quick viewing.
+OUTPUT_FORMATS = ["pdf"]  # PDF for the journal, PNG for quick viewing.
 
 # =============================================================================
 # FIGURE APPEARANCE
@@ -172,8 +160,12 @@ SHOW_BAND_IN_LEGEND = False
 
 
 # =============================================================================
-# DATASET CONVENTIONS
+# DATASET CONVENTIONS (fixed; must match the input files)
 # =============================================================================
+REFERENCE_FILE_YEARS = (1957, 2025)  # Year range encoded in the reference filename.
+MODEL_FILE_VARIABLE = "tp24"  # Variable name in the model sample filename.
+MODEL_SAMPLE_VARIABLE = "tp24_max"  # Complete-lead monthly maxima.
+MIN_SUCCESSFUL_BOOTSTRAP_FRACTION = 0.90
 AUGUST = 8
 ALL_MONTHS = range(1, 13)
 STORM_HANS_YEAR = 2023
@@ -228,23 +220,16 @@ def validate_settings():
         raise ValueError("BOOTSTRAP_METHOD must be 'nonparametric' or 'parametric'.")
     if OBSERVATION_YEARS[0] > OBSERVATION_YEARS[1]:
         raise ValueError("OBSERVATION_YEARS must be increasing.")
+    if not REFERENCE_FILE_YEARS[0] <= OBSERVATION_YEARS[0] <= OBSERVATION_YEARS[1] <= REFERENCE_FILE_YEARS[1]:
+        raise ValueError(
+            f"OBSERVATION_YEARS must lie within {REFERENCE_FILE_YEARS[0]}-{REFERENCE_FILE_YEARS[1]}."
+        )
     if NUMBER_OF_BOOTSTRAPS < 1:
         raise ValueError("NUMBER_OF_BOOTSTRAPS must be at least 1.")
     if not 0 < CONFIDENCE_LEVEL < 1:
         raise ValueError("CONFIDENCE_LEVEL must lie between 0 and 1.")
-    if not 0 < MIN_SUCCESSFUL_BOOTSTRAP_FRACTION <= 1:
-        raise ValueError("MIN_SUCCESSFUL_BOOTSTRAP_FRACTION must lie in (0, 1].")
     if not isinstance(INCLUDE_STORM_HANS_IN_FIT, bool):
         raise TypeError("INCLUDE_STORM_HANS_IN_FIT must be True or False.")
-    first_usable_lead = FIRST_INPUT_LEAD + X_DAYS - 1
-    number_of_usable_leads = LAST_INPUT_LEAD - first_usable_lead + 1
-    if first_usable_lead > LAST_INPUT_LEAD:
-        raise ValueError("X_DAYS is too large for the configured lead range.")
-    if not 1 <= NUMBER_OF_LEAD_BINS <= number_of_usable_leads:
-        raise ValueError("NUMBER_OF_LEAD_BINS is invalid for the usable lead range.")
-    valid_groups = {"full", *(f"split{i}" for i in range(1, NUMBER_OF_LEAD_BINS + 1))}
-    if MODEL_SAMPLING_GROUP not in valid_groups:
-        raise ValueError(f"MODEL_SAMPLING_GROUP must be one of {sorted(valid_groups)}.")
 
 
 def get_reference_name():
@@ -282,46 +267,12 @@ def horizon_years():
     return np.arange(1, AEP_YEARS_MAX + 1)
 
 # =============================================================================
-# Lead selection and input filenames
+# Input filenames
 # =============================================================================
-
-
-def split_usable_leads(first_lead, last_lead, number_of_bins):
-    """Split an inclusive lead range into near-equal consecutive bins."""
-    number_of_leads = last_lead - first_lead + 1
-    base_size, remainder = divmod(number_of_leads, number_of_bins)
-    bin_sizes = [
-        base_size + int(index >= number_of_bins - remainder)
-        for index in range(number_of_bins)
-    ]
-    bins = []
-    current_start = first_lead
-    for bin_size in bin_sizes:
-        current_end = current_start + bin_size - 1
-        bins.append((current_start, current_end))
-        current_start = current_end + 1
-    return bins
-
-
-def build_lead_bins():
-    """Return configured accumulated ending-lead bins."""
-    first_usable_lead = FIRST_INPUT_LEAD + X_DAYS - 1
-    return split_usable_leads(first_usable_lead, LAST_INPUT_LEAD, NUMBER_OF_LEAD_BINS)
-
-
-def get_model_variable():
-    """Return the compact model precipitation variable to read."""
-    if MODEL_SAMPLING_GROUP == "full":
-        return "tp24_max"
-    index = int(MODEL_SAMPLING_GROUP.removeprefix("split")) - 1
-    lead_start, lead_end = build_lead_bins()[index]
-    return f"tp24_max_lead{lead_start}_{lead_end}"
 
 
 def make_reference_filename():
     """Construct the selected reference input filename."""
-    if REFERENCE_FILENAME_OVERRIDE is not None:
-        return Path(REFERENCE_FILENAME_OVERRIDE)
     first_year, last_year = REFERENCE_FILE_YEARS
     variable = get_reference_variable()
     filename = (
@@ -334,11 +285,9 @@ def make_reference_filename():
 
 def make_model_filename():
     """Construct the compact model input filename."""
-    if MODEL_FILENAME_OVERRIDE is not None:
-        return Path(MODEL_FILENAME_OVERRIDE)
     catchment_id = CATCHMENT.removeprefix("regine_")
     stem = (
-        f"monthly_max_samples_{MODEL_VARIABLE}_{X_DAYS}dayacc_{catchment_id}_"
+        f"monthly_max_samples_{MODEL_FILE_VARIABLE}_{X_DAYS}dayacc_{catchment_id}_"
         f"{FORECAST_DATE_RANGE[0]}_{FORECAST_DATE_RANGE[1]}"
     )
     correction = (
@@ -400,7 +349,7 @@ def read_reference_month(month):
 def read_model_month(month):
     """Read one calendar-month model sample from sample_month(YYYYMM)."""
     filename = make_model_filename()
-    variable = get_model_variable()
+    variable = MODEL_SAMPLE_VARIABLE
     if not filename.is_file():
         raise FileNotFoundError(f"Model file not found: {filename}")
     with xr.open_dataset(filename, decode_timedelta=False) as ds:
@@ -421,15 +370,6 @@ def read_model_month(month):
         raise ValueError(f"Fewer than 10 finite model values were found for month {month}.")
     return values
 
-
-def subsample_model_values(values, reference_size, random_seed):
-    """Optionally subsample model values to the reference sample size."""
-    if not SUBSAMPLE_MODEL_TO_REFERENCE_LENGTH:
-        return values
-    if values.size < reference_size:
-        raise ValueError("The model sample is smaller than the reference sample.")
-    rng = np.random.default_rng(random_seed)
-    return values[rng.choice(values.size, size=reference_size, replace=False)]
 
 # =============================================================================
 # Distribution fitting and bootstrap uncertainty
@@ -592,10 +532,7 @@ def build_all_month_analysis(progress=None):
         samples = {}
         if INCLUDE_REFERENCE:
             samples["reference"] = reference_months[month]["fit_values"]
-        samples["model"] = subsample_model_values(
-            read_model_month(month), reference_months[month]["fit_values"].size,
-            RANDOM_SEED + 100 * month_index,
-        )
+        samples["model"] = read_model_month(month)
         for group, values in samples.items():
             seed = (RANDOM_SEED + 10000 * month_index
                     + 1000 * SEED_GROUP_INDEX[group] + method_index)
