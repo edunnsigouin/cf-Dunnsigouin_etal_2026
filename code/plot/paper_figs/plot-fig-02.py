@@ -8,6 +8,8 @@
 (d) Forecast and hindcast sample counts for each individual month over time.
 
 Configure inputs, figure output, and appearance in the blocks below.
+Set figure_format to "png" or "pdf". PDFs embed fonts as TrueType so text stays
+editable; all panels are small enough to remain vector graphics.
 """
 from pathlib import Path
 import cartopy.crs as ccrs
@@ -45,10 +47,11 @@ plot_end_month = None  # Integer YYYYMM, e.g. 202212.
 # =============================================================================
 # FIGURE OUTPUT — change the output directory or filename here
 # =============================================================================
-write2file = False  # Set True to save the figure.
+write2file = True  # Set True to save the figure.
 show_figure = True
+figure_format = "pdf"  # "png" or "pdf".
 output_directory = Path(config.dirs["fig"])
-output_filename = f"fig-02.png"
+output_filename = f"fig-02.{figure_format}"
 filename_out = output_directory / output_filename
 
 # =============================================================================
@@ -56,7 +59,7 @@ filename_out = output_directory / output_filename
 # =============================================================================
 figure_width = 12
 figure_height = 10
-figure_dpi = 300
+figure_dpi = 300  # Resolution of PNG output; not used for vector parts of a PDF.
 figure_wspace = 0.15
 figure_hspace = 0.35
 
@@ -194,6 +197,8 @@ def validate_user_settings():
         raise ValueError("x_label_interval must be at least 1.")
     if map_vmin >= map_vmax:
         raise ValueError("map_vmin must be smaller than map_vmax.")
+    if figure_format not in {"png", "pdf"}:
+        raise ValueError("figure_format must be 'png' or 'pdf'.")
     if input_data_type not in {"raw", "bias_corrected"}:
         raise ValueError("input_data_type must be 'raw' or 'bias_corrected'.")
     if input_data_type == "bias_corrected":
@@ -730,7 +735,9 @@ def main():
 
     if write2file:
         filename_out.parent.mkdir(parents=True, exist_ok=True)
-        figure.savefig(filename_out, dpi=figure_dpi, bbox_inches="tight", facecolor="white")
+        with plt.rc_context({"pdf.fonttype": 42, "ps.fonttype": 42}):
+            figure.savefig(filename_out, format=figure_format, dpi=figure_dpi,
+                           bbox_inches="tight", facecolor="white")
         print("Wrote:", filename_out)
 
     if show_figure:

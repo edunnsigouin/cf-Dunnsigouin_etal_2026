@@ -95,22 +95,22 @@ y_axis_margin_fraction = 0.08
 # Raw and bias-corrected bootstrap distributions in panels (b)-(e).
 # Semi-transparent filled histograms make their overlap visually apparent,
 # similar in spirit to Kelder et al. (2020), Fig. 4.
-RAW_MODEL_COLOR = "0.45"
-BIAS_CORRECTED_COLOR = "goldenrod"
+RAW_MODEL_COLOR = "tab:blue"
+BIAS_CORRECTED_COLOR = "tab:grey"
 BOOTSTRAP_ALPHA = 0.45
-MODEL_COLOR = "black"
+MODEL_COLOR = "tab:blue"
 ERA5_COLOR = "tab:blue"
-SENORGE_COLOR = "tab:red"
+SENORGE_COLOR = "tab:orange"
 EARLY_COLOR = "tab:green"
 LATE_COLOR = "tab:purple"
 HISTOGRAM_LINEWIDTH = 2
 REFERENCE_LINEWIDTH = 2
 CONFIDENCE_LINEWIDTH = 2
-TITLE_FONTSIZE = 10
+TITLE_FONTSIZE = 11
 SUPTITLE_FONTSIZE = 12
-AXIS_LABELSIZE = 10
-TICK_LABELSIZE = 10
-LEGEND_FONTSIZE = 10
+AXIS_LABELSIZE = 11
+TICK_LABELSIZE = 11
+LEGEND_FONTSIZE = 11
 
 # =============================================================================
 # Dataset configuration
@@ -1047,7 +1047,7 @@ def make_shared_legend_handles(reference_label: str) -> list:
             facecolor=RAW_MODEL_COLOR,
             edgecolor=RAW_MODEL_COLOR,
             alpha=BOOTSTRAP_ALPHA,
-            label="Raw",
+            label="Model raw",
         ),
         Line2D(
             [0],
@@ -1055,7 +1055,7 @@ def make_shared_legend_handles(reference_label: str) -> list:
             color=RAW_MODEL_COLOR,
             linewidth=CONFIDENCE_LINEWIDTH,
             linestyle="--",
-            label=f"Raw {confidence_level_percent:g}% interval",
+            label=f"Model raw {confidence_level_percent:g}% interval",
         ),
     ]
     if BIAS_CORRECTION_METHOD != "raw":
@@ -1065,7 +1065,7 @@ def make_shared_legend_handles(reference_label: str) -> list:
                     facecolor=BIAS_CORRECTED_COLOR,
                     edgecolor=BIAS_CORRECTED_COLOR,
                     alpha=BOOTSTRAP_ALPHA,
-                    label="Bias-corrected",
+                    label="Model bias-corrected",
                 ),
                 Line2D(
                     [0],
@@ -1074,7 +1074,7 @@ def make_shared_legend_handles(reference_label: str) -> list:
                     linewidth=CONFIDENCE_LINEWIDTH,
                     linestyle="--",
                     label=(
-                        "Bias-corrected "
+                        "Model bias-corrected "
                         f"{confidence_level_percent:g}% interval"
                     ),
                 ),
@@ -1185,7 +1185,7 @@ def plot_distribution_fidelity_panel(
         0.97,
         0.95,
         (
-            f"Raw: p-value = {format_ks_p_value(raw_ks['p_value'])}"
+            f"Model raw: p = {format_ks_p_value(raw_ks['p_value'])}"
         ),
         transform=ax.transAxes,
         ha="right",
@@ -1198,7 +1198,7 @@ def plot_distribution_fidelity_panel(
             0.97,
             0.87,
             (
-                f"Bias-corrected: p-value = {format_ks_p_value(bc_ks['p_value'])}"
+                f"Model bc: p = {format_ks_p_value(bc_ks['p_value'])}"
             ),
             transform=ax.transAxes,
             ha="right",
