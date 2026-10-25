@@ -1,16 +1,44 @@
 """
-Plot monthly S2S precipitation-extreme distributions together with monthly
-reference records calculated over ``observation_years`` and the August 2023
-Storm Hans value from one fixed 1957–2025 reference dataset (ERA5 or SeNorge).
-The same reference dataset is used for model bias correction.
+Plot monthly S2S precipitation-extreme distributions together with one
+reference record per calendar month (ERA5 or seNorge) and the August 2023
+Storm Hans value. The same reference dataset is used for model bias correction.
+
+Records
+-------
+Each calendar month shows exactly one record, calculated over
+``observation_years`` from one fixed 1957-2025 reference file:
+
+    - January-July and September-December: the monthly maximum over
+      observation_years, drawn as orange circles;
+    - August: Storm Hans (August 2023), drawn as a larger orange star with a
+      dark edge, because it is the August record.
+
+The script checks that Storm Hans is indeed the August record. If August 2023
+lies outside observation_years, or an earlier August exceeds Storm Hans, the
+pre-Hans August record is drawn as a circle as well and a warning is printed.
+
+Counterfactual
+--------------
+The green triangle is the COUNTERFACTUAL_RANK-th largest May value in the
+selected model sample (1 = largest), pooled over all initialisations and
+ensemble members. Equal values count as separate samples. Its origin
+(model type, initialisation, ensemble member, lead and date of the maximum) is
+printed so the forecast can be followed up as a storyline.
+
+Output
+------
+FIGURE_FORMAT = "png" or "pdf". PDFs embed fonts as TrueType so text stays
+editable; the figure is small and remains vector graphics.
 """
 import os
+import warnings
 import matplotlib.pyplot as plt
 import numpy as np
 import xarray as xr
 from matplotlib.lines import Line2D
 from matplotlib.patches import Patch
 from Dunnsigouin_etal_2026 import config
+
 # =============================================================================
 # USER INPUTS — data selection
 # =============================================================================
@@ -26,15 +54,22 @@ first_input_lead = 16
 last_input_lead = 46
 number_of_lead_bins = 2
 model_sampling_group = "full"  # "full", "split1", "split2", ...
+
+# Counterfactual Storm Hans: the Nth largest May model sample (1 = largest).
+COUNTERFACTUAL_MONTH = 5
+COUNTERFACTUAL_RANK = 2
+
 # =============================================================================
 # FIGURE OUTPUT — edit the directory or filename here
 # =============================================================================
 write2file = True  # Set True to save the figure.
 show_figure = True
+FIGURE_FORMAT = "pdf"  # "png" or "pdf".
 output_directory = config.dirs["fig"]
-output_filename = 'fig-04.png'
+output_filename = f"fig-04.{FIGURE_FORMAT}"
 filename_out = os.path.join(output_directory, output_filename)
-FIGURE_DPI = 300
+FIGURE_DPI = 300  # Resolution of PNG output.
+
 # =============================================================================
 # FIGURE APPEARANCE
 # =============================================================================
@@ -45,21 +80,36 @@ TICK_LABELSIZE = 11
 LEGEND_FONTSIZE = 9
 YMIN = 0
 YMAX = 135
-BOX_WIDTH = 0.58
-BOX_COLOR = "0.25"
-BOX_LINEWIDTH = 1.0
-REFERENCE_COLOR = "tab:red"
-COUNTERFACTUAL_COLOR = "tab:green"
-MODEL_LEGEND_LABEL = "Model sample distribution"
 
-# Outlier sizes are in points; event sizes are scatter areas in points squared.
+# Model box plots.
+MODEL_COLOR = "tab:blue"
+BOX_WIDTH = 0.58
+BOX_LINEWIDTH = 1.0
+MEDIAN_LINEWIDTH = 1.8
+MODEL_LEGEND_LABEL = "Model sample distribution"
+# Outlier sizes are in points.
 OUTLIER_MARKERSIZE = 4
 OUTLIER_EDGEWIDTH = 1.0
-OUTLIER_ALPHA = 0.7
+OUTLIER_ALPHA = 0.5
+
+# Reference records (seNorge orange, as in the other figures).
+REFERENCE_COLOR = "tab:orange"
+RECORD_MARKER = "o"
+RECORD_SIZE = 35  # Scatter area in points squared.
+RECORD_LEGEND_LABEL = "seNorge calendar-month record"
+
+# Storm Hans, the August record.
 STORM_HANS_MARKER = "^"
-STORM_HANS_SIZE = 45
+STORM_HANS_SIZE = 75  # Scatter area in points squared.
+STORM_HANS_EDGE_COLOR = "None"
+STORM_HANS_EDGE_WIDTH = 0.0
+STORM_HANS_LEGEND_LABEL = "seNorge storm Hans (august record)"
+
+# Counterfactual.
+COUNTERFACTUAL_COLOR = "tab:green"
 COUNTERFACTUAL_MARKER = "^"
-COUNTERFACTUAL_SIZE = 45
+COUNTERFACTUAL_SIZE = 75  # Scatter area in points squared.
+
 # =============================================================================
 # DATASET CONVENTIONS — these must match the existing input files
 # =============================================================================
@@ -69,17 +119,22 @@ STORM_HANS_YEAR = 2023
 STORM_HANS_MONTH = 8
 REFERENCE_SETTINGS = {
     "era5": {"variable": "tp24", "label": "ERA5", "directory": "era5_processed"},
-    "senorge": {"variable": "rr", "label": "SeNorge", "directory": "senorge_processed"},
+    "senorge": {"variable": "rr", "label": "seNorge", "directory": "senorge_processed"},
 }
 MONTHS = np.arange(1, 13)
 MONTH_LABELS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+MONTH_NAMES = [
+    "January", "February", "March", "April", "May", "June",
+    "July", "August", "September", "October", "November", "December",
+]
+
 # =============================================================================
-# Lead-time configuration
+# Validation
 # =============================================================================
 
 
 def validate_settings():
-    """Validate the user-selectable model and reference settings."""
+    """Validate the user-selectable model, reference and figure settings."""
     if x_days < 1:
         raise ValueError("x_days must be at least 1.")
     first_observation_year, last_observation_year = map(int, observation_years)
@@ -123,6 +178,16 @@ def validate_settings():
             f"REFERENCE_DATASET must be one of {sorted(REFERENCE_SETTINGS)}. "
             f"Got '{REFERENCE_DATASET}'."
         )
+    if COUNTERFACTUAL_MONTH not in MONTHS:
+        raise ValueError("COUNTERFACTUAL_MONTH must be an integer from 1 to 12.")
+    if not isinstance(COUNTERFACTUAL_RANK, (int, np.integer)) or COUNTERFACTUAL_RANK < 1:
+        raise ValueError("COUNTERFACTUAL_RANK must be a positive integer (1 = largest).")
+    if FIGURE_FORMAT not in {"png", "pdf"}:
+        raise ValueError("FIGURE_FORMAT must be 'png' or 'pdf'.")
+
+# =============================================================================
+# Lead-time configuration
+# =============================================================================
 
 
 def split_usable_accumulated_leads(first_lead, last_lead, number_of_bins):
@@ -167,6 +232,7 @@ def get_selected_model_variable():
         return "tp24_max"
     lead_start, lead_end = get_selected_model_lead_range()
     return f"tp24_max_lead{lead_start}_{lead_end}"
+
 # =============================================================================
 # Filenames
 # =============================================================================
@@ -204,6 +270,7 @@ def make_reference_filename():
         f"monthly_max_samples_{variable}_{x_days}dayacc_"
         f"{catchment}_{first_year}-{last_year}.nc",
     )
+
 # =============================================================================
 # Data extraction
 # =============================================================================
@@ -254,7 +321,7 @@ def get_monthly_records_excluding_hans(reference_ds, variable):
     if STORM_HANS_YEAR in selected["year"]:
         hans_mask = (selected['year'] == STORM_HANS_YEAR) & (selected['month'] == STORM_HANS_MONTH)
         selected = selected.where(~hans_mask)
-    return selected.max(dim="year", skipna=True)
+    return selected.max(dim="year", skipna=True).sel(month=MONTHS)
 
 
 def get_storm_hans_event(reference_ds, variable):
@@ -264,46 +331,144 @@ def get_storm_hans_event(reference_ds, variable):
     return STORM_HANS_MONTH, float(hans.values)
 
 
-def get_highest_may_model_event(model_ds, variable):
-    """Return the largest May value in the selected S2S model distribution."""
+def hans_is_august_record(records_without_hans, hans_value):
+    """
+    Return True if Storm Hans is the August record over observation_years.
+
+    Storm Hans must lie inside observation_years and be at least as large as
+    every other August in that period.
+    """
+    first_year, last_year = map(int, observation_years)
+    if not first_year <= STORM_HANS_YEAR <= last_year:
+        warnings.warn(
+            f"August {STORM_HANS_YEAR} lies outside observation_years "
+            f"{first_year}-{last_year}; the August record is drawn as well as Storm Hans."
+        )
+        return False
+    previous_record = float(records_without_hans.sel(month=STORM_HANS_MONTH).values)
+    if np.isfinite(previous_record) and previous_record > hans_value:
+        warnings.warn(
+            f"Storm Hans ({hans_value:.1f} mm) is not the August record: "
+            f"{previous_record:.1f} mm is larger. The August record is drawn as well."
+        )
+        return False
+    return True
+
+
+def ordinal(number):
+    """Return 1st, 2nd, 3rd, 4th, ... for a positive integer."""
+    if 10 <= number % 100 <= 20:
+        suffix = "th"
+    else:
+        suffix = {1: "st", 2: "nd", 3: "rd"}.get(number % 10, "th")
+    return f"{number}{suffix}"
+
+
+def counterfactual_description():
+    """Return a readable description of the counterfactual sample."""
+    month = MONTH_NAMES[COUNTERFACTUAL_MONTH - 1]
+    if COUNTERFACTUAL_RANK == 1:
+        return f"largest {month} model sample"
+    return f"{ordinal(COUNTERFACTUAL_RANK)} largest {month} model sample"
+
+
+def attribute_text(value):
+    """Return a value as plain text (decoding bytes from NetCDF strings)."""
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="ignore").strip()
+    return str(value).strip()
+
+
+def describe_sample_origin(model_ds, number_index, i_date_index):
+    """Return the provenance of one model sample as printable lines."""
+    lines = [
+        f"Initialisation (i_date): {np.datetime_as_string(model_ds['i_date'].values[i_date_index], unit='D')}",
+        f"Ensemble member:         {model_ds['number'].values[number_index]}",
+    ]
+    if "model_type" in model_ds:
+        model_type = attribute_text(model_ds["model_type"].values[i_date_index])
+        lines.insert(0, f"Model type:              {model_type}")
+        if model_type.lower() == "hindcast" and "hdate" in model_ds:
+            lines.append(f"Hindcast date (hdate):   {int(model_ds['hdate'].values[i_date_index])}")
+    if "sample_month" in model_ds:
+        lines.append(f"Sample month (YYYYMM):   {int(model_ds['sample_month'].values[i_date_index])}")
+    for name, label in [("lead_of_max", "Lead day of maximum:"), ("date_of_max", "Date of maximum:")]:
+        if name in model_ds:
+            value = model_ds[name].isel(number=number_index, i_date=i_date_index).values
+            if name == "lead_of_max":
+                text = f"{float(value):.0f}" if np.isfinite(value) else "n/a"
+            else:
+                text = np.datetime_as_string(value, unit="D") if not np.isnat(value) else "n/a"
+            lines.append(f"{label:<25}{text}")
+    return lines
+
+
+def get_ranked_counterfactual_event(model_ds, variable):
+    """
+    Return the COUNTERFACTUAL_RANK-th largest model value in COUNTERFACTUAL_MONTH.
+
+    Values are pooled over all initialisations and ensemble members of the
+    selected sampling group; equal values count as separate samples.
+    """
     validate_compact_model_structure(model_ds, variable)
-    calendar_month = model_ds["sample_month"] % 100
-    may_values = model_ds[variable].where(calendar_month == 5, drop=True).values.ravel()
-    finite_values = may_values[np.isfinite(may_values)]
-    if finite_values.size == 0:
-        raise ValueError(f"No finite May values were found in '{variable}'.")
-    return 5, float(finite_values.max())
+    data = model_ds[variable].transpose("number", "i_date")
+    calendar_month = (model_ds["sample_month"] % 100).values
+    values = np.asarray(data.values, dtype=float)
+    in_month = np.broadcast_to(calendar_month == COUNTERFACTUAL_MONTH, values.shape)
+    valid = in_month & np.isfinite(values)
+    number_indices, i_date_indices = np.nonzero(valid)
+    month_values = values[valid]
+    month_name = MONTH_NAMES[COUNTERFACTUAL_MONTH - 1]
+    if month_values.size == 0:
+        raise ValueError(f"No finite {month_name} values were found in '{variable}'.")
+    if COUNTERFACTUAL_RANK > month_values.size:
+        raise ValueError(
+            f"COUNTERFACTUAL_RANK={COUNTERFACTUAL_RANK} exceeds the number of "
+            f"{month_name} model samples ({month_values.size})."
+        )
+    order = np.argsort(-month_values, kind="stable")
+    selected = order[COUNTERFACTUAL_RANK - 1]
+    return {
+        "month": COUNTERFACTUAL_MONTH,
+        "value": float(month_values[selected]),
+        "number_of_samples": int(month_values.size),
+        "origin": describe_sample_origin(
+            model_ds, number_indices[selected], i_date_indices[selected]
+        ),
+    }
+
 # =============================================================================
 # Plotting
 # =============================================================================
 
-
-def make_legend_handles():
-    """Create legend handles for the plotted data."""
-    reference_label = REFERENCE_SETTINGS[REFERENCE_DATASET]["label"]
+def make_legend_handles(show_august_record_circle):
+    """Create legend handles: seNorge records, Storm Hans, model, counterfactual."""
     return [
         Line2D(
-            [0], [0], marker="o", linestyle="none",
+            [0], [0], marker=RECORD_MARKER, linestyle="none",
             markerfacecolor=REFERENCE_COLOR, markeredgecolor=REFERENCE_COLOR,
-            markersize=6,
-            label=('Calendar-month record'),
+            markersize=np.sqrt(RECORD_SIZE), label=RECORD_LEGEND_LABEL,
         ),
         Line2D(
             [0], [0], marker=STORM_HANS_MARKER, linestyle="none",
-            markerfacecolor=REFERENCE_COLOR, markeredgecolor=REFERENCE_COLOR,
-            markersize=np.sqrt(STORM_HANS_SIZE), label="Storm Hans",
+            markerfacecolor=REFERENCE_COLOR, markeredgecolor=STORM_HANS_EDGE_COLOR,
+            markeredgewidth=STORM_HANS_EDGE_WIDTH, markersize=np.sqrt(STORM_HANS_SIZE),
+            label=STORM_HANS_LEGEND_LABEL if not show_august_record_circle else "Storm Hans",
         ),
         Patch(
-            facecolor="none", edgecolor=BOX_COLOR, linewidth=BOX_LINEWIDTH,
+            facecolor="none", edgecolor=MODEL_COLOR, linewidth=BOX_LINEWIDTH,
             label=MODEL_LEGEND_LABEL,
         ),
         Line2D(
             [0], [0], marker=COUNTERFACTUAL_MARKER, linestyle="none",
             markerfacecolor=COUNTERFACTUAL_COLOR,
-            markeredgecolor=COUNTERFACTUAL_COLOR,
-            markersize=np.sqrt(COUNTERFACTUAL_SIZE), label="Counterfactual Storm Hans",
+            markeredgecolor=STORM_HANS_EDGE_COLOR,  # Use COUNTERFACTUAL_COLOR if the plotted marker has no black edge.
+            markeredgewidth=STORM_HANS_EDGE_WIDTH,
+            markersize=np.sqrt(COUNTERFACTUAL_SIZE),
+            label=f"Model counterfactual storm Hans",
         ),
     ]
+
 
 
 def apply_axis_formatting(ax):
@@ -320,15 +485,13 @@ def apply_axis_formatting(ax):
 
 
 def plot_monthly_extreme_distributions(
-    model_values_by_month, reference_ds, model_ds, model_variable, filename_out
+    model_values_by_month, records_without_hans, hans_value, counterfactual, filename_out
 ):
     """Create the monthly precipitation extreme-distribution figure."""
-    reference_variable = REFERENCE_SETTINGS[REFERENCE_DATASET]["variable"]
-    reference_records = get_monthly_records_excluding_hans(reference_ds, reference_variable)
-    hans_month, hans_value = get_storm_hans_event(reference_ds, reference_variable)
-    counterfactual_month, counterfactual_value = get_highest_may_model_event(
-        model_ds, model_variable
-    )
+    show_august_record_circle = not hans_is_august_record(records_without_hans, hans_value)
+    record_months = MONTHS if show_august_record_circle else MONTHS[MONTHS != STORM_HANS_MONTH]
+    record_values = records_without_hans.sel(month=record_months).values
+
     fig, ax = plt.subplots(figsize=(FIG_WIDTH_IN, FIG_HEIGHT_IN))
     ax.boxplot(
         model_values_by_month,
@@ -337,35 +500,36 @@ def plot_monthly_extreme_distributions(
         patch_artist=False,
         showfliers=True,
         flierprops={
-            "marker": "o", "markerfacecolor": "none", "markeredgecolor": "0.6",
+            "marker": "o", "markerfacecolor": "none", "markeredgecolor": MODEL_COLOR,
             "markersize": OUTLIER_MARKERSIZE, "linestyle": "none",
             "markeredgewidth": OUTLIER_EDGEWIDTH, "alpha": OUTLIER_ALPHA,
         },
-        boxprops={"color": BOX_COLOR, "linewidth": BOX_LINEWIDTH},
-        whiskerprops={"color": BOX_COLOR, "linewidth": BOX_LINEWIDTH},
-        capprops={"color": BOX_COLOR, "linewidth": BOX_LINEWIDTH},
-        medianprops={"color": "black", "linewidth": 1.4},
+        boxprops={"color": MODEL_COLOR, "linewidth": BOX_LINEWIDTH},
+        whiskerprops={"color": MODEL_COLOR, "linewidth": BOX_LINEWIDTH},
+        capprops={"color": MODEL_COLOR, "linewidth": BOX_LINEWIDTH},
+        medianprops={"color": MODEL_COLOR, "linewidth": MEDIAN_LINEWIDTH},
     )
     ax.scatter(
-        MONTHS,
-        reference_records.values,
+        record_months,
+        record_values,
         color=REFERENCE_COLOR,
-        linewidths=1.5,
-        s=35,
+        marker=RECORD_MARKER,
+        s=RECORD_SIZE,
         zorder=4,
     )
     ax.scatter(
-        hans_month,
+        STORM_HANS_MONTH,
         hans_value,
-        color=REFERENCE_COLOR,
-        linewidths=1.5,
+        facecolor=REFERENCE_COLOR,
+        edgecolor=STORM_HANS_EDGE_COLOR,
+        linewidths=STORM_HANS_EDGE_WIDTH,
         marker=STORM_HANS_MARKER,
         s=STORM_HANS_SIZE,
         zorder=5,
     )
     ax.scatter(
-        counterfactual_month,
-        counterfactual_value,
+        counterfactual["month"],
+        counterfactual["value"],
         color=COUNTERFACTUAL_COLOR,
         linewidths=1.0,
         marker=COUNTERFACTUAL_MARKER,
@@ -374,7 +538,7 @@ def plot_monthly_extreme_distributions(
     )
     apply_axis_formatting(ax)
     ax.legend(
-        handles=make_legend_handles(),
+        handles=make_legend_handles(show_august_record_circle),
         loc="upper left",
         frameon=False,
         fontsize=LEGEND_FONTSIZE,
@@ -382,11 +546,39 @@ def plot_monthly_extreme_distributions(
     fig.tight_layout()
     if write2file:
         os.makedirs(output_directory, exist_ok=True)
-        fig.savefig(filename_out, dpi=FIGURE_DPI, bbox_inches="tight")
+        with plt.rc_context({"pdf.fonttype": 42, "ps.fonttype": 42}):
+            fig.savefig(filename_out, format=FIGURE_FORMAT, dpi=FIGURE_DPI,
+                        bbox_inches="tight", facecolor="white")
         print("Wrote:", filename_out)
     if show_figure:
         plt.show()
     plt.close(fig)
+
+# =============================================================================
+# Reporting
+# =============================================================================
+
+
+def print_events(records_without_hans, hans_value, counterfactual):
+    """Print the plotted records, Storm Hans and the counterfactual sample."""
+    reference_label = REFERENCE_SETTINGS[REFERENCE_DATASET]["label"]
+    print()
+    print(f"{reference_label} calendar-month records {observation_years[0]}-{observation_years[-1]}")
+    print("-" * 50)
+    for month in MONTHS:
+        value = float(records_without_hans.sel(month=month).values)
+        note = "  (pre-Hans August record)" if month == STORM_HANS_MONTH else ""
+        print(f"  {MONTH_LABELS[month - 1]}  {value:7.2f} mm{note}")
+    print(f"  Storm Hans (August {STORM_HANS_YEAR}): {hans_value:.2f} mm")
+    print()
+    print(f"Counterfactual: {counterfactual_description()}")
+    print("-" * 50)
+    print(f"  Value: {counterfactual['value']:.2f} mm "
+          f"(rank {COUNTERFACTUAL_RANK} of {counterfactual['number_of_samples']} samples; "
+          f"{counterfactual['value'] / hans_value:.0%} of Storm Hans)")
+    for line in counterfactual["origin"]:
+        print(f"  {line}")
+
 # =============================================================================
 # Main
 # =============================================================================
@@ -409,18 +601,27 @@ def main():
     print(f"Reference file:    {REFERENCE_FILE_YEARS[0]}-{REFERENCE_FILE_YEARS[1]}")
     print(f"Record years:      {observation_years[0]}-{observation_years[-1]}")
     print("Storm Hans:        August 2023")
+    print(f"Counterfactual:    {counterfactual_description()}")
     print()
     print("Figure output:", filename_out, "(saving enabled)" if write2file else "(saving disabled)")
     print("Reading model file:    ", filename_model)
     print("Reading reference file:", filename_reference)
+    reference_variable = REFERENCE_SETTINGS[REFERENCE_DATASET]["variable"]
     with (
         xr.open_dataset(filename_model, decode_timedelta=False) as model_ds,
         xr.open_dataset(filename_reference) as reference_ds,
     ):
         model_values_by_month = get_model_values_by_month(model_ds, model_variable)
-        plot_monthly_extreme_distributions(
-            model_values_by_month, reference_ds, model_ds, model_variable, filename_out
-        )
+        records_without_hans = get_monthly_records_excluding_hans(
+            reference_ds, reference_variable
+        ).load()
+        _, hans_value = get_storm_hans_event(reference_ds, reference_variable)
+        counterfactual = get_ranked_counterfactual_event(model_ds, model_variable)
+    print_events(records_without_hans, hans_value, counterfactual)
+    plot_monthly_extreme_distributions(
+        model_values_by_month, records_without_hans, hans_value, counterfactual, filename_out
+    )
+
 
 if __name__ == "__main__":
     main()
