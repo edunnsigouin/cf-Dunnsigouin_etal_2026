@@ -142,9 +142,9 @@ INTERVAL_CAP_WIDTH = 0.12
 CLIPPED_ARROW_LENGTH = 8  # Points; fixed visual length on logarithmic axes.
 CLIPPED_ARROW_HEAD_SIZE = 6
 FITTED_MARKER_SIZE = 3.5
-FONT_SIZE = 8
-TITLE_FONTSIZE = 8.5
-LEGEND_FONTSIZE = 8
+FONT_SIZE = 11
+TITLE_FONTSIZE = 11
+LEGEND_FONTSIZE = 10
 Y_TICK_DECADES = [0, 2, 4, 6, 8]  # Labelled powers of ten on the return-period axis.
 
 # =============================================================================
