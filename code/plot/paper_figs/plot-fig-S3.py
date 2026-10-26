@@ -85,6 +85,7 @@ SERIES_COLORS = {
     "raw": "tab:blue",
     "bias_corrected": "tab:grey",
 }
+LEGEND_LOCATION = "lower left"  # Position of the legend inside panel a) (January).
 
 # =============================================================================
 # FIGURE OUTPUT — edit the directory or filename here
@@ -188,7 +189,7 @@ def series_label(series):
     return {
         "reference": get_reference_name(),
         "raw": "Model raw",
-        "bias_corrected": f"Model bias corrected)",
+        "bias_corrected": "Model bias corrected",
     }[series]
 
 
@@ -654,16 +655,19 @@ def make_figure(panels):
             show_x_labels=row == N_ROWS - 1, show_y_labels=column == 0,
         )
     figure.supylabel("Return period [years]", fontsize=FONT_SIZE + 1)
+    figure.supxlabel("Estimation method", fontsize=FONT_SIZE + 1)
     handles = [
         Line2D([0], [0], linestyle="-", color=SERIES_COLORS[series], marker="o",
                markeredgewidth=0, linewidth=INTERVAL_LINEWIDTH,
                markersize=FITTED_MARKER_SIZE + 0.5, label=series_label(series))
         for series in SERIES
     ]
-    figure.legend(
-        handles=handles, loc="outside upper center", ncol=len(SERIES),
-        frameon=False, fontsize=LEGEND_FONTSIZE, handlelength=1.6, columnspacing=1.6,
+    legend = axes[0, 0].legend(
+        handles=handles, loc=LEGEND_LOCATION, frameon=True, framealpha=0.9,
+        edgecolor="none", fontsize=LEGEND_FONTSIZE, handlelength=1.6,
+        borderaxespad=0.3, borderpad=0.3, labelspacing=0.3,
     )
+    legend.set_zorder(10)
     if WRITE_TO_FILE:
         OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
         figure.savefig(OUTPUT_PATH, format=FIGURE_FORMAT, dpi=FIGURE_DPI,
