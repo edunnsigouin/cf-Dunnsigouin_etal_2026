@@ -197,7 +197,7 @@ SAVE_FIGURE = True
 SHOW_FIGURE = True
 FIGURE_NAME = f"fig-08"  # File name without extension
 OUTPUT_DIR = Path(config.dirs["fig"])
-OUTPUT_FORMATS = ["png"]
+OUTPUT_FORMATS = ["pdf"]
 DPI = 300
 
 # =============================================================================

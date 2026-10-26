@@ -3,7 +3,7 @@
 The upper panel uses raw data; the lower optionally corrects only failed months.
 Columns are calendar months; rows are mean, std, kurtosis, and skewness.
 Numbers are reference-statistic percentiles in model bootstrap distributions.
-Blue cells pass the central bootstrap interval test; orange cells fail.
+Blue cells pass the central bootstrap interval test; red cells fail.
 Bootstrap samples are drawn with replacement and match the reference sample
 size. Ties receive half weight in the percentile calculation. Colours use the
 unrounded interval test, not the displayed percentile. Statistic definitions,
@@ -34,7 +34,6 @@ x_days = 2  # Precipitation accumulation length in days.
 catchment = "regine_drammen"
 forecast_date_range = ("2020-01-02", "2023-12-28")
 reference_years = ("1957", "2025")  # Reference period used in the fidelity tests.
-REFERENCE_FILE_YEARS = ("1957", "2025")  # Full period encoded in the reference filename.
 REFERENCE_DATASET = "senorge"  # "era5" or "senorge".
 EXCLUDE_STORM_HANS_FROM_REFERENCE = True  # Remove August 2023 from the reference sample.
 
@@ -42,11 +41,6 @@ BIAS_CORRECTION_METHOD = "mm_1step"  # "mm_1step", "mm_2step", "q", "doy", "ld",
 # True: correct all four tests for any month failing at least one raw test.
 # False: use corrected data for every month in panel (b).
 BIAS_CORRECT_ONLY_FAILED_MONTHS = False
-
-# Optional explicit input paths; None builds filenames from the settings above.
-raw_model_filename_override = None
-bias_corrected_model_filename_override = None
-reference_filename_override = None
 
 # =============================================================================
 # BOOTSTRAP SETTINGS
@@ -60,26 +54,24 @@ random_seed = 42  # Each calendar month uses random_seed + month.
 # =============================================================================
 write2file = True  # Set True to save the figure.
 show_figure = True
+FIGURE_FORMAT = "pdf"  # "png" or "pdf".
+figure_dpi = 400  # Resolution of PNG output.
 output_directory = Path(config.dirs["fig"])
-output_filename = "fig-S1.png"  # Also supports .pdf and .svg.
-output_filename_override = None  # Optional full path; takes precedence over the two above.
-output_path = (
-    Path(output_filename_override) if output_filename_override
-    else output_directory / output_filename
-)
-figure_dpi = 400
+output_filename = f"fig-S1.{FIGURE_FORMAT}"
+output_path = output_directory / output_filename
 
 # =============================================================================
 # FIGURE APPEARANCE
 # =============================================================================
 figure_size = (10.0, 6.4)  # Width and height in inches.
 annotation_decimals = 1  # Display precision only; does not affect pass/fail decisions.
-PASS_COLOR = "#0072B2"  # Okabe-Ito blue.
-FAIL_COLOR = "#E69F00"  # Okabe-Ito orange.
+PASS_COLOR = "tab:blue"  # Model colour in the other figures.
+FAIL_COLOR = "tab:red"  # Not orange, which marks seNorge in the other figures.
 
 # =============================================================================
-# DATASET AND TEST CONVENTIONS
+# DATASET AND TEST CONVENTIONS (fixed; must match the input files)
 # =============================================================================
+REFERENCE_FILE_YEARS = (1957, 2025)  # Full period encoded in the reference filename.
 MODEL_MONTH_COORDINATE = "sample_month"
 STATISTICS = ("mean", "std", "kurtosis", "skewness")
 TEST_LABELS = ("Mean", "Standard deviation", "Kurtosis", "Skewness")
@@ -92,12 +84,6 @@ MONTHS = np.arange(1, 13)
 
 def build_model_filename(method: str) -> Path:
     """Use script 1's compact raw and bias-corrected filename convention."""
-    override = (
-        raw_model_filename_override if method == "raw"
-        else bias_corrected_model_filename_override
-    )
-    if override is not None:
-        return Path(override)
     stem = (
         f"monthly_max_samples_tp24_{x_days}dayacc_{catchment.removeprefix('regine_')}_"
         f"{forecast_date_range[0]}_{forecast_date_range[1]}"
@@ -110,14 +96,12 @@ def build_model_filename(method: str) -> Path:
 
 def get_reference_file() -> tuple[Path, str, str]:
     """Resolve the compact reference filename, variable, and display label."""
-    variable, label = ("tp24", "ERA5") if REFERENCE_DATASET == "era5" else ("rr", "SeNorge")
-    filename = reference_filename_override
-    if filename is None:
-        filename = Path(config.dirs[f"{REFERENCE_DATASET}_processed"]) / (
-            f"monthly_max_samples_{variable}_{x_days}dayacc_{catchment}_"
-            f"{REFERENCE_FILE_YEARS[0]}-{REFERENCE_FILE_YEARS[1]}.nc"
-        )
-    return Path(filename), variable, label
+    variable, label = ("tp24", "ERA5") if REFERENCE_DATASET == "era5" else ("rr", "seNorge")
+    filename = Path(config.dirs[f"{REFERENCE_DATASET}_processed"]) / (
+        f"monthly_max_samples_{variable}_{x_days}dayacc_{catchment}_"
+        f"{REFERENCE_FILE_YEARS[0]}-{REFERENCE_FILE_YEARS[1]}.nc"
+    )
+    return filename, variable, label
 
 
 def validate_settings() -> None:
@@ -133,9 +117,11 @@ def validate_settings() -> None:
         raise ValueError("confidence_level_percent must be between 0 and 100.")
     if not 0 <= annotation_decimals <= 4:
         raise ValueError("annotation_decimals must be between 0 and 4.")
+    if FIGURE_FORMAT not in {"png", "pdf"}:
+        raise ValueError("FIGURE_FORMAT must be 'png' or 'pdf'.")
 
     first_year, last_year = map(int, reference_years)
-    file_start, file_end = map(int, REFERENCE_FILE_YEARS)
+    file_start, file_end = REFERENCE_FILE_YEARS
     if not file_start <= first_year <= last_year <= file_end:
         raise ValueError("reference_years must be increasing and within REFERENCE_FILE_YEARS.")
 
@@ -283,7 +269,7 @@ def plot_fidelity_heatmap(axis, results: pd.DataFrame, title: str) -> None:
         axis.text(
             column, row, f"{percentile:.{annotation_decimals}f}",
             ha="center", va="center", fontsize=10,
-            color="white" if passes[row, column] else "#1A1A1A",
+            color="white",
         )
 
     axis.set_xticks(np.arange(12), [month_abbr[month] for month in MONTHS])
@@ -321,7 +307,8 @@ def make_figure(raw_results: pd.DataFrame, corrected_results: pd.DataFrame, file
 
         if filename is not None:
             filename.parent.mkdir(parents=True, exist_ok=True)
-            figure.savefig(filename, dpi=figure_dpi, bbox_inches="tight", facecolor="white")
+            figure.savefig(filename, format=FIGURE_FORMAT, dpi=figure_dpi,
+                           bbox_inches="tight", facecolor="white")
             print("Wrote:", filename)
 
         if show_figure:
