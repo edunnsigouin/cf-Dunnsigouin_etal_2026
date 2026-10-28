@@ -142,9 +142,9 @@ INTERVAL_CAP_WIDTH = 0.12
 CLIPPED_ARROW_LENGTH = 8  # Points; fixed visual length on logarithmic axes.
 CLIPPED_ARROW_HEAD_SIZE = 6
 FITTED_MARKER_SIZE = 3.5
-FONT_SIZE = 11
-TITLE_FONTSIZE = 11
-LEGEND_FONTSIZE = 10
+FONT_SIZE = 9
+TITLE_FONTSIZE = 9.5
+LEGEND_FONTSIZE = 9
 Y_TICK_DECADES = [0, 2, 4, 6, 8]  # Labelled powers of ten on the return-period axis.
 
 # =============================================================================
@@ -682,7 +682,7 @@ def make_figure(panels):
         for series in SERIES
     ]
     legend = axes[0, 0].legend(
-        handles=handles, loc=LEGEND_LOCATION, frameon=True, framealpha=0.9,
+        handles=handles, loc=LEGEND_LOCATION, frameon=False, framealpha=0.9,
         edgecolor="none", fontsize=LEGEND_FONTSIZE, handlelength=1.6,
         borderaxespad=0.3, borderpad=0.3, labelspacing=0.3,
     )

@@ -26,18 +26,8 @@ Storm Hans threshold as a dot and the central CONFIDENCE_LEVEL bootstrap interva
 as a capped vertical line, with the reference on the left and the model on the
 right of each tick. Infinite bootstrap return periods are retained in the
 percentiles. Intervals beyond the plotting limits end in outward arrows;
-off-scale fitted values are drawn as triangles at the limit.
-
-Empirical estimate (panels c-d)
--------------------------------
-Panels (c)-(d) also show an "Empirical" estimate for the reference (left) and
-model (right) as solid dots without uncertainty. If k of the n sample values are
-at least as large as the Storm Hans threshold, the return period is (n + 1) / k
-years, the Weibull plotting position of the k-th largest value, matching the
-empirical points in panels (a)-(b) (e.g. 70 years for one seNorge event in
-1957-2025, n = 69). If k = 0 the dot is placed at (n + 1) years, the plotting
-position of the sample maximum, which is then a lower bound; the printed
-summary flags this case.
+off-scale fitted values are drawn as triangles at the limit. The empirical
+return period of the threshold can be read from the Weibull points in (a)-(b).
 
 Output
 ------
@@ -115,7 +105,6 @@ MONTH_NAMES = [
     "July", "August", "September", "October", "November", "December",
 ]
 METHODS = ["GEV", "Gumbel", "GenEx"]
-EMPIRICAL_LABEL = "Empirical"
 
 # =============================================================================
 # Plot constants
@@ -129,17 +118,17 @@ STORM_HANS_LINESTYLE = "--"
 CONFIDENCE_ALPHA = 0.15
 CURVE_LINEWIDTH = 2.0
 REFERENCE_LINEWIDTH = 1.5
-MARKER_SIZE = 30
-MARKER_LINEWIDTH = 0.8
+MARKER_SIZE = 40
+MARKER_LINEWIDTH = 1.0
 INTERVAL_LINEWIDTH = 1.4
 INTERVAL_CAP_WIDTH = 0.10
 CLIPPED_ARROW_LENGTH = 14  # Points; fixed visual length on logarithmic axes.
-CLIPPED_ARROW_HEAD_SIZE = 10
-FITTED_MARKER_SIZE = 6
-AXIS_LABELSIZE = 11
-TICK_LABELSIZE = 11
+CLIPPED_ARROW_HEAD_SIZE = 15
+FITTED_MARKER_SIZE = 7
+AXIS_LABELSIZE = 12
+TICK_LABELSIZE = 12
 TITLE_FONTSIZE = 12
-LEGEND_FONTSIZE = 10
+LEGEND_FONTSIZE = 11
 
 # =============================================================================
 # Validation, labels, and filenames
@@ -532,25 +521,6 @@ def analyse_event_return_period(fit, event_value, method):
     }
 
 
-def empirical_event_metric(values, event_value):
-    """
-    Return the empirical estimate for one threshold, using Weibull plotting positions.
-
-    k of the n sample values are at least as large as the threshold. As in
-    empirical_return_periods, the k-th largest value has return period
-    (n + 1) / k. With k = 0 the estimate is set to the plotting position of the
-    sample maximum, (n + 1) years, a lower bound.
-    """
-    values = np.asarray(values, dtype=float)
-    sample_size = values.size
-    exceedances = int(np.count_nonzero(values >= event_value))
-    return {
-        "return_period": (sample_size + 1) / max(exceedances, 1),
-        "exceedances": exceedances,
-        "sample_size": sample_size,
-    }
-
-
 def calculate_metric_panel(month_analysis, month):
     """Calculate one lower-row Storm Hans panel from shared bootstrap fits."""
     event_value = month_analysis["reference"]["storm_hans_value"]
@@ -562,11 +532,7 @@ def calculate_metric_panel(month_analysis, month):
                 event_value,
                 method,
             )
-    empirical = {
-        group: empirical_event_metric(month_analysis["samples"][group], event_value)
-        for group in ["reference", "model"]
-    }
-    return {"month": month, "event_value": event_value, "results": results, "empirical": empirical}
+    return {"month": month, "event_value": event_value, "results": results}
 
 # =============================================================================
 # Plot formatting
@@ -651,7 +617,7 @@ def plot_top_panel(axis, panel_label, month, result, return_periods, show_legend
     format_top_axis(axis)
     axis.set_title(
         f"{panel_label}) {MONTH_NAMES[month - 1]}: {TOP_DISTRIBUTION} fit",
-        loc="center",
+        loc="left",
         fontsize=TITLE_FONTSIZE,
         fontweight="normal",
     )
@@ -664,18 +630,17 @@ def plot_top_panel(axis, panel_label, month, result, return_periods, show_legend
             Line2D([0], [0], color=MODEL_COLOR, linewidth=CURVE_LINEWIDTH,
                    label=get_model_label()),
         ]
-        axis.legend(handles=handles, frameon=False, fontsize=LEGEND_FONTSIZE, loc="upper left")
+        axis.legend(handles=handles, frameon=False, fontsize=LEGEND_FONTSIZE, loc="lower right")
 
 
 def configure_metric_axis(axis):
     """Apply common formatting to a lower-row return-period panel."""
-    tick_labels = [*METHODS, EMPIRICAL_LABEL]
     axis.set_yscale("log")
     axis.set_ylim(RETURN_PERIOD_MIN, 1.15 * RETURN_PERIOD_MAX)
     axis.yaxis.set_major_formatter(FuncFormatter(format_metric_return_period))
-    axis.set_xlim(-0.5, len(tick_labels) - 0.5)
-    axis.set_xticks(range(len(tick_labels)))
-    axis.set_xticklabels(tick_labels)
+    axis.set_xlim(-0.5, len(METHODS) - 0.5)
+    axis.set_xticks(range(len(METHODS)))
+    axis.set_xticklabels(METHODS)
     axis.set_ylabel("Return period [years]", fontsize=AXIS_LABELSIZE)
     axis.set_xlabel("Estimation method", fontsize=AXIS_LABELSIZE)
     axis.tick_params(axis="both", labelsize=TICK_LABELSIZE)
@@ -750,19 +715,6 @@ def plot_metric_interval(axis, position, lower, upper, fitted, color):
         )
 
 
-def plot_empirical_estimates(axis, position, empirical):
-    """Plot reference and model empirical estimates as solid dots."""
-    for group, offset, color in [
-        ("reference", -DATASET_OFFSET, OBSERVATION_COLOR),
-        ("model", DATASET_OFFSET, MODEL_COLOR),
-    ]:
-        axis.plot(
-            position + offset, clip_metric(empirical[group]["return_period"]),
-            marker="o", linestyle="none", color=color,
-            markersize=FITTED_MARKER_SIZE, clip_on=False, zorder=5,
-        )
-
-
 def plot_metric_panel(axis, panel_label, panel_output):
     """Plot fitted dots and central bootstrap intervals for reference and model."""
     tail_percent = 100 * (1 - CONFIDENCE_LEVEL) / 2
@@ -778,12 +730,10 @@ def plot_metric_panel(axis, panel_label, panel_output):
             plot_metric_interval(
                 axis, method_index + offset, lower, upper, analysis["return_period"], color
             )
-
-    plot_empirical_estimates(axis, len(METHODS), panel_output["empirical"])
     configure_metric_axis(axis)
     axis.set_title(
         f"{panel_label}) {MONTH_NAMES[panel_output['month'] - 1]}: Storm Hans threshold",
-        loc="center",
+        loc="left",
         fontsize=TITLE_FONTSIZE,
         fontweight="normal",
     )
@@ -842,8 +792,8 @@ def print_uncertainty_comparison(metric_results):
     print("An infinite factor can also result from a zero model interval width.")
 
 
-def print_summary(top_results, metric_results):
-    """Print the key input, Storm Hans threshold, and empirical-estimate information."""
+def print_summary(top_results):
+    """Print the key input and Storm Hans threshold information."""
     print("Selected settings")
     print("-----------------")
     print(f"Reference dataset: {get_reference_name()}")
@@ -859,17 +809,6 @@ def print_summary(top_results, metric_results):
         print()
         print(f"{MONTH_NAMES[month - 1]} reference fit: {reference['fit_values'].size} values")
         print(f"Storm Hans threshold: {reference['storm_hans_value']:.3f} mm")
-        empirical = metric_results[month]["empirical"]
-        for group, label in [("reference", get_reference_name()), ("model", get_model_label())]:
-            k, n = empirical[group]["exceedances"], empirical[group]["sample_size"]
-            if k == 0:
-                estimate = (
-                    f"no exceedances; plotted at {n + 1} years "
-                    f"(lower bound: return period > {n + 1} years)"
-                )
-            else:
-                estimate = f"empirical return period {(n + 1) / k:.4g} years"
-            print(f"{label} empirical: {k} of {n} values >= Storm Hans; {estimate}")
 
 
 def make_figure(top_results, metric_results, return_periods):
@@ -927,7 +866,7 @@ def main():
     metric_results = {
         month: calculate_metric_panel(month_analyses[month], month) for month in PANEL_MONTHS
     }
-    print_summary(top_results, metric_results)
+    print_summary(top_results)
     print_uncertainty_comparison(metric_results)
     make_figure(top_results, metric_results, return_periods)
 
