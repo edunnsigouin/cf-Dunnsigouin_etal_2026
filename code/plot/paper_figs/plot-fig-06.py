@@ -135,9 +135,9 @@ MIN_AUTO_YLIM_PERCENT = 1e-4  # Floor for an automatic lower limit on a log axis
 # Size: 7.2 in is a typical two-column journal width (183 mm).
 FIGURE_WIDTH_IN = 11.5
 FIGURE_HEIGHT_IN = 5
-FONT_SIZE = 11
+FONT_SIZE = 12
 TITLE_FONT_SIZE = 12
-LEGEND_FONT_SIZE = 10
+LEGEND_FONT_SIZE = 11
 
 X_LABEL = "years"
 Y_LABEL = "Probability of at least one monthly exceedance\nwithin N years [%]"

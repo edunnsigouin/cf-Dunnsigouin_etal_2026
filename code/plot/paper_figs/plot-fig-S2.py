@@ -7,8 +7,7 @@ Layout
     a) August return period for the Storm Hans threshold
     b) May return period for the Storm Hans threshold
 
-Each panel has four ticks, GEV, Gumbel, GenEx and "Empirical", and at every tick
-six series, from left to right:
+Each panel has three ticks, GEV, Gumbel and GenEx, and at every tick six series, from left to right:
 
     reference (seNorge or ERA5)        fitted to OBSERVATION_YEARS
     model raw                          all raw model samples for the month, pooled
@@ -39,22 +38,13 @@ them, so every year carries equal weight in the uncertainty however many model
 realisations it has. Infinite bootstrap return periods are retained in the
 percentiles.
 Intervals beyond the plotting limits end in outward arrows; off-scale fitted
-values are drawn as triangles at the limit.
+values are drawn as triangles at the limit. The empirical return period of the
+threshold can be read from the Weibull points in fig-05 (a)-(b).
 
 Bootstrap seeds follow the companion scripts: the reference, raw and
 bias-corrected series reproduce fig-05 (run with the matching MODEL_DATA_METHOD),
 and the equal-year-weighted bootstrap replicates are drawn as in the equal-year
 bootstrap script. The raw-period series use their own seed groups.
-
-Empirical estimate
-------------------
-Solid dots without uncertainty, using the Weibull plotting position as in
-fig-05: if k of the n sample values are at least as large as the Storm Hans
-threshold, the return period is (n + 1) / k years. It is shown for the
-reference, raw, raw-period and bias-corrected series; the equal-year-weighted series only
-changes the uncertainty and has no empirical estimate. If no value reaches the
-threshold the dot is placed at (n + 1) years, a lower bound; the printed summary
-flags this case.
 
 Output
 ------
@@ -144,7 +134,6 @@ MONTH_NAMES = [
     "July", "August", "September", "October", "November", "December",
 ]
 METHODS = ["GEV", "Gumbel", "GenEx"]
-EMPIRICAL_LABEL = "Empirical"
 SERIES = ["reference", "raw", "raw_first_half", "raw_second_half",
           "bias_corrected", "raw_equal_year"]
 RAW_PERIOD_SERIES = ["raw_first_half", "raw_second_half"]
@@ -165,10 +154,10 @@ INTERVAL_CAP_WIDTH = 0.06
 CLIPPED_ARROW_LENGTH = 14  # Points; fixed visual length on logarithmic axes.
 CLIPPED_ARROW_HEAD_SIZE = 10
 FITTED_MARKER_SIZE = 6
-AXIS_LABELSIZE = 11
-TICK_LABELSIZE = 11
+AXIS_LABELSIZE = 12
+TICK_LABELSIZE = 12
 TITLE_FONTSIZE = 12
-LEGEND_FONTSIZE = 9
+LEGEND_FONTSIZE = 11
 
 # =============================================================================
 # Validation, labels, and filenames
@@ -577,26 +566,8 @@ def analyse_event_return_period(fit, event_value, method):
     }
 
 
-def weibull_empirical(sample_size, exceedances):
-    """Return the Weibull empirical return period (n + 1) / k, or (n + 1) if k = 0."""
-    if exceedances > 0:
-        return (sample_size + 1) / exceedances
-    return float(sample_size + 1)
-
-
-def empirical_event_metric(values, event_value):
-    """Return the Weibull empirical estimate for one pooled sample."""
-    values = np.asarray(values, dtype=float)
-    exceedances = int(np.count_nonzero(values >= event_value))
-    return {
-        "return_period": weibull_empirical(values.size, exceedances),
-        "exceedances": exceedances,
-        "sample_size": values.size,
-    }
-
-
 def calculate_panel(month_analysis):
-    """Calculate fitted, bootstrap and empirical results for one month."""
+    """Calculate fitted and bootstrap results for one month."""
     event_value = month_analysis["storm_hans_value"]
     results = {
         (series, method): analyse_event_return_period(
@@ -605,16 +576,10 @@ def calculate_panel(month_analysis):
         for series in SERIES
         for method in METHODS
     }
-    empirical = {
-        series: empirical_event_metric(month_analysis["samples"][series], event_value)
-        for series in SERIES
-        if series not in INTERVAL_ONLY_SERIES
-    }
     return {
         "month": month_analysis["month"],
         "event_value": event_value,
         "results": results,
-        "empirical": empirical,
     }
 
 # =============================================================================
@@ -637,13 +602,12 @@ def format_metric_return_period(value, _position):
 
 def configure_axis(axis):
     """Apply common formatting to one return-period panel."""
-    tick_labels = [*METHODS, EMPIRICAL_LABEL]
     axis.set_yscale("log")
     axis.set_ylim(RETURN_PERIOD_MIN, 1.15 * RETURN_PERIOD_MAX)
     axis.yaxis.set_major_formatter(FuncFormatter(format_metric_return_period))
-    axis.set_xlim(-0.5, len(tick_labels) - 0.5)
-    axis.set_xticks(range(len(tick_labels)))
-    axis.set_xticklabels(tick_labels)
+    axis.set_xlim(-0.5, len(METHODS) - 0.5)
+    axis.set_xticks(range(len(METHODS)))
+    axis.set_xticklabels(METHODS)
     axis.set_ylabel("Return period [years]", fontsize=AXIS_LABELSIZE)
     axis.set_xlabel("Estimation method", fontsize=AXIS_LABELSIZE)
     axis.tick_params(axis="both", labelsize=TICK_LABELSIZE)
@@ -725,7 +689,7 @@ def plot_metric_interval(axis, position, lower, upper, fitted, color):
 
 
 def plot_panel(axis, panel_label, panel_output):
-    """Plot fitted, bootstrap and empirical estimates of every series for one month."""
+    """Plot fitted and bootstrap estimates of every series for one month."""
     offsets = series_offsets()
     for method_index, method in enumerate(METHODS):
         for series in SERIES:
@@ -737,13 +701,6 @@ def plot_panel(axis, panel_label, panel_output):
                 axis, method_index + offsets[series], lower, upper,
                 fitted, SERIES_COLORS[series],
             )
-    for series in panel_output["empirical"]:
-        axis.plot(
-            len(METHODS) + offsets[series],
-            clip_metric(panel_output["empirical"][series]["return_period"]),
-            marker="o", linestyle="none", color=SERIES_COLORS[series],
-            markersize=FITTED_MARKER_SIZE, clip_on=False, zorder=5,
-        )
     configure_axis(axis)
     axis.set_title(
         f"{panel_label}) {MONTH_NAMES[panel_output['month'] - 1]}: Storm Hans threshold",
@@ -797,7 +754,7 @@ def make_figure(panels):
 
 
 def print_summary(month_analyses, panels):
-    """Print settings, sample sizes, fitted and empirical return periods."""
+    """Print settings, sample sizes, and fitted return periods."""
     print("Selected settings")
     print("-----------------")
     print(f"Reference:         {get_reference_name()} {OBSERVATION_YEARS[0]}-{OBSERVATION_YEARS[1]}")
@@ -839,14 +796,6 @@ def print_summary(month_analyses, panels):
                           else f"{result['return_period']:12.5g}")
                 print(f"  {method:<13} {series_label(series):<40} "
                       f"{fitted} {lower:12.5g} {upper:12.5g}")
-        for series, empirical in panel["empirical"].items():
-            k, n = empirical["exceedances"], empirical["sample_size"]
-            if k == 0:
-                estimate = f"no exceedances; plotted at {n + 1} years (lower bound)"
-            else:
-                estimate = f"empirical return period {empirical['return_period']:.4g} years"
-            print(f"  {series_label(series)} empirical: {k} of {n} values >= Storm Hans; "
-                  f"{estimate}")
         print("  (Equal-year weighted: interval only; its central estimate is the Model raw value.)")
     print("\ninf = unbounded return period.")
 
