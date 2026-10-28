@@ -704,7 +704,7 @@ def plot_panel(axis, panel_label, panel_output):
     configure_axis(axis)
     axis.set_title(
         f"{panel_label}) {MONTH_NAMES[panel_output['month'] - 1]}: Storm Hans threshold",
-        loc="center", fontsize=TITLE_FONTSIZE, fontweight="normal",
+        loc="left", fontsize=TITLE_FONTSIZE, fontweight="normal",
     )
 
 

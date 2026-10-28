@@ -4,8 +4,8 @@ Return period of the Storm Hans threshold in every calendar month.
 Layout
 ------
 Twelve panels, one per calendar month (a) January to (l) December, arranged in
-4 rows x 3 columns. Each panel has four ticks, GEV, Gumbel, GenEx and
-"Empirical", and at every tick three series, from left to right:
+4 rows x 3 columns. Each panel has three ticks, GEV, Gumbel and GenEx, and at
+every tick three series, from left to right:
 
     reference (seNorge or ERA5)   fitted to OBSERVATION_YEARS for that month
     model raw                     all raw model samples for the month, pooled
@@ -24,13 +24,6 @@ refits (BOOTSTRAP_METHOD "nonparametric" or "parametric"). Infinite bootstrap
 return periods are retained in the percentiles. Intervals beyond the plotting
 limits end in outward arrows; off-scale fitted values are drawn as triangles at
 the limit.
-
-Empirical estimate
-------------------
-Solid dots without uncertainty, using the Weibull plotting position as in
-fig-05: if k of the n sample values are at least as large as the Storm Hans
-threshold, the return period is (n + 1) / k years. If k = 0 the dot is placed at
-(n + 1) years, a lower bound; the printed summary flags this case.
 
 Reproducibility
 ---------------
@@ -119,7 +112,6 @@ MONTH_NAMES = [
     "July", "August", "September", "October", "November", "December",
 ]
 METHODS = ["GEV", "Gumbel", "GenEx"]
-EMPIRICAL_LABEL = "Empirical"
 SERIES = ["reference", "raw", "bias_corrected"]
 SERIES_SEED_GROUP = {"reference": 0, "raw": 1, "bias_corrected": 1}  # As in fig-05.
 
@@ -460,17 +452,6 @@ def analyse_event_return_period(fit, event_value, method):
     }
 
 
-def empirical_event_metric(values, event_value):
-    """Return the Weibull empirical estimate (n + 1) / max(k, 1) for one sample."""
-    values = np.asarray(values, dtype=float)
-    exceedances = int(np.count_nonzero(values >= event_value))
-    return {
-        "return_period": (values.size + 1) / max(exceedances, 1),
-        "exceedances": exceedances,
-        "sample_size": values.size,
-    }
-
-
 def analyse_month(month, samples, event_value, progress=None):
     """Fit every series and distribution for one month and evaluate Storm Hans."""
     month_index = SEED_MONTH_ORDER.index(month)
@@ -481,15 +462,11 @@ def analyse_month(month, samples, event_value, progress=None):
                     + 1000 * SERIES_SEED_GROUP[series] + method_index)
             fit = bootstrap_distribution(samples[series], method, seed, progress)
             results[(series, method)] = analyse_event_return_period(fit, event_value, method)
-    empirical = {
-        series: empirical_event_metric(samples[series], event_value) for series in SERIES
-    }
     return {
         "month": month,
         "event_value": event_value,
         "sample_sizes": {series: samples[series].size for series in SERIES},
         "results": results,
-        "empirical": empirical,
     }
 
 # =============================================================================
@@ -512,7 +489,6 @@ def format_metric_return_period(value, _position):
 
 def configure_axis(axis, show_x_labels, show_y_labels):
     """Apply common formatting to one monthly panel."""
-    tick_labels = [*METHODS, EMPIRICAL_LABEL]
     axis.set_yscale("log")
     axis.set_ylim(RETURN_PERIOD_MIN, 1.15 * RETURN_PERIOD_MAX)
     y_ticks = [
@@ -522,9 +498,9 @@ def configure_axis(axis, show_x_labels, show_y_labels):
     axis.yaxis.set_major_locator(FixedLocator(y_ticks))
     axis.yaxis.set_minor_locator(NullLocator())
     axis.yaxis.set_major_formatter(FuncFormatter(format_metric_return_period))
-    axis.set_xlim(-0.5, len(tick_labels) - 0.5)
-    axis.set_xticks(range(len(tick_labels)))
-    axis.set_xticklabels(tick_labels if show_x_labels else [])
+    axis.set_xlim(-0.5, len(METHODS) - 0.5)
+    axis.set_xticks(range(len(METHODS)))
+    axis.set_xticklabels(METHODS if show_x_labels else [])
     axis.tick_params(axis="both", labelsize=FONT_SIZE, length=2.5, pad=2)
     axis.tick_params(axis="y", labelleft=show_y_labels)
     axis.spines["top"].set_visible(False)
@@ -605,7 +581,7 @@ def plot_metric_interval(axis, position, lower, upper, fitted, color):
 
 
 def plot_panel(axis, panel_label, panel_output, show_x_labels, show_y_labels):
-    """Plot fitted, bootstrap and empirical estimates of every series for one month."""
+    """Plot fitted and bootstrap estimates of every series for one month."""
     offsets = series_offsets()
     for method_index, method in enumerate(METHODS):
         for series in SERIES:
@@ -616,13 +592,6 @@ def plot_panel(axis, panel_label, panel_output, show_x_labels, show_y_labels):
                 axis, method_index + offsets[series], lower, upper,
                 analysis["return_period"], SERIES_COLORS[series],
             )
-    for series in SERIES:
-        axis.plot(
-            len(METHODS) + offsets[series],
-            clip_metric(panel_output["empirical"][series]["return_period"]),
-            marker="o", linestyle="none", color=SERIES_COLORS[series],
-            markersize=FITTED_MARKER_SIZE, markeredgewidth=0, clip_on=False, zorder=5,
-        )
     configure_axis(axis, show_x_labels, show_y_labels)
     axis.set_title(
         f"{panel_label}) {MONTH_NAMES[panel_output['month'] - 1]}",
@@ -663,7 +632,7 @@ def make_figure(panels):
         for series in SERIES
     ]
     legend = axes[0, 0].legend(
-        handles=handles, loc=LEGEND_LOCATION, frameon=True, framealpha=0.9,
+        handles=handles, loc=LEGEND_LOCATION, frameon=False, framealpha=0.9,
         edgecolor="none", fontsize=LEGEND_FONTSIZE, handlelength=1.6,
         borderaxespad=0.3, borderpad=0.3, labelspacing=0.3,
     )
@@ -683,7 +652,7 @@ def make_figure(panels):
 
 
 def print_summary(panels):
-    """Print settings and, per month, sample sizes and fitted/empirical return periods."""
+    """Print settings and, per month, sample sizes and fitted return periods."""
     print("Selected settings")
     print("-----------------")
     print(f"Reference:         {get_reference_name()} {OBSERVATION_YEARS[0]}-{OBSERVATION_YEARS[1]}")
@@ -705,13 +674,6 @@ def print_summary(panels):
                 lower, upper = interval_bounds(result["metric_samples"])
                 print(f"  {method:<13} {series_label(series):<32} "
                       f"{result['return_period']:12.5g} {lower:12.5g} {upper:12.5g}")
-        for series in SERIES:
-            empirical = panel["empirical"][series]
-            k, n = empirical["exceedances"], empirical["sample_size"]
-            estimate = (f"no exceedances; plotted at {n + 1} years (lower bound)" if k == 0
-                        else f"{empirical['return_period']:.4g} years")
-            print(f"  {EMPIRICAL_LABEL:<13} {series_label(series):<32} "
-                  f"{k} of {n} values >= Storm Hans; {estimate}")
     print("\ninf = unbounded return period.")
 
 # =============================================================================
