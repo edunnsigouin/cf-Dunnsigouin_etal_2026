@@ -4,16 +4,19 @@ fig-06 (a, b) to the distribution and to bias correction.
 
 Layout (3 rows x 2 columns)
 ---------------------------
-Each row repeats fig-06 (a, b) for one combination in ROWS, by default:
+Each row repeats fig-06 (a, b) for one distribution in ROW_DISTRIBUTIONS, by
+default:
 
-    row 1 (a, b)   GEV,    reference and model bias corrected (BIAS_CORRECTION_METHOD)
-    row 2 (c, d)   Gumbel, reference and model raw
-    row 3 (e, f)   GenEx,  reference and model raw
+    row 1 (a, b)   GEV
+    row 2 (c, d)   Gumbel
+    row 3 (e, f)   GenEx
 
-Left column: Storm Hans threshold (log y-axis). Right column: calendar-month
-record thresholds (linear y-axis). The reference (seNorge or ERA5) is fitted
-with the same distribution as the model in each row. Panels in a column share
-their y-axis so the rows can be compared directly.
+Every panel shows the reference (seNorge or ERA5), the raw model and the
+bias-corrected model (BIAS_CORRECTION_METHOD), all fitted with the row's
+distribution. Left column: Storm Hans threshold (log y-axis). Right column:
+calendar-month record thresholds (linear y-axis). Panels in a column share their
+y-axis so the rows can be compared directly. One legend is drawn in LEGEND_PANEL
+at LEGEND_LOCATION.
 
 Calculation (identical to fig-06)
 ---------------------------------
@@ -32,7 +35,7 @@ Storm Hans).
 Bootstrap uncertainty: each month and dataset is bootstrapped independently
 (BOOTSTRAP_METHOD "nonparametric" or "parametric"); replicate b combines the b-th
 successful refit of every month into one P_N curve, and the band is the central
-CONFIDENCE_LEVEL interval across replicates. Seeds follow fig-06, so each row
+CONFIDENCE_LEVEL interval across replicates. Seeds follow fig-06, so each curve
 reproduces fig-06 run with the same distribution and model data.
 
 Output
@@ -63,12 +66,8 @@ OBSERVATION_YEARS = [1957, 2025]  # Reference fitting period and record threshol
 FORECAST_DATE_RANGE = ["2020-01-02", "2023-12-28"]
 BIAS_CORRECTION_METHOD = "mm_1step"  # "mm_1step", "mm_2step", "q", "ld", "doy", "q_doy".
 
-# One row per (distribution, model data); model data is "raw" or "bias_corrected".
-ROWS = [
-    {"distribution": "GEV", "model": "bias_corrected"},
-    {"distribution": "Gumbel", "model": "raw"},
-    {"distribution": "GenEx", "model": "raw"},
-]
+# One row per distribution, top to bottom: "GEV", "Gumbel", or "GenEx".
+ROW_DISTRIBUTIONS = ["GEV", "Gumbel", "GenEx"]
 
 AEP_YEARS_MAX = 10  # Horizons N = 1, 2, ..., AEP_YEARS_MAX years.
 INCLUDE_STORM_HANS_IN_FIT = True  # August reference fit only; the record always includes Hans.
@@ -103,7 +102,8 @@ COLUMNS = {
 FIGURE_WIDTH_IN = 7.0  # Full page width (about 178 mm).
 FIGURE_HEIGHT_IN = 8.0
 SHOW_GRID = True
-LEGEND_LOCATION = "lower right"  # Position of the legend inside panel a).
+LEGEND_PANEL = "b"  # Panel that carries the legend: "a" (top left) ... "f" (bottom right).
+LEGEND_LOCATION = "upper left"  # Matplotlib location inside that panel, e.g. "upper left".
 SERIES_COLORS = {
     "reference": "tab:orange",
     "raw": "tab:blue",
@@ -143,13 +143,15 @@ MONTH_NAMES = [
 # Fixed orders so bootstrap seeds match fig-06 for the same distribution.
 SEED_METHOD_ORDER = ["GEV", "Gumbel", "GenEx"]
 SEED_GROUP_INDEX = {"reference": 0, "raw": 1, "bias_corrected": 1}
+GROUPS = ["reference", "raw", "bias_corrected"]  # Plotting and legend order in every panel.
+MODEL_GROUPS = ["raw", "bias_corrected"]
 
 # =============================================================================
 # Plot constants (sized for a 7-inch-wide figure)
 # =============================================================================
-FONT_SIZE = 11
-TITLE_FONT_SIZE = 11
-LEGEND_FONT_SIZE = 10
+FONT_SIZE = 10
+TITLE_FONT_SIZE = 10
+LEGEND_FONT_SIZE = 9
 X_LABEL = "years"
 Y_LABEL = "Probability of at least one monthly exceedance within N years [%]"
 DATASET_MARKERS = {"reference": "s", "raw": "o", "bias_corrected": "o"}
@@ -170,13 +172,14 @@ def validate_settings():
         raise ValueError("REFERENCE_DATASET must be 'senorge' or 'era5'.")
     if BIAS_CORRECTION_METHOD not in {"mm_1step", "mm_2step", "q", "ld", "doy", "q_doy"}:
         raise ValueError("Unsupported BIAS_CORRECTION_METHOD.")
-    if not ROWS:
-        raise ValueError("ROWS must contain at least one row.")
-    for row in ROWS:
-        if row["distribution"] not in SEED_METHOD_ORDER:
-            raise ValueError(f"Row distribution must be one of {SEED_METHOD_ORDER}.")
-        if row["model"] not in {"raw", "bias_corrected"}:
-            raise ValueError("Row model must be 'raw' or 'bias_corrected'.")
+    if not ROW_DISTRIBUTIONS:
+        raise ValueError("ROW_DISTRIBUTIONS must contain at least one distribution.")
+    for distribution in ROW_DISTRIBUTIONS:
+        if distribution not in SEED_METHOD_ORDER:
+            raise ValueError(f"ROW_DISTRIBUTIONS entries must be one of {SEED_METHOD_ORDER}.")
+    panel_letters = panel_labels()
+    if LEGEND_PANEL not in panel_letters:
+        raise ValueError(f"LEGEND_PANEL must be one of {panel_letters}.")
     if not isinstance(AEP_YEARS_MAX, int) or AEP_YEARS_MAX < 1:
         raise ValueError("AEP_YEARS_MAX must be a positive integer.")
     if set(COLUMNS) != set(THRESHOLD_ORDER):
@@ -228,9 +231,10 @@ def group_label(group):
     }[group]
 
 
-def model_groups():
-    """Return the model datasets used by any row, in legend order."""
-    return [group for group in ["raw", "bias_corrected"] if any(row["model"] == group for row in ROWS)]
+def panel_labels():
+    """Return the panel letters row by row: a, b (row 1), c, d (row 2), ..."""
+    n_panels = len(ROW_DISTRIBUTIONS) * len(THRESHOLD_ORDER)
+    return [chr(ord("a") + index) for index in range(n_panels)]
 
 
 def horizon_years():
@@ -479,12 +483,12 @@ def bootstrap_distribution(values, method, random_seed, progress=None):
 
 
 def required_fits():
-    """Return the (dataset, distribution) pairs needed by ROWS, without duplicates."""
+    """Return the (dataset, distribution) pairs needed by all panels, without duplicates."""
     pairs = []
-    for row in ROWS:
-        for group in ["reference", row["model"]]:
-            if (group, row["distribution"]) not in pairs:
-                pairs.append((group, row["distribution"]))
+    for distribution in ROW_DISTRIBUTIONS:
+        for group in GROUPS:
+            if (group, distribution) not in pairs:
+                pairs.append((group, distribution))
     return pairs
 
 
@@ -552,12 +556,11 @@ def calculate_curve(group, method, monthly_thresholds, analyses):
 def calculate_all_curves(thresholds, analyses):
     """Return curves[row_index][threshold_type][group] for every panel."""
     curves = []
-    for row in ROWS:
-        method = row["distribution"]
+    for method in ROW_DISTRIBUTIONS:
         curves.append({
             threshold_type: {
                 group: calculate_curve(group, method, thresholds[threshold_type], analyses)
-                for group in ["reference", row["model"]]
+                for group in GROUPS
             }
             for threshold_type in THRESHOLD_ORDER
         })
@@ -665,7 +668,7 @@ def draw_legend(axis):
                marker=DATASET_MARKERS[group], markersize=MARKER_SIZE + 0.5,
                markerfacecolor=SERIES_COLORS[group], markeredgecolor="white",
                markeredgewidth=0.4, label=group_label(group))
-        for group in ["reference", *model_groups()]
+        for group in GROUPS
     ]
     legend = axis.legend(handles=handles, loc=LEGEND_LOCATION, frameon=False, framealpha=0.9,
                          edgecolor="none", handlelength=1.8, borderaxespad=0.3,
@@ -689,9 +692,9 @@ def format_panel(axis, panel_label, title, show_x_labels):
 
 
 def plot_figure(curves):
-    """Plot P_N against horizon N: one row per entry in ROWS, one column per threshold."""
+    """Plot P_N against horizon N: one row per distribution, one column per threshold."""
     apply_publication_style()
-    n_rows = len(ROWS)
+    n_rows = len(ROW_DISTRIBUTIONS)
     figure, axes = plt.subplots(
         n_rows, len(THRESHOLD_ORDER), figsize=(FIGURE_WIDTH_IN, FIGURE_HEIGHT_IN),
         sharex=True, sharey="col", squeeze=False, layout="constrained",
@@ -703,15 +706,16 @@ def plot_figure(curves):
         ylim = resolve_ylim(column, [
             curve for row_curves in curves for curve in row_curves[threshold_type].values()
         ])
-        for row_index, row in enumerate(ROWS):
+        for row_index, distribution in enumerate(ROW_DISTRIBUTIONS):
             axis = axes[row_index, column_index]
-            for group in ["reference", row["model"]]:
+            for group in GROUPS:
                 draw_curve(axis, years, curves[row_index][threshold_type][group], group, ylim)
             apply_y_scale(axis, column, ylim)
-            panel_label = chr(ord("a") + row_index * len(THRESHOLD_ORDER) + column_index)
-            format_panel(axis, panel_label, f"{row['distribution']}: {column['title']}",
+            panel_label = panel_labels()[row_index * len(THRESHOLD_ORDER) + column_index]
+            format_panel(axis, panel_label, f"{distribution}: {column['title']}",
                          show_x_labels=row_index == n_rows - 1)
-    draw_legend(axes[0, 0])
+    legend_row, legend_column = divmod(panel_labels().index(LEGEND_PANEL), len(THRESHOLD_ORDER))
+    draw_legend(axes[legend_row, legend_column])
     figure.supxlabel(X_LABEL, fontsize=FONT_SIZE + 1)
     figure.supylabel(Y_LABEL, fontsize=FONT_SIZE + 1)
     if WRITE_TO_FILE:
@@ -735,7 +739,7 @@ def print_summary(curves, thresholds):
     print("-----------------")
     print(f"Reference:        {get_reference_name()} {OBSERVATION_YEARS[0]}-{OBSERVATION_YEARS[1]}")
     print(f"Reference file:   {make_reference_filename()}")
-    for group in model_groups():
+    for group in MODEL_GROUPS:
         print(f"{group_label(group) + ' file:':<18}{make_model_filename(group)}")
     print(f"Horizons:         1-{AEP_YEARS_MAX} years")
     print(f"Bootstrap:        {BOOTSTRAP_METHOD}, n={NUMBER_OF_BOOTSTRAPS}")
@@ -746,11 +750,11 @@ def print_summary(curves, thresholds):
     for month in ALL_MONTHS:
         record = thresholds["monthly_record"][month]
         print(f"  {MONTH_NAMES[month - 1]:9s} {record['value']:.3f} mm ({record['year']})")
-    for row_index, row in enumerate(ROWS):
+    for row_index, distribution in enumerate(ROW_DISTRIBUTIONS):
         for threshold_type in THRESHOLD_ORDER:
-            title = f"Row {row_index + 1}: {row['distribution']}, {COLUMNS[threshold_type]['title']}"
+            title = f"Row {row_index + 1}: {distribution}, {COLUMNS[threshold_type]['title']}"
             print(f"\n{title}\n{'-' * len(title)}")
-            for group in ["reference", row["model"]]:
+            for group in GROUPS:
                 curve = curves[row_index][threshold_type][group]
                 annual = curve["annual_probability"]
                 low, high = np.percentile(curve["annual_bootstrap"],
@@ -771,7 +775,7 @@ def main():
     print("Figure output:", OUTPUT_PATH)
     reference_fit_values, thresholds = read_reference_months()
     samples = {"reference": reference_fit_values}
-    for group in model_groups():
+    for group in MODEL_GROUPS:
         samples[group] = read_model_months(group)
     progress = ProgressTracker(len(required_fits()) * 12 * NUMBER_OF_BOOTSTRAPS)
     print("Running bootstrap fits for all 12 months...")
